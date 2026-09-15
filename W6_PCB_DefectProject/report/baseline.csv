@@ -1,0 +1,7 @@
+board_file,component,kind,defect,description,silk,qr,result
+report/baseline.csv,R1,R,ok,-,,PCB-2026-001,PASS
+report/baseline.csv,C1,C,ok,-,,PCB-2026-001,PASS
+report/baseline.csv,U1,IC,ok,-,,PCB-2026-001,PASS
+report/baseline.csv,R2,R,ok,-,,PCB-2026-001,PASS
+report/baseline.csv,C2,C,ok,-,,PCB-2026-001,PASS
+report/baseline.csv,R3,R,ok,-,,PCB-2026-001,PASS

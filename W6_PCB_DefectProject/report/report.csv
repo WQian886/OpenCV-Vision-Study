@@ -1,0 +1,9 @@
+board_file,component,kind,defect,description,silk,qr,result
+baseline.png,,,ok,-,,PCB-2026-001,PASS
+bridge.png,,,bridge,bridge at R1, max gold run = 120px at row y=22,,PCB-2026-001,FAIL
+insufficient.png,,,insufficient,insufficient at U1, min pad area=81 (median=136),,PCB-2026-001,FAIL
+missing.png,,,missing,missing at R2, dark px=0,,PCB-2026-001,FAIL
+polarity.png,,,polarity,polarity reversed at C1, white cx=74/90,,PCB-2026-001,FAIL
+shifted.png,,,shifted,shifted at R2, dark centroid=(79,33) expect (60,24),,PCB-2026-001,FAIL
+short.png,,,short,short ring at (520,460) 61x41, area=288,,PCB-2026-001,FAIL
+wrong.png,,,wrong,wrong at R3, yellow px=2579,,PCB-2026-001,FAIL

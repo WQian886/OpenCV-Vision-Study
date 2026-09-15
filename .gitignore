@@ -1,0 +1,67 @@
+# ============================================================
+# OpenCV 学习项目 .gitignore
+# git 默认: 无 / 的 pattern 匹配任意层级(无需 **/ 前缀)
+# ============================================================
+
+# ===== IDE / 编辑器 =====
+.vs/
+.vscode/
+.history/
+*.user
+*.suo
+*.code-workspace
+
+# ===== 构建产物（CMake + Ninja）=====
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.ninja
+.ninja_deps
+.ninja_log
+*.cmake
+
+# ===== Qt 自动生成（仅 W7） =====
+w7_vm_lite_autogen/
+.qt/
+build-*/
+
+# ===== 备份文件 =====
+*.bak
+*.bak*
+_archive/
+
+# ===== Python（gen_pcb_dataset.py 等） =====
+__pycache__/
+*.pyc
+*.pyo
+
+# ===== 操作系统噪声 =====
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# ===== W6 标记图 / 运行输出 =====
+images/*_marked*.png
+images/w6_inspect_*.png
+images/w7_*.png
+images/complex/marked*.png
+report/*.csv
+report/*.log
+
+# ===== W7 marked 图（运行时生成） =====
+build/w7_*.png
+out/*/w7_*.png
+out/*/images/w7_*.png
+
+# ===== 大型二进制占位（datasets/images 保留目录） =====
+# (datasets/ 和 images/ 目录本身用 .gitkeep 占位,实际数据不入 git)
+
+# ===== 日志 =====
+*.log
+
+# ===== 临时 =====
+*.tmp
+*.bak.txt
