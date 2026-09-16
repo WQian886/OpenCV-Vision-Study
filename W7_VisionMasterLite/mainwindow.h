@@ -11,7 +11,9 @@
 #include <QPointer>
 #include <QTreeWidget>
 #include <QMimeData>
+#include <QStack>
 #include "pipeline_view.h"
+#include "commands/command.h"
 
 class QTextEdit;
 class QLabel;
@@ -88,6 +90,14 @@ private:
                                    const QJsonObject& params,
                                    const QJsonObject& inputs);
 
+    // === M6 撤销/重做 (Step1 仅框架,Step2/3 接入 addNode/removeNode 等) ===
+    // 执行命令:执行 + push undoStack + 清空 redoStack
+    void execCommand(Command* cmd);
+    // 撤销:从 undoStack 弹 → undo() → push redoStack
+    void execUndo();
+    // 重做:从 redoStack 弹 → redo() → push undoStack
+    void execRedo();
+
 private:
     PipelineView*    m_canvas    = nullptr;
     QTreeWidget*     m_opLib     = nullptr;
@@ -110,6 +120,10 @@ private:
 
     // === S3 重入防护:防止 selectionChanged 在 widget swap 期间递归触发 ===
     bool m_inUpdate = false;
+
+    // === M6 撤销/重做栈 ===
+    QStack<Command*> m_undoStack;   // 已执行,等待 undo
+    QStack<Command*> m_redoStack;   // 已 undo,等待 redo
 };
 
 } // namespace w7

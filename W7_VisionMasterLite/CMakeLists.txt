@@ -28,6 +28,7 @@ set(SOURCES
     pipeline_view.cpp
     operator_node.cpp
     connection_line.cpp
+    commands/command.cpp
     operators/param_form.cpp
     operators/operator_factory.cpp
     operators/color_segment.cpp

@@ -820,6 +820,43 @@ void MainWindow::appendLog(const QString& msg) {
 }
 
 // ============================================================
+// === M6 撤销/重做 (Step1: 框架,Step2-5 接入具体 cmd) ===
+// ============================================================
+
+void MainWindow::execCommand(Command* cmd) {
+    if (!cmd) return;
+    cmd->exec();                                  // 执行
+    m_undoStack.push(cmd);                        // 压入 undoStack
+    m_redoStack.clear();                          // 新操作清空 redoStack
+    appendLog(tr("[Cmd] %1 (undoStack=%2)")
+        .arg(cmd->desc()).arg(m_undoStack.size()));
+}
+
+void MainWindow::execUndo() {
+    if (m_undoStack.isEmpty()) {
+        appendLog(tr("[Undo] 已是最初状态,无法再撤销"));
+        return;
+    }
+    Command* cmd = m_undoStack.pop();
+    cmd->undo();
+    m_redoStack.push(cmd);
+    appendLog(tr("[Undo] %1 (undoStack=%2, redoStack=%3)")
+        .arg(cmd->desc()).arg(m_undoStack.size()).arg(m_redoStack.size()));
+}
+
+void MainWindow::execRedo() {
+    if (m_redoStack.isEmpty()) {
+        appendLog(tr("[Redo] 已是最末状态,无法再重做"));
+        return;
+    }
+    Command* cmd = m_redoStack.pop();
+    cmd->redo();
+    m_undoStack.push(cmd);
+    appendLog(tr("[Redo] %1 (undoStack=%2, redoStack=%3)")
+        .arg(cmd->desc()).arg(m_undoStack.size()).arg(m_redoStack.size()));
+}
+
+// ============================================================
 // === 修复 1+2: Delete 键删除选中项(安全版) ===
 // ============================================================
 void MainWindow::keyPressEvent(QKeyEvent* event) {
