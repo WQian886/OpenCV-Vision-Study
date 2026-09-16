@@ -639,14 +639,14 @@ static QList<OperatorNode*> topoSort(PipelineView* canvas, bool* hasCycle) {
 
 
 void MainWindow::onRunClicked() {
-    QString imagePath = m_imagePathEdit->text();
-    if (imagePath.isEmpty()) {
-        QMessageBox::warning(this, tr("提示"), tr("请先在工具栏输入图像路径"));
+    QString fallbackPath = m_imagePathEdit->text();
+    if (fallbackPath.isEmpty()) {
+        QMessageBox::warning(this, tr("提示"), tr("请先在工具栏输入图像路径或拖入 image_source 节点"));
         return;
     }
 
     appendLog("========================================");
-    appendLog(tr("[Run] 开始执行  图像: %1").arg(imagePath));
+    appendLog(tr("[Run] 开始执行  fallback 图路径: %1").arg(fallbackPath));
 
     // 边界:空画布
     if (m_canvas->nodes().isEmpty()) {
@@ -676,9 +676,9 @@ void MainWindow::onRunClicked() {
         m_canvas->highlightNode(n->opName(), true);
         QApplication::processEvents();
 
-        // === 构造 inputs:起点 image_path + 所有前驱节点 outputs 合并 ===
+        // === 构造 inputs:优先合并所有前驱节点 outputs(后写覆盖) ===
+        // === B 方案:不再硬塞 image_path;若上游没产 image_path 才 fallback 工具栏 ===
         QJsonObject inputs;
-        inputs["image_path"] = imagePath;
         for (const auto* c : m_canvas->connections()) {
             if (c->toNode() == n && nodeOutputs.contains(c->fromNode())) {
                 const QJsonObject& upOut = nodeOutputs[c->fromNode()];
@@ -686,6 +686,10 @@ void MainWindow::onRunClicked() {
                     inputs[it.key()] = it.value();   // 简单合并:后写覆盖
                 }
             }
+        }
+        // 兜底:若上游没产出 image_path,fallback 到工具栏
+        if (!inputs.contains("image_path")) {
+            inputs["image_path"] = fallbackPath;
         }
 
         OperatorBase* op = w7::createOperatorByName(n->opName());
@@ -761,7 +765,10 @@ void MainWindow::onRunClicked() {
     // 2) 模板位置红框 (template_match 输出)
     if (!rendered && finalResult.contains("position_x")
                  && finalResult.contains("template_w")) {
-        QImage srcImg(imagePath);
+        // 优先 finalResult.image_path(节点产出),没有则 fallback 工具栏
+        QString tplImgPath = finalResult.value("image_path").toString();
+        if (tplImgPath.isEmpty()) tplImgPath = fallbackPath;
+        QImage srcImg(tplImgPath);
         if (!srcImg.isNull()) {
             QPainter painter(&srcImg);
             painter.setPen(QPen(QColor(0, 0, 255), 3));  // 红框
@@ -788,7 +795,10 @@ void MainWindow::onRunClicked() {
 
     // 3) PASS/FAIL 大字叠加
     if (result == "PASS" || result == "FAIL") {
-        QImage srcImg(imagePath);
+        // 优先用 finalResult.image_path(节点产出),没有则用工具栏 fallbackPath
+        QString resultImgPath = finalResult.value("image_path").toString();
+        if (resultImgPath.isEmpty()) resultImgPath = fallbackPath;
+        QImage srcImg(resultImgPath);
         if (!srcImg.isNull()) {
             QPainter painter(&srcImg);
             QColor c = (result == "PASS") ? QColor(0, 200, 0) : QColor(255, 0, 0);
@@ -811,7 +821,10 @@ void MainWindow::onRunClicked() {
 
     // 4) fallback 原图
     if (!rendered) {
-        pix.load(imagePath);
+        // 优先 finalResult.image_path(节点产出),没有则 fallback 工具栏
+        QString fallbackImgPath = finalResult.value("image_path").toString();
+        if (fallbackImgPath.isEmpty()) fallbackImgPath = fallbackPath;
+        pix.load(fallbackImgPath);
         if (!pix.isNull()) {
             m_resultImg->setPixmap(pix.scaled(m_resultImg->width(),
                                               m_resultImg->height(),
