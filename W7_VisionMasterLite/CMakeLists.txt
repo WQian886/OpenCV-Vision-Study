@@ -36,6 +36,7 @@ set(SOURCES
     operators/count_check.cpp
     operators/template_match.cpp
     operators/qr_decode.cpp
+    operators/image_source_dir.cpp
 )
 
 set(HEADERS

@@ -219,6 +219,8 @@ void MainWindow::setupToolbar() {
 }
 
 void MainWindow::registerOperators() {
+    m_operatorInfo.append({"image_source_dir", tr("文件夹批量图像"), "acquisition",
+                           tr("按通配符批量加载文件夹图像(对标 VM 文件夹图像源)")});
     m_operatorInfo.append({"color_segment",  tr("颜色分割"),   "detection",
                            tr("HSV 颜色范围提取")});
     m_operatorInfo.append({"blob_count",     tr("Blob 计数"),   "detection",
@@ -243,6 +245,7 @@ void MainWindow::setupOperatorLibrary() {
     m_opLib->setSelectionMode(QAbstractItemView::SingleSelection);
 
     // 按类别分组
+    QTreeWidgetItem* acquisition    = new QTreeWidgetItem(m_opLib, {tr("采集 Acquisition")});
     QTreeWidgetItem* positioning    = new QTreeWidgetItem(m_opLib, {tr("定位 Positioning")});
     QTreeWidgetItem* measurement    = new QTreeWidgetItem(m_opLib, {tr("测量 Measurement")});
     QTreeWidgetItem* identification = new QTreeWidgetItem(m_opLib, {tr("识别 Identification")});
@@ -250,7 +253,8 @@ void MainWindow::setupOperatorLibrary() {
 
     for (const auto& op : m_operatorInfo) {
         QTreeWidgetItem* parent = nullptr;
-        if      (op.category == "positioning")    parent = positioning;
+        if      (op.category == "acquisition")    parent = acquisition;
+        else if (op.category == "positioning")    parent = positioning;
         else if (op.category == "measurement")    parent = measurement;
         else if (op.category == "identification") parent = identification;
         else if (op.category == "detection")      parent = detection;
@@ -322,18 +326,25 @@ void MainWindow::loadDefaultPipeline() {
     }
     m_imagePathEdit->setText(imagePath);
 
-    auto* n1 = m_canvas->addNode("color_segment", tr("颜色分割"),  "detection",    {150, 200});
-    auto* n2 = m_canvas->addNode("blob_count",    tr("Blob 计数"),  "detection",    {400, 200});
-    auto* n3 = m_canvas->addNode("count_check",   tr("数量判定"),  "detection",    {650, 200});
-    auto* n4 = m_canvas->addNode("qr_decode",     tr("QR 解码"),   "identification",{150, 380});
+    auto* n_src = m_canvas->addNode("image_source_dir", tr("文件夹批量图像"), "acquisition", {100, 200});
+    QJsonObject srcParams;
+    srcParams["dir_path"] = imagePath;   // 默认用 W6 的 images/baseline.png 所在目录
+    srcParams["pattern"]  = "*.png";
+    n_src->setParams(srcParams);
+
+    auto* n1 = m_canvas->addNode("color_segment", tr("颜色分割"),  "detection",    {400, 200});
+    auto* n2 = m_canvas->addNode("blob_count",    tr("Blob 计数"),  "detection",    {650, 200});
+    auto* n3 = m_canvas->addNode("count_check",   tr("数量判定"),  "detection",    {900, 200});
+    auto* n4 = m_canvas->addNode("qr_decode",     tr("QR 解码"),   "identification",{400, 380});
 
     // === S2: 用 ConnectionLine 创建贝塞尔连线 ===
+    m_canvas->addConnection(n_src, n1);
     m_canvas->addConnection(n1, n2);
     m_canvas->addConnection(n2, n3);
 
     m_canvas->scene()->setSceneRect(m_canvas->scene()->itemsBoundingRect().adjusted(-50,-50,50,50));
 
-    appendLog(tr("已加载默认流水线: 颜色分割 → Blob 计数 → 数量判定 (旁路: QR 解码)"));
+    appendLog(tr("已加载默认流水线: 文件夹批量图像 → 颜色分割 → Blob 计数 → 数量判定 (旁路: QR 解码)"));
     appendLog(tr("提示:点击 ▶ Run 执行 / 从节点右侧端口拖到另一节点左侧端口可手动连线"));
 }
 
