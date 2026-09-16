@@ -221,6 +221,8 @@ void MainWindow::setupToolbar() {
 void MainWindow::registerOperators() {
     m_operatorInfo.append({"image_source_dir", tr("文件夹批量图像"), "acquisition",
                            tr("按通配符批量加载文件夹图像(对标 VM 文件夹图像源)")});
+    m_operatorInfo.append({"image_source_camera", tr("工业相机实时流"), "acquisition",
+                           tr("从海康 GigE 工业相机取一帧(对标 VM 相机采集;需 MVS SDK)")});
     m_operatorInfo.append({"color_segment",  tr("颜色分割"),   "detection",
                            tr("HSV 颜色范围提取")});
     m_operatorInfo.append({"blob_count",     tr("Blob 计数"),   "detection",

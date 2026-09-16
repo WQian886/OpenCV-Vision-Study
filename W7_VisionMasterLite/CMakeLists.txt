@@ -37,6 +37,7 @@ set(SOURCES
     operators/template_match.cpp
     operators/qr_decode.cpp
     operators/image_source_dir.cpp
+    operators/image_source_camera.cpp
 )
 
 set(HEADERS
