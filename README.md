@@ -14,26 +14,51 @@
 | **W4** | 模板匹配 + ORB 特征 | ✅ 100% | [README](./W4_TemplateFeature/README.md) |
 | **W5** | OCR + 二维码 | ✅ 100% | [README](./W5_OCR_QRCode/README.md) |
 | **W6** | PCB 缺陷检测综合项目 | ✅ 95% | [README](./W6_PCB_DefectProject/README.md) |
-| **W7** | Mini VisionMaster Lite (Qt) | ✅ 100% | [README](./W7_VisionMasterLite/README.md) |
+| **W7** | Mini VisionMaster Lite (Qt) | ✅ 最终版 | [README](./W7_VisionMasterLite/README.md) |
 
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder，支持 7 个算子 + 拖拽连线 + DAG 执行 + JSON 持久化 + 撤销重做
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。11 个算子 + pin 类型检查 + 每步结果查看 + 帧循环 + JSON 持久化 + 撤销重做，6 个无头回归测试共 216 条断言
+
+### W7 最终版补上的东西
+
+| 能力 | 说明 |
+|---|---|
+| 4 种图像源 | 本地 / 文件夹 / 视频 / 工业相机（对标 VM 四种） |
+| 帧循环 | 源输出 `frame_count`，引擎按 `frame_index` 逐轮跑整条链 + 批量 PASS/FAIL 汇总 |
+| W6 深度联动 | `pcb_inspect` + `pcb_defect_judge` 把 PCB 算法挂进画布，7 类缺陷 9 个阈值可调 |
+| DL 算子 | `dl_postprocess`（letterbox/NMS/YOLOv5-v8 解析）+ `dl_infer`（ONNX Runtime，条件编译） |
+| 每步结果查看 | 节点状态点 + 右键回看任意一步的图和全部字段 |
+| pin 类型检查 | 算子声明吃/吐什么，连错时立刻说明原因 |
+| 最近工程 | 记最近 5 个 `.sol.json`，自动剔掉已删除的 |
+
+## 🧪 W7 回归测试
+
+```powershell
+cd W7_VisionMasterLite
+cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build --output-on-failure'
+```
+
+6 个套件 / 216 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试。
 
 ## 📖 变更日志
 
 详细改动记录见 [notes/](./notes/) 目录（共 9 份，~150 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
-- `notes_Qt_NodeConnection_BugFix_2026-09.md` (18 KB) — W7 S2 连线 + 3 个 bug
-- `notes_W6_ComponentRecognition_2026-09.md` (28 KB) — W6 五步完整改动
+- `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
+- `notes_W6_ComponentRecognition_2026-09.md` (27 KB) — W6 五步完整改动
 - `notes_W7_DAG_RunEngine_2026-09.md` (13 KB) — W7 P0 Run 引擎按图执行
 - `notes_W7_SaveLoad_2026-09.md` (13 KB) — W7 P1 Save/Load JSON
 - `notes_W7_P2P5_Finalize_2026-09.md` (9 KB) — W7 P2-P5 收尾汇总
 - `notes_GitInit_2026-09.md` (10 KB) — git init 完整记录 + 踩坑
 - `notes_W7_ImageSourceCamera_2026-09.md` (10 KB) — 工业相机图像源（MVS SDK 条件编译）
-- `notes_W7_UndoRedo_2026-09.md` (12 KB) — M6 撤销重做 + 节点 UUID + P0 悬垂指针修复
+- `notes_W7_UndoRedo_2026-09.md` (17 KB) — M6 撤销重做 + 节点 UUID + P0 悬垂指针修复
+
+W7 收官期的改动（PCB/DL 算子、视频源、帧循环、每步结果查看、pin 检查、最近工程）
+逐条记在 git 提交信息里，每条都写清了"为什么"和"测试抓到了什么"。
 
 ## 🔨 编译
 
@@ -55,7 +80,7 @@ out/build/x64-Release/w6_pcb_defect.exe report images
 ```
 OpenCV/
 ├── W1-W7/                 # 7 个学习项目
-├── notes/                 # 变更日志（6 份）
+├── notes/                 # 变更日志（9 份）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -65,6 +90,7 @@ OpenCV/
 ## 📊 统计
 
 - 7 个 C++ 项目
-- ~6000 行代码
-- 96 KB 变更日志
+- 60 个 C++ 文件 / ~7800 行代码
+- 9 份变更日志 / 131 KB
+- W7 单项 6 个无头回归测试 / 216 条断言
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
