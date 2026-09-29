@@ -21,6 +21,53 @@ qt_standard_project_setup()
 set(OpenCV_DIR "D:/opencv-src/build/install/lib")
 find_package(OpenCV REQUIRED)
 
+# ============================================================
+# === 可选 SDK 探测 (优雅降级)
+#
+# 有些算子依赖第三方 SDK,装了就用,没装也不该让整个项目编译不过。
+# 这里用 find_path/find_library 真实探测,而不是把宏写死成"关"。
+#
+# 之前 image_source_camera 里的 HAS_MVS_SDK 从来没人定义过 ——
+# 也就是说哪怕把 MVS SDK 装好、路径全配对,这个算子也永远是 no-op。
+# 探测逻辑补上之后,装了就自动生效,不用改一行代码。
+#
+# 探测顺序:环境变量 → 默认路径
+# ============================================================
+
+# --- 海康 MVS SDK (工业相机源) ---
+if(DEFINED ENV{MVS_DIR})
+    set(_mvs_root "$ENV{MVS_DIR}")
+else()
+    set(_mvs_root "D:/MVS")
+endif()
+find_path(MVS_INCLUDE_DIR MvCameraControl.h
+    HINTS "${_mvs_root}/Include" "${_mvs_root}/Includes" NO_DEFAULT_PATH)
+find_library(MVS_LIBRARY NAMES MvCameraControl
+    HINTS "${_mvs_root}/Lib/x64" "${_mvs_root}/Lib" NO_DEFAULT_PATH)
+
+# --- ONNX Runtime (DL 推理算子) ---
+if(DEFINED ENV{ONNXRUNTIME_DIR})
+    set(_ort_root "$ENV{ONNXRUNTIME_DIR}")
+else()
+    set(_ort_root "D:/onnxruntime")
+endif()
+find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
+    HINTS "${_ort_root}/include" NO_DEFAULT_PATH)
+find_library(ONNXRUNTIME_LIBRARY NAMES onnxruntime
+    HINTS "${_ort_root}/lib" NO_DEFAULT_PATH)
+
+if(MVS_INCLUDE_DIR AND MVS_LIBRARY)
+    message(STATUS "✅ MVS SDK 已找到 — image_source_camera 启用真实相机采集")
+else()
+    message(STATUS "⚠️  MVS SDK 未找到 (找过 ${_mvs_root}) — image_source_camera 编译为空实现")
+endif()
+
+if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+    message(STATUS "✅ ONNX Runtime 已找到 — dl_infer 启用真实推理")
+else()
+    message(STATUS "⚠️  ONNX Runtime 未找到 (找过 ${_ort_root}) — dl_infer 编译为空实现")
+endif()
+
 # === 源码 ===
 set(SOURCES
     main.cpp
@@ -40,6 +87,10 @@ set(SOURCES
     operators/qr_decode.cpp
     operators/image_source_dir.cpp
     operators/image_source_camera.cpp
+    operators/pcb_inspect.cpp
+    operators/pcb_defect_judge.cpp
+    operators/dl_postprocess.cpp
+    operators/dl_infer.cpp
 )
 
 set(HEADERS
@@ -58,6 +109,12 @@ set(HEADERS
     operators/count_check.h
     operators/template_match.h
     operators/qr_decode.h
+    operators/image_source_dir.h
+    operators/image_source_camera.h
+    operators/pcb_inspect.h
+    operators/pcb_defect_judge.h
+    operators/dl_postprocess.h
+    operators/dl_infer.h
 )
 
 qt_add_executable(w7_vm_lite WIN32 ${SOURCES} ${HEADERS})
@@ -74,6 +131,19 @@ target_link_libraries(w7_vm_lite PRIVATE
 
 if(MSVC)
     target_compile_options(w7_vm_lite PRIVATE /utf-8)
+endif()
+
+# --- 把探测结果接给编译器 + 链接器 ---
+if(MVS_INCLUDE_DIR AND MVS_LIBRARY)
+    target_compile_definitions(w7_vm_lite PRIVATE HAS_MVS_SDK=1)
+    target_include_directories(w7_vm_lite PRIVATE ${MVS_INCLUDE_DIR})
+    target_link_libraries(w7_vm_lite PRIVATE ${MVS_LIBRARY})
+endif()
+
+if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+    target_compile_definitions(w7_vm_lite PRIVATE HAS_ONNXRUNTIME=1)
+    target_include_directories(w7_vm_lite PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+    target_link_libraries(w7_vm_lite PRIVATE ${ONNXRUNTIME_LIBRARY})
 endif()
 
 set_target_properties(w7_vm_lite PROPERTIES
@@ -124,3 +194,79 @@ endif()
 
 enable_testing()
 add_test(NAME undo_redo COMMAND w7_undo_test)
+
+# ============================================================
+# === PCB 算子 回归测试 (headless, 端到端跑 W6 样本)
+#
+# 这次要真跑 OpenCV,所以链接 OpenCV(与 undo 测试不同)。
+# 测的是 W6 的 8 张样本图:baseline 必须零缺陷,
+# 7 张缺陷图各自必须命中自己那类 —— 等于把 W6 当时的
+# 肉眼验收清单变成可重复执行的测试。
+#
+# 算子会往 images/ 里写画框图,所以工作目录必须是工程根。
+# ============================================================
+qt_add_executable(w7_pcb_test
+    tests/test_pcb_operators.cpp
+    operators/param_form.cpp
+    operators/pcb_inspect.cpp
+    operators/pcb_defect_judge.cpp
+)
+
+target_include_directories(w7_pcb_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w7_pcb_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+    ${OpenCV_LIBS}
+)
+
+if(MSVC)
+    target_compile_options(w7_pcb_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_pcb_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        D:/opencv-src/build/install/bin
+        $<TARGET_FILE_DIR:w7_pcb_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+add_test(NAME pcb_operators COMMAND w7_pcb_test
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# ============================================================
+# === DL 后处理 回归测试 (headless, 不需要模型也不需要 ONNX Runtime)
+#
+# dl_infer 的推理部分在本机跑不了(没装 ONNX Runtime),
+# 但前后处理(letterbox / NMS / YOLOv5-v8 布局解析)是纯数学,
+# 拿构造张量就能验。这部分恰恰是静默出错的重灾区 ——
+# 布局搞反了不报错,只是全检测不出来。
+#
+# 结论:推理跑不了不算缺口,前后处理没测才算。
+# ============================================================
+qt_add_executable(w7_dl_test
+    tests/test_dl_postprocess.cpp
+    operators/dl_postprocess.cpp
+)
+
+target_include_directories(w7_dl_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w7_dl_test PRIVATE Qt6::Core ${OpenCV_LIBS})
+
+if(MSVC)
+    target_compile_options(w7_dl_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_dl_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        D:/opencv-src/build/install/bin
+        $<TARGET_FILE_DIR:w7_dl_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+add_test(NAME dl_postprocess COMMAND w7_dl_test)

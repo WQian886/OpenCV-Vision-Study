@@ -1,0 +1,9 @@
+file,defect,expected,note
+baseline.png,none,PASS,baseline reference
+missing.png,missing,FAIL,synthetic defect: missing
+wrong.png,wrong,FAIL,synthetic defect: wrong
+polarity.png,polarity,FAIL,synthetic defect: polarity
+bridge.png,bridge,FAIL,synthetic defect: bridge
+insufficient.png,insufficient,FAIL,synthetic defect: insufficient
+shifted.png,shifted,FAIL,synthetic defect: shifted
+short.png,short,FAIL,synthetic defect: short

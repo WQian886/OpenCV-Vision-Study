@@ -7,6 +7,9 @@
 #include "qr_decode.h"
 #include "image_source_dir.h"
 #include "image_source_camera.h"
+#include "pcb_inspect.h"
+#include "pcb_defect_judge.h"
+#include "dl_infer.h"
 
 namespace w7 {
 
@@ -18,6 +21,9 @@ OperatorBase* createOperatorByName(const QString& name) {
     if (name == "qr_decode")          return new QRDecode();
     if (name == "image_source_dir")  return new ImageSourceDir();
     if (name == "image_source_camera") return new ImageSourceCamera();
+    if (name == "pcb_inspect")        return new PcbInspect();
+    if (name == "pcb_defect_judge")   return new PcbDefectJudge();
+    if (name == "dl_infer")           return new DlInfer();
     return nullptr;
 }
 

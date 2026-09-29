@@ -38,7 +38,10 @@
 #include "operators/count_check.h"
 #include "operators/template_match.h"
 #include "operators/qr_decode.h"
-#include "operators/operator_factory.h"  // P1: for createOperatorByName
+#include "operators/image_source_dir.h"
+#include "operators/image_source_camera.h"
+#include "operators/pcb_inspect.h"
+#include "operators/pcb_defect_judge.h"
 
 // === M6 撤销/重做:具体 Command 子类 ===
 #include "commands/node_commands.h"
@@ -305,6 +308,15 @@ void MainWindow::registerOperators() {
                            tr("在大图找模板位置")});
     m_operatorInfo.append({"qr_decode",      tr("QR 解码"),    "identification",
                            tr("读 QR 码内容")});
+    // === W6 深度联动:PCB 检测上流水线(定位/判定拆成两个算子) ===
+    m_operatorInfo.append({"pcb_inspect", tr("PCB 元件定位"), "detection",
+                           tr("定位 PCB 上的元件,支持真值坐标/自动轮廓(源自 W6)")});
+    m_operatorInfo.append({"pcb_defect_judge", tr("PCB 缺陷判定"), "detection",
+                           tr("判定 7 类 PCB 缺陷,阈值全可调(源自 W6)")});
+    // === DL 算子:传统 CV 之外的第二条腿 ===
+    m_operatorInfo.append({"dl_infer", tr("DL 推理 (ONNX)"), "dl",
+                           tr("加载 ONNX 模型做目标检测(YOLOv5/v8);"
+                              "需 ONNX Runtime,未装时算子仍可用只是 Run 会提示")});
 }
 
 void MainWindow::setupOperatorLibrary() {

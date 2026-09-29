@@ -47,6 +47,10 @@ desktop.ini
 images/*_marked*.png
 images/w6_inspect_*.png
 images/w7_*.png
+# gitignore 里带 "/" 的模式是锚定到 .gitignore 所在目录的,
+# 上面那条管不到 W7_VisionMasterLite/images/ 下的算子输出图。
+# **/ 才能匹配任意层级。
+**/images/w7_*.png
 images/complex/marked*.png
 report/*.csv
 report/*.log
