@@ -95,6 +95,8 @@ set(SOURCES
     operators/dl_postprocess.cpp
     operators/dl_infer.cpp
     operators/line_fit.cpp
+    operators/circle_fit.cpp
+    operators/caliper_dist.cpp
 )
 
 set(HEADERS
@@ -123,6 +125,8 @@ set(HEADERS
     operators/dl_postprocess.h
     operators/dl_infer.h
     operators/line_fit.h
+    operators/circle_fit.h
+    operators/caliper_dist.h
 )
 
 qt_add_executable(w7_vm_lite WIN32 ${SOURCES} ${HEADERS})
@@ -411,3 +415,42 @@ add_custom_command(TARGET w7_line_test POST_BUILD
 )
 
 add_test(NAME line_fit COMMAND w7_line_test)
+
+# ============================================================
+# === 测量类算子 回归测试 (headless, circle_fit + caliper_dist)
+#
+# 和 line_test 合并成两个套件(而不是拆成三个)是因为这两个
+# 考的是同一种东西:**公式简单,但约定和退化情形容易错**。
+#
+# circle_fit 自造 mask 写到 images/,工作目录必须是工程根。
+# ============================================================
+qt_add_executable(w7_measure_test
+    tests/test_measurement.cpp
+    operators/param_form.cpp
+    operators/circle_fit.cpp
+    operators/caliper_dist.cpp
+)
+
+target_include_directories(w7_measure_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w7_measure_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+    ${OpenCV_LIBS}
+)
+
+if(MSVC)
+    target_compile_options(w7_measure_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_measure_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        D:/opencv-src/build/install/bin
+        $<TARGET_FILE_DIR:w7_measure_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+add_test(NAME measurement COMMAND w7_measure_test
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

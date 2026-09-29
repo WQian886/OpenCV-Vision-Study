@@ -24,7 +24,7 @@ W7_VisionMasterLite/
 │   ├── command.h / .cpp        #   抽象基类
 │   ├── node_commands.h / .cpp  #   增/删/移节点
 │   └── edge_commands.h / .cpp  #   增/删连线
-├── operators/                  # 算子库(12 个)
+├── operators/                  # 算子库(14 个)
 │   ├── operator_base.h         #   抽象基类
 │   ├── pin_types.h / .cpp      #   pin 类型系统 + 连线检查
 │   ├── operator_factory.h/.cpp #   名字 → 算子
@@ -40,9 +40,11 @@ W7_VisionMasterLite/
 │   ├── pcb_inspect             #   PCB 元件定位(W6)
 │   ├── pcb_defect_judge        #   PCB 7 类缺陷判定(W6)
 │   ├── line_fit                #   直线测量(长度 + 角度)
+│   ├── circle_fit              #   圆形测量(圆心/半径/圆度)
+│   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 7 个无头回归测试(240 断言)
+├── tests/                      # 8 个无头回归测试(271 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -82,7 +84,7 @@ CMake 会真实探测并在 configure 时打印结果:
 ## 🎬 使用方法
 
 启动后界面分 4 个区域:
-- **左侧**:算子库(按模块分组,12 个算子)
+- **左侧**:算子库(按模块分组,14 个算子)
 - **中央**:流程图画布(默认已有 4 个节点 + 连线)
 - **右侧**:参数面板(选中节点查看/编辑)
 - **底部**:结果图 + **该步输出字段** + 运行日志
@@ -125,7 +127,7 @@ CMake 会真实探测并在 configure 时打印结果:
 工具栏 **最近** 下拉,记最近 5 个 `.sol.json`(存 QSettings,跨会话)。
 菜单显示文件名、tooltip 给完整路径;弹出时自动剔掉已被删/挪走的条目。
 
-## 📚 算子清单(12 个)
+## 📚 算子清单(14 个)
 
 | 算子 | VM 对标 | OpenCV API | 吃 → 吐 | 用途 |
 |---|---|---|---|---|
@@ -140,6 +142,8 @@ CMake 会真实探测并在 configure 时打印结果:
 | `pcb_inspect` | — | `findContours`/`moments` | 图像 → 数据 | PCB 元件定位(真值坐标 / 自动轮廓) |
 | `pcb_defect_judge` | — | `inRange`/`morphologyEx` | 数据 → 文本 | 7 类缺陷判定,9 个阈值可调 |
 | `line_fit` | 直线测量 | 无(纯几何) | 图像 → 数据 | 给两点,量长度 + 角度(0~180°) |
+| `circle_fit` | 圆查找 | `findContours`/`minEnclosingCircle` | 图像 → 数据 | 二值图里找圆,量圆心/半径/圆度 |
+| `caliper_dist` | 卡尺 | 无(纯几何) | 图像 → 数据 | AB 定基准,量 C 到 AB 的垂直距离 |
 | `dl_infer` | — | ONNX Runtime | 图像 → 数据 | YOLOv5/v8 目标检测 |
 
 ### VM 四大模块的覆盖情况
@@ -147,14 +151,23 @@ CMake 会真实探测并在 configure 时打印结果:
 | VM 模块 | 本项目算子 | 状态 |
 |---|---|---|
 | 定位 Positioning | `template_match` / `pcb_inspect` | ✅ |
-| **测量 Measurement** | **`line_fit`** | ✅ |
+| **测量 Measurement** | **`line_fit` / `circle_fit` / `caliper_dist`** | ✅ |
 | 识别 Identification | `qr_decode` / `dl_infer` | ✅ |
 | 检测 Detection | `color_segment` / `blob_count` / `count_check` / `pcb_defect_judge` | ✅ |
 
-> 测量类原先是唯一空缺的一类。`line_fit` 补上了最短的那块,
-> 但它只是"两点定一线",**不是** VM 的卡尺 —— 真正的卡尺是
-> 有状态的交互工具(选边 → 亚像素拟合 → 成对测量),
-> 处理"用户点歪了"的复杂度远高于这里。
+> 三个测量算子做了一个刻意的分工:
+>
+> | 算子 | 要不要图 | 为什么 |
+> |---|---|---|
+> | `line_fit` | 不要 | 两点定一线,纯几何 |
+> | `caliper_dist` | 不要 | 三点算距离,纯几何 |
+> | `circle_fit` | **要** | 得先"找到"圆在哪,所以得看图 |
+>
+> **"没有图也能算"是刻意保留的**(给空 `image_path` 不报错,只不出标注图),
+> 好处是这些算子能被纯数学单测,不用准备素材。
+>
+> `caliper_dist` 做的是卡尺的**几何核心**,不是 VM 那个交互式卡尺工具 ——
+> 真卡尺还要处理选边、亚像素拟合、"用户点歪了怎么办"。
 
 ### 加一个算子要走哪 5 步
 
@@ -236,11 +249,11 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,240 断言 / 7 个套件)
+## 🧪 回归测试(无头,271 断言 / 8 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
-# 一次跑完全部 7 个套件
+# 一次跑完全部 8 个套件
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build --output-on-failure'
 ```
 
@@ -253,6 +266,19 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `step_result` | 21 | 状态点判定边界、每步缓存用 UUID 做 key | Qt |
 | `pin_and_recent` | 44 | 该拦的拦/不该拦的放行、路径归一化、已删条目剔除 | QtCore |
 | `line_fit` | 24 | 长度/角度算术、**角度 0~180 的约定**、两点重合不报错、没图照样能算 | OpenCV |
+| `measurement` | 31 | 圆度阈值真在滤方块、周长 0 不除零、**量的是垂直距离不是直线距离**、A/B 重合退化 | OpenCV |
+
+### 三个测量算子的测试为什么长这样
+
+它们的公式都短得不像话,但**最容易错的是约定,不是算术**:
+
+- `line_fit` — 角度 0~180 还是 0~360?(测试钉住)
+- `circle_fit` — 圆度 `4π·area/perim²` 漏个 4π 或忘记平方,
+  算出来是 0.25,**滤不掉任何东西还"看起来在工作"**。
+  所以测试专门验证"阈值真的在滤东西":同一个方块,
+  阈值 0.9 被滤掉、0.1 被留下 —— 这才能证明公式没错
+- `caliper_dist` — 测的是**垂直距离**不是到 A 的直线距离。
+  A=(0,0) B=(10,0) C=(1,1):直线距离 √2,垂直距离 1。搞混这两个最常见
 
 单独跑一个:
 ```powershell

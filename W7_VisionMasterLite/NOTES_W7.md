@@ -107,7 +107,7 @@ QJsonObject run(params, inputs);   // 输出也是 JSON
 
 ---
 
-## 7️⃣ 对标 VM 算子清单(Mini VM 12 个 vs VM 1000+ 个)
+## 7️⃣ 对标 VM 算子清单(Mini VM 14 个 vs VM 1000+ 个)
 
 | Mini VM 算子 | VM 对标 | OpenCV 实现 | 吃 → 吐 | 复杂度 |
 |---|---|---|---|---|
@@ -120,6 +120,8 @@ QJsonObject run(params, inputs);   // 输出也是 JSON
 | template_match | 模板匹配 | `cv::matchTemplate + minMaxLoc` | 图像 → 数据 | ⭐⭐ |
 | qr_decode | 二维码识别 | `cv::QRCodeDetector` | 图像 → 文本 | ⭐⭐ |
 | line_fit | 直线测量 | 纯几何(不用 fitLine) | 图像 → 数据 | ⭐ |
+| circle_fit | 圆查找 | `findContours` + `minEnclosingCircle` | 图像 → 数据 | ⭐⭐ |
+| caliper_dist | 卡尺 | 纯几何(叉积) | 图像 → 数据 | ⭐ |
 | pcb_inspect | — | `findContours` / `moments` | 图像 → 数据 | ⭐⭐⭐ |
 | pcb_defect_judge | — | `inRange` / `morphologyEx` | 数据 → 文本 | ⭐⭐⭐ |
 | dl_infer | — | ONNX Runtime | 图像 → 数据 | ⭐⭐⭐ |
@@ -137,7 +139,7 @@ QJsonObject run(params, inputs);   // 输出也是 JSON
 | VM 模块 | Mini VM 算子(已有) | 可补 |
 |---|---|---|
 | **定位 Positioning** | template_match / pcb_inspect | circle_find / line_find / corner_find / shape_match |
-| **测量 Measurement** | line_fit | caliper / distance / angle / area / circle_fit |
+| **测量 Measurement** | line_fit / circle_fit / caliper_dist | angle / area / 多点拟合 |
 | **识别 Identification** | qr_decode / dl_infer | barcode / ocr / color_classify |
 | **检测 Detection** | color_segment / blob_count / count_check / pcb_defect_judge | image_diff / edge_defect / texture_defect |
 
@@ -264,10 +266,10 @@ Run 引擎遍历会段错误。正确做法是发信号,由 MainWindow 统一走
 - **帧循环 + 批量汇总**
 - **最近工程列表**
 - 6 个无头回归测试 / 216 条断言
-- **测量类算子** `line_fit`(长度 + 角度),四大模块集齐
+- **测量类算子** `line_fit` / `circle_fit` / `caliper_dist`,四大模块集齐
 
-**还缺的**:真正的卡尺(亚像素/成对测量)、子图复用、多前驱合并策略、
-Linux/macOS 移植。
+**还缺的**:交互式卡尺(选边/亚像素/点歪了怎么办)、子图复用、
+多前驱合并策略、Linux/macOS 移植。
 
 ---
 
@@ -298,10 +300,61 @@ if (angle >= 180.0) angle -= 180.0;   // 180 和 0 是同一条线
 
 ---
 
+## 1️⃣6️⃣ 测量类三兄弟:公式越简单,越要测"约定"
+
+`line_fit` / `circle_fit` / `caliper_dist` 三个测量算子,
+公式都短得不像话。**但最容易错的从来不是算术,是约定。**
+
+### 圆度公式是静默失效的重灾区
+
+```
+circularity = 4π · area / perimeter²      正圆 = 1.0
+```
+
+漏个 `4π`、忘记平方、分子分母写反 —— **都不报错**,
+只是算出 0.25 或 0.001 这种数。于是**滤不掉任何东西,
+方块也被当圆报出来,看起来一切正常**。
+
+所以 `test_measurement.cpp` 用例 2 的写法是:
+**拿一个方块,阈值 0.9 必须被滤掉、阈值 0.1 必须被留下。**
+只有阈值真的会"咬",才能证明公式没写错。
+
+> 这跟 W7 之前那个 `image_source_dir` 的坑是同一类:
+> **静默失效比崩溃危险。** 崩溃你立刻知道,静默失效要到产线才发现。
+
+### 卡尺量的是"垂直距离",不是"直线距离"
+
+A=(0,0) B=(10,0) C=(1,1):
+- 到 A 的**直线距离** = √2 ≈ 1.414
+- 到 AB 的**垂直距离** = **1** ← 卡尺要的是这个
+
+公式用叉积而不是投影:
+
+```
+distance = |(B-A) × (C-A)| / |B-A|
+```
+
+> 为什么不用投影:投影要先算单位向量再点积,
+> `|B-A|` 为 0 时单位向量无定义。**叉积形式分子分母都带 `baseLen`,
+> 退化情形只需单独处理一处。公式选得对,边界情况就少一半。**
+
+### 三个算子要不要图的分工
+
+| 算子 | 要不要图 | 为什么 |
+|---|---|---|
+| `line_fit` | 不要 | 两点定一线,纯几何 |
+| `caliper_dist` | 不要 | 三点算距离,纯几何 |
+| `circle_fit` | **要** | 得先"找到"圆在哪 |
+
+**"没给图也能量"是刻意保留的**:给空 `image_path` 不报错,只不出标注图。
+好处是这两个几何算子能被纯数学单测,一个素材文件都不用准备。
+
+---
+
 ## 📚 一句话总结 W7
 
 **Mini VisionMaster = 算子基类 + QGraphicsView 流程图 + QDockWidget 工作区,
-用约 6700 行 Qt6/OpenCV 代码复刻海康 VM 的核心思路。**
+用约 7200 行 Qt6/OpenCV 代码复刻海康 VM 的核心思路。**
 
 ---
 
@@ -336,7 +389,7 @@ if (angle >= 180.0) angle -= 180.0;   // 180 和 0 是同一条线
      (本项目的 `HAS_MVS_SDK` 就这么坑过一回)
 
 9. **Mini VM 跟 VM 的差距还在哪?**
-   → 算子数量(12 vs 1000+)、真正的卡尺(亚像素/成对测量)、
+   → 算子数量(14 vs 1000+)、交互式卡尺(选边/亚像素/点歪了怎么办)、
      子图复用、多分支合并策略、性能优化、Linux/macOS 移植
 
 10. **加一个新算子要走哪几步?**
@@ -348,3 +401,8 @@ if (angle >= 180.0) angle -= 180.0;   // 180 和 0 是同一条线
     → 公式就两行,不会错。会错的是约定:角度 0~180 还是 0~360、
       两点重合报不报 error、没给图报不报 error。
       这些都不崩,只是结果悄悄变了,而测量直接决定判废
+
+12. **圆度公式写错了为什么测不出来?**
+    → 漏 4π / 忘记平方都不报错,只是算出 0.25 ——
+      **滤不掉任何东西,方块也被当圆报出来**。
+      所以测试要拿方块验证"阈值真的会滤",而不是只测正圆

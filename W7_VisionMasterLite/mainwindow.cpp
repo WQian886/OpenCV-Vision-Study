@@ -45,6 +45,8 @@
 #include "operators/pcb_inspect.h"
 #include "operators/pcb_defect_judge.h"
 #include "operators/line_fit.h"
+#include "operators/circle_fit.h"
+#include "operators/caliper_dist.h"
 
 // === M6 撤销/重做:具体 Command 子类 ===
 #include "commands/node_commands.h"
@@ -354,6 +356,10 @@ void MainWindow::registerOperators() {
     // === 测量类:补齐 VM 四大模块里最后一个(定位/识别/检测都有了) ===
     m_operatorInfo.append({"line_fit", tr("直线测量"), "measurement",
                            tr("给两个点,量出直线的长度和角度(0~180°)")});
+    m_operatorInfo.append({"circle_fit", tr("圆形测量"), "measurement",
+                           tr("在二值图里找出圆形目标,量圆心/半径/圆度")});
+    m_operatorInfo.append({"caliper_dist", tr("卡尺距离"), "measurement",
+                           tr("三点卡尺:AB 定基准,量 C 到 AB 的垂直距离")});
 }
 
 void MainWindow::setupOperatorLibrary() {

@@ -12,6 +12,8 @@
 #include "pcb_defect_judge.h"
 #include "dl_infer.h"
 #include "line_fit.h"
+#include "circle_fit.h"
+#include "caliper_dist.h"
 
 namespace w7 {
 
@@ -28,6 +30,8 @@ OperatorBase* createOperatorByName(const QString& name) {
     if (name == "pcb_defect_judge")   return new PcbDefectJudge();
     if (name == "dl_infer")           return new DlInfer();
     if (name == "line_fit")           return new LineFit();
+    if (name == "circle_fit")         return new CircleFit();
+    if (name == "caliper_dist")       return new CaliperDist();
     return nullptr;
 }
 

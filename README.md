@@ -19,7 +19,7 @@
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。12 个算子 + pin 类型检查 + 每步结果查看 + 帧循环 + JSON 持久化 + 撤销重做，7 个无头回归测试共 240 条断言
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看 + 帧循环 + JSON 持久化 + 撤销重做，8 个无头回归测试共 271 条断言
 
 ### W7 最终版补上的东西
 
@@ -29,7 +29,7 @@
 | 帧循环 | 源输出 `frame_count`，引擎按 `frame_index` 逐轮跑整条链 + 批量 PASS/FAIL 汇总 |
 | W6 深度联动 | `pcb_inspect` + `pcb_defect_judge` 把 PCB 算法挂进画布，7 类缺陷 9 个阈值可调 |
 | DL 算子 | `dl_postprocess`（letterbox/NMS/YOLOv5-v8 解析）+ `dl_infer`（ONNX Runtime，条件编译） |
-| 测量类 | `line_fit` 给两点量长度 + 角度（0~180° 无向），补齐 VM 四大模块最后一块 |
+| 测量类 | `line_fit`（长度+角度）/ `circle_fit`（圆心+半径+圆度）/ `caliper_dist`（点到线距离），补齐 VM 四大模块最后一块 |
 | 每步结果查看 | 节点状态点 + 右键回看任意一步的图和全部字段 |
 | pin 类型检查 | 算子声明吃/吐什么，连错时立刻说明原因 |
 | 最近工程 | 记最近 5 个 `.sol.json`，自动剔掉已删除的 |
@@ -41,7 +41,7 @@ cd W7_VisionMasterLite
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build --output-on-failure'
 ```
 
-7 个套件 / 240 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+8 个套件 / 271 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试。
 
 ## 📖 变更日志
@@ -91,7 +91,7 @@ OpenCV/
 ## 📊 统计
 
 - 7 个 C++ 项目
-- 63 个 C++ 文件 / ~8100 行代码
+- 68 个 C++ 文件 / ~8600 行代码
 - 9 份变更日志 / 131 KB
-- W7 单项 7 个无头回归测试 / 240 条断言
+- W7 单项 8 个无头回归测试 / 271 条断言
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
