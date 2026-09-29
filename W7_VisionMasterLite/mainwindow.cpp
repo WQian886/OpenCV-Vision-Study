@@ -298,6 +298,8 @@ void MainWindow::registerOperators() {
                            tr("按通配符批量加载文件夹图像(对标 VM 文件夹图像源)")});
     m_operatorInfo.append({"image_source_camera", tr("工业相机实时流"), "acquisition",
                            tr("从海康 GigE 工业相机取一帧(对标 VM 相机采集;需 MVS SDK)")});
+    m_operatorInfo.append({"image_source_video", tr("视频文件图像源"), "acquisition",
+                           tr("从视频逐帧取图,Run 时按帧循环(对标 VM 视频图像源)")});
     m_operatorInfo.append({"color_segment",  tr("颜色分割"),   "detection",
                            tr("HSV 颜色范围提取")});
     m_operatorInfo.append({"blob_count",     tr("Blob 计数"),   "detection",
@@ -759,12 +761,25 @@ void MainWindow::onRunClicked() {
     appendLog(tr("[Run] 拓扑序: %1 个节点,按图执行")
         .arg(order.size()));
 
-    // 每个节点的输出缓存
-    QHash<OperatorNode*, QJsonObject> nodeOutputs;
+    // === 帧循环 ===
+    // 图像源可能有多帧(文件夹批量 / 视频)。两者本质是同一件事:
+    // 「一个源产出 N 张图,流水线对每张跑一遍」。
+    // 先跑第 0 帧拿到 frame_count,再决定要不要继续 ——
+    // 所以循环上界是动态的,不是先算好再跑。
+    // 引擎通过 inputs["frame_index"] 告诉源"这轮要第几帧"。
+    QHash<OperatorNode*, QJsonObject> nodeOutputs;   // 每个节点的输出缓存
     OperatorNode* finalNode = nullptr;
-    QJsonObject finalResult;
+    QJsonObject finalResult;                        // 保留最后一帧的结果供显示
+    int totalFrames = 1;
+    int passCount = 0, failCount = 0, frameDone = 0;
 
-    for (OperatorNode* n : order) {
+    for (int frame = 0; frame < totalFrames; ++frame) {
+        nodeOutputs.clear();
+        finalNode = nullptr;
+        QJsonObject frameResult;
+        appendLog(tr("──────── 第 %1 帧 ────────").arg(frame + 1));
+
+        for (OperatorNode* n : order) {
         m_canvas->highlightNode(n->opName(), true);
         QApplication::processEvents();
 
@@ -783,6 +798,8 @@ void MainWindow::onRunClicked() {
         if (!inputs.contains("image_path")) {
             inputs["image_path"] = fallbackPath;
         }
+        // 帧索引:源算子据此取第几帧/第几张图,下游算子忽略这个键
+        inputs["frame_index"] = frame;
 
         OperatorBase* op = w7::createOperatorByName(n->opName());
         if (!op) {
@@ -798,7 +815,7 @@ void MainWindow::onRunClicked() {
         QJsonObject out = op->run(params, inputs);
         nodeOutputs[n] = out;
         finalNode = n;
-        if (out.contains("result")) finalResult = out;
+        if (out.contains("result")) frameResult = out;
 
         // 日志输出关键字段(沿用旧格式)
         QString summary;
@@ -815,25 +832,70 @@ void MainWindow::onRunClicked() {
 
         delete op;
         m_canvas->highlightNode(n->opName(), false);
+        }   // ← 节点循环结束
+
+        // ---------- 本帧收尾 ----------
+        if (!frameResult.contains("result") && finalNode) {
+            frameResult = nodeOutputs.value(finalNode);
+        }
+        const QString r = frameResult.value("result").toString();
+        if (r == "PASS")      ++passCount;
+        else if (r == "FAIL") ++failCount;
+        ++frameDone;
+
+        finalResult = frameResult;   // 留给后面的结果图显示
+
+        // 首帧跑完才知道一共有多少帧 —— 循环上界因此是动态的
+        if (frame == 0) {
+            for (auto it = nodeOutputs.constBegin(); it != nodeOutputs.constEnd(); ++it) {
+                if (it.value().contains("frame_count")) {
+                    totalFrames = qMax(1, it.value().value("frame_count").toInt(1));
+                    break;
+                }
+            }
+        }
+    }   // ← 帧循环结束
+
+    // === 多帧汇总 ===
+    // 只看最后一帧的 PASS/FAIL 是不够的:抽检 30 帧里 1 帧有问题,
+    // 末帧正常的话单看末帧就是漏检。产线的判废看的是整体,不是抽一张。
+    if (totalFrames > 1) {
+        appendLog("----------------------------------------");
+        appendLog(tr("📊 批量汇总: 共 %1 帧 — PASS %2 / FAIL %3")
+            .arg(frameDone).arg(passCount).arg(failCount));
+        if (failCount > 0) {
+            appendLog(tr("⚠️ 有 %1 帧判废,整批判 NG").arg(failCount));
+            statusBar()->showMessage(tr("❌ 批量 FAIL (%1/%2 帧)")
+                .arg(failCount).arg(frameDone), 5000);
+        } else {
+            appendLog(tr("✅ 全批 %1 帧判 OK").arg(frameDone));
+            statusBar()->showMessage(tr("✅ 批量 PASS (%1 帧)").arg(frameDone), 5000);
+        }
     }
 
     // === 最终结果判定(优先 finalResult,否则取最后节点的 output) ===
+    // 多帧时上面已经报过批量汇总了,这里只补一句"末帧是什么",
+    // 不再刷一遍 PASS/FAIL —— 两处都报会让人以为程序判了两次。
     if (!finalResult.contains("result") && finalNode) {
         finalResult = nodeOutputs.value(finalNode);
     }
     QString result = finalResult.value("result").toString();
     if (result.isEmpty()) result = "UNKNOWN";
-    appendLog("----------------------------------------");
-    if (result == "PASS") {
-        appendLog(tr("🎉 最终结果: PASS (%1)").arg(
-            finalResult.value("description").toString()));
-        statusBar()->showMessage(tr("✅ PASS"), 5000);
-    } else if (result == "FAIL") {
-        appendLog(tr("❌ 最终结果: FAIL (%1)").arg(
-            finalResult.value("description").toString()));
-        statusBar()->showMessage(tr("❌ FAIL"), 5000);
+    if (totalFrames <= 1) {
+        appendLog("----------------------------------------");
+        if (result == "PASS") {
+            appendLog(tr("🎉 最终结果: PASS (%1)").arg(
+                finalResult.value("description").toString()));
+            statusBar()->showMessage(tr("✅ PASS"), 5000);
+        } else if (result == "FAIL") {
+            appendLog(tr("❌ 最终结果: FAIL (%1)").arg(
+                finalResult.value("description").toString()));
+            statusBar()->showMessage(tr("❌ FAIL"), 5000);
+        } else {
+            appendLog(tr("ℹ️  最终结果: %1").arg(result));
+        }
     } else {
-        appendLog(tr("ℹ️  最终结果: %1").arg(result));
+        appendLog(tr("ℹ️  末帧(%1)结果: %2").arg(frameDone).arg(result));
     }
 
     // === P3: 根据最后节点 output 决定显示什么 ===

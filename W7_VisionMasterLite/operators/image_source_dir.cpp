@@ -22,7 +22,7 @@ QJsonObject ImageSourceDir::defaultParams() const {
     return p;
 }
 
-QJsonObject ImageSourceDir::run(const QJsonObject& params, const QJsonObject& /*inputs*/) {
+QJsonObject ImageSourceDir::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
     QString dirPath  = params.value("dir_path").toString();
     QString pattern  = params.value("pattern").toString("*.png");
@@ -44,9 +44,20 @@ QJsonObject ImageSourceDir::run(const QJsonObject& params, const QJsonObject& /*
         filesJson.append(fi.absoluteFilePath());
     }
 
+    // === 取第几张 ===
+    // Run 引擎按帧循环,每轮通过 inputs["frame_index"] 告诉源"这轮第几张"。
+    // 以前这里写死 0,于是整个目录只会跑第一张 —— 注释里说的
+    // "每张图都让下游算子跑一次"其实从没发生过。
+    // 越界就停在最后一张:引擎算出来的帧数可能和实际文件数对不上
+    // (运行中往目录里塞了图),停在最后一张比报错更符合"抽检"语义。
+    const int want = qMax(0, inputs.value("frame_index").toInt(0));
+    const int idx  = qMin(want, entryList.size() - 1);
+
     output["count"]         = entryList.size();
     output["files"]         = filesJson;
-    output["current_index"] = 0;
+    output["current_index"] = idx;
+    // 引擎靠 frame_count 决定循环几轮 —— 和视频源同一个键
+    output["frame_count"]   = entryList.size();
 
     // 当前激活的图（W7 Run 引擎不传 cv::Mat,只传 path 字符串,下游算子各自 imread）
     if (entryList.isEmpty()) {
@@ -54,14 +65,14 @@ QJsonObject ImageSourceDir::run(const QJsonObject& params, const QJsonObject& /*
                               .arg(pattern, dirPath);
         return output;
     }
-    QString firstFile = entryList.first().absoluteFilePath();
-    cv::Mat img = cv::imread(firstFile.toStdString(), cv::IMREAD_COLOR);
+    const QString file = entryList.at(idx).absoluteFilePath();
+    cv::Mat img = cv::imread(file.toStdString(), cv::IMREAD_COLOR);
     if (img.empty()) {
-        output["error"] = "imread failed: " + firstFile;
+        output["error"] = "imread failed: " + file;
         return output;
     }
     // 只输出 path + metadata(下游算子各自 imread;image 字段暂未用)
-    output["image_path"] = firstFile;
+    output["image_path"] = file;
     output["width"]      = img.cols;
     output["height"]     = img.rows;
     output["channels"]   = img.channels();

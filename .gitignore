@@ -51,6 +51,9 @@ images/w7_*.png
 # 上面那条管不到 W7_VisionMasterLite/images/ 下的算子输出图。
 # **/ 才能匹配任意层级。
 **/images/w7_*.png
+# 图像源回归测试自造的临时素材
+**/images/_test_src.avi
+**/images/_srcframe_*.png
 images/complex/marked*.png
 report/*.csv
 report/*.log

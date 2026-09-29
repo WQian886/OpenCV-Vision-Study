@@ -87,6 +87,7 @@ set(SOURCES
     operators/qr_decode.cpp
     operators/image_source_dir.cpp
     operators/image_source_camera.cpp
+    operators/image_source_video.cpp
     operators/pcb_inspect.cpp
     operators/pcb_defect_judge.cpp
     operators/dl_postprocess.cpp
@@ -111,6 +112,7 @@ set(HEADERS
     operators/qr_decode.h
     operators/image_source_dir.h
     operators/image_source_camera.h
+    operators/image_source_video.h
     operators/pcb_inspect.h
     operators/pcb_defect_judge.h
     operators/dl_postprocess.h
@@ -270,3 +272,44 @@ add_custom_command(TARGET w7_dl_test POST_BUILD
 )
 
 add_test(NAME dl_postprocess COMMAND w7_dl_test)
+
+# ============================================================
+# === 图像源 回归测试 (headless, 自造临时视频)
+#
+# 本次给 Run 引擎加了帧循环,契约是:
+#   源输出 frame_count,引擎按 inputs["frame_index"] 逐轮调用。
+# 这个契约以前只写在注释里没实现 —— image_source_dir 的注释
+# 宣称"每张图都让下游算子跑一次",实际永远只跑第一张。
+# 注释会骗人,断言不会。
+# ============================================================
+qt_add_executable(w7_source_test
+    tests/test_image_sources.cpp
+    operators/param_form.cpp
+    operators/image_source_video.cpp
+    operators/image_source_dir.cpp
+)
+
+target_include_directories(w7_source_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w7_source_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+    ${OpenCV_LIBS}
+)
+
+if(MSVC)
+    target_compile_options(w7_source_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_source_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        D:/opencv-src/build/install/bin
+        $<TARGET_FILE_DIR:w7_source_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+# 测试会往 images/ 里造临时视频和图,工作目录必须是工程根
+add_test(NAME image_sources COMMAND w7_source_test
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
