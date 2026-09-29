@@ -104,6 +104,21 @@ W7_VisionMasterLite/
 > UUID 由节点创建时生成、重建时沿用,命令永远能找到正确的节点。
 > Load 新工程后会自动清空两个栈 —— 旧命令的 UUID 在新画布里已无意义。
 
+### 🧪 回归测试(无头)
+```powershell
+# 构建(约 3 秒,不链接 OpenCV)
+cmake --build build --target w7_undo_test
+# 运行(headless,不需要显示器)
+$env:QT_QPA_PLATFORM="offscreen"; build\w7_undo_test.exe
+# 期望输出:SUMMARY: pass=50 fail=0   RESULT=PASS(退出码 0)
+```
+
+12 个用例覆盖增删改节点/连线的往返、参数保留、同名节点 UUID 精确指认、
+节点消失后命令静默 no-op 等。**改完 Command 逻辑跑一次即可回归,不用手点鼠标。**
+
+> 用例 5 会打印节点重建前后的地址,用来实证「地址确实会变」——
+> 这正是 Command 必须存 UUID 而非裸指针的原因。
+
 ## ⚠️ 仍待补(下一轮)
 - ❌ **input pin 类型检查**: 算子声明需要哪些 key,连线时验证
 - ❌ **最近文件列表**: 启动显示最近 5 个 `.sol.json`

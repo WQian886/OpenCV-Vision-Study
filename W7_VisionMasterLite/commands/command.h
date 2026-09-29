@@ -17,9 +17,9 @@
 
 #include <QString>
 
-class PipelineView;
-
 namespace w7 {
+
+class PipelineView;   // 子类实现时才需要,这里只前置声明
 
 class Command {
 public:

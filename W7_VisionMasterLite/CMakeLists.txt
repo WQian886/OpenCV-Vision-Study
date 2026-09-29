@@ -94,3 +94,33 @@ add_custom_command(TARGET w7_vm_lite POST_BUILD
         $<TARGET_FILE_DIR:w7_vm_lite>/images
     COMMENT "Copying test images to output directory"
 )
+
+# ============================================================
+# === 撤销/重做 回归测试 (headless) ===
+#
+# 只编译画布 + Command 层,不编译算子 —— 这些文件本身不依赖 cv::,
+# 所以测试目标不需要 OpenCV,构建和运行都很快(约 1 秒)。
+# 用 QT_QPA_PLATFORM=offscreen 跑,不需要显示器。
+#
+# 运行: build/w7_undo_test.exe   (退出码 0 = 全过)
+# ============================================================
+qt_add_executable(w7_undo_test
+    tests/test_undo_redo.cpp
+    pipeline_view.cpp
+    operator_node.cpp
+    connection_line.cpp
+    commands/command.cpp
+    commands/node_commands.cpp
+    commands/edge_commands.cpp
+)
+
+target_include_directories(w7_undo_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(w7_undo_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+
+if(MSVC)
+    target_compile_options(w7_undo_test PRIVATE /utf-8)
+endif()
+
+enable_testing()
+add_test(NAME undo_redo COMMAND w7_undo_test)

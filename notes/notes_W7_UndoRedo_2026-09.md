@@ -167,6 +167,25 @@ Command 模式胜在**内存开销与操作数成正比**（移动节点只存�
 
 `notes_W7_ImageSourceCamera_2026-09.md` 引用了 `notes/notes_W7_路线C_2026-09.md` —— **该文件不存在**（路线 C 计划在某次整理中丢了）。本次改为指向本篇。
 
+### 坑 6：`command.h` 的前置声明在全局作用域
+
+**症状**：写测试时把 `pipeline_view.h` 和 `command.h` 一起 include，编译爆了一屏：
+
+```
+error C2872: "PipelineView": 不明确的符号
+  notes: 可能是 "PipelineView"      ← 全局作用域那个
+  notes: 或 "w7::PipelineView"      ← 真正的类
+```
+
+**原因**：`command.h` 里写的是 `class PipelineView;`（**全局**），而实际类在 `namespace w7` 里。这是 M6-1 遗留的一个多余前置声明 —— 基类根本不用 `PipelineView`，只有子类实现才需要。
+
+**为什么之前没暴露**：`mainwindow.h` 里 `command.h` 排在 `pipeline_view.h` **后面**，真实类先声明，全局那个被"遮住"了不报错。测试的 include 顺序不同，冲突就现形了。
+
+**修复**：把它挪进 `namespace w7`，并加注释说明只有子类实现才需要。
+
+> 教训：**include 顺序能掩盖的错误，换个人换个顺序就会炸。**
+> 前置声明要么放在正确的命名空间，要么干脆删掉。
+
 ---
 
 ## ✅ 六、验收结果
@@ -189,15 +208,54 @@ Command 模式胜在**内存开销与操作数成正比**（移动节点只存�
 ### 启动
 - ✅ exe 启动 6 秒无崩（PID 45388），默认流水线正常加载
 
-### 编译期无法验证、需手动确认的部分
-以下依赖真实鼠标交互，**编译和启动都覆盖不到**，请手动过一遍：
-- [ ] 拖一个节点 → `Ctrl+Z` → 节点消失 → `Ctrl+Y` → 节点回来
-- [ ] 拖两个节点连线 → `Ctrl+Z` → 线消失
-- [ ] 拖动节点 → `Ctrl+Z` → 位置复原（**且命令栈深度不应暴涨** ← 坑 1）
-- [ ] 右键删节点 → `Ctrl+Z` → 节点带着原来的线和参数回来
-- [ ] 选中节点 + 连线一起按 Delete → `Ctrl+Z` 两次全回来
-- [ ] Save → Load → 节点和线的对应关系正确（**含两个同名节点** ← UUID 的意义）
-- [ ] Load 后 Undo 按钮是灰的
+### 🧪 无头回归测试（`tests/test_undo_redo.cpp`）
+
+> 补记：本文档初版写的是「7 条清单需手动点鼠标验证」。实测发现
+> 大部分状态转换**不需要鼠标就能验**，故补了无头测试。
+> 教训：写「TODO：手动验证」之前先想想能不能自动化 —— 手动清单
+> 不可重复，改一行代码就得重点一遍。
+
+```powershell
+cmake --build build --target w7_undo_test
+$env:QT_QPA_PLATFORM="offscreen"; build\w7_undo_test.exe
+```
+
+- ✅ **50 断言全过，退出码 0**（`SUMMARY: pass=50 fail=0 RESULT=PASS`）
+- ✅ 只编译画布 + Command 层（这 4 个文件不依赖 `cv::`），**测试目标不链接 OpenCV**，构建约 3 秒、运行约 1 秒
+- ✅ `QT_QPA_PLATFORM=offscreen` 无需显示器
+- ✅ 已挂 `ctest`（`add_test(NAME undo_redo ...)`）
+
+| # | 用例 | 验证点 |
+|---|---|---|
+| 1 | 增删节点往返 | 基本语义 |
+| 2 | AddNode redo UUID 稳定 | 重做出的节点能和已有连线对上 |
+| 3 | 删中间节点连带删线，撤销后线恢复 | 连线的生命周期归谁管 |
+| 4 | 删节点保留 params | 撤销后参数面板不能是空的 |
+| 5 | **移动→删除→撤销删除→撤销移动** | **悬垂指针回归** |
+| 6 | 连线增删往返 | 端点顺序正确 |
+| 7 | 单独删连线往返 | — |
+| 8 | 新操作清空 redo 栈 | 标准 Command 语义 |
+| 9 | 节点消失后命令静默 no-op | Load 后按 Ctrl+Z 不崩 |
+| 10 | 50 个同名节点 UUID 全不同 | UUID 地基 |
+| 11 | 同名节点连线按 UUID 精确指认 | 旧 FIFO 方案会错的场景 |
+| 12 | clearPipeline 不留悬垂指针 | scene / 容器一致性 |
+
+**用例 5 的实测输出**（本次最有价值的一条）：
+
+```
+(重建前后地址: 0x150f5374740 → 0x150f53748a0)
+```
+
+同一个逻辑节点，删除再撤销后**地址确实变了**。这从实证上确认了：
+`MoveNodeCmd` 存裸指针就是错的，**UUID 不是过度设计，是硬需求**。
+
+### 仍需手动确认的部分
+
+以下依赖真实鼠标交互 / 视觉反馈，测试覆盖不到：
+- [ ] 拖节点 / 连线的**手感**（拖拽是否跟手、落点容差 50px 是否顺手）
+- [ ] 撤销移动后**命令栈深度不暴涨**（坑 1 的方向锁已加，但方向锁本身在 MainWindow 层，测试复刻的是 Command 语义，不含信号重入）
+- [ ] 参数面板在撤销后是否正确刷新
+- [ ] 工具栏 Undo/Redo 按钮的置灰态视觉
 
 ---
 
@@ -265,7 +323,7 @@ emit nodeAddRequested(meta.name, meta.display, meta.category, scenePos);
 
 | 优先级 | 任务 | 估时 |
 |---|---|---|
-| 🟡 中 | **手动验收上面 7 条交互清单** | 30 min |
+| 🟡 中 | 手动验收剩下 4 条交互项（手感 / 方向锁 / 参数面板刷新 / 按钮态） | 20 min |
 | 🟡 中 | input pin 类型检查（算子声明需要哪些 key，连线时验证） | 1-2 h |
 | 🟢 低 | 最近文件列表（启动显示最近 5 个 `.sol.json`） | 30 min |
 | 🟢 低 | `image_source_video`（视频文件源，补齐 VM 的 4 种图像源） | 1 h |
@@ -288,6 +346,7 @@ W7 已 100%，**核心目标（理解工业视觉平台的三层架构）达成*
 | 引用 | 路径 |
 |---|---|
 | 本次新增 | `W7_VisionMasterLite/commands/{node,edge}_commands.{h,cpp}` |
+| 本次新增 | `W7_VisionMasterLite/tests/test_undo_redo.cpp`（12 用例 / 50 断言）|
 | 本次修改 | `W7_VisionMasterLite/{mainwindow,pipeline_view,operator_node}.{h,cpp}` |
 | M6-1 基类 | `W7_VisionMasterLite/commands/command.h` |
 | 上次笔记 | `notes/notes_W7_ImageSourceCamera_2026-09.md` |
