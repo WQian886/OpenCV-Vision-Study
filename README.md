@@ -14,16 +14,16 @@
 | **W4** | 模板匹配 + ORB 特征 | ✅ 100% | [README](./W4_TemplateFeature/README.md) |
 | **W5** | OCR + 二维码 | ✅ 100% | [README](./W5_OCR_QRCode/README.md) |
 | **W6** | PCB 缺陷检测综合项目 | ✅ 95% | [README](./W6_PCB_DefectProject/README.md) |
-| **W7** | Mini VisionMaster Lite (Qt) | ✅ 95% | [README](./W7_VisionMasterLite/README.md) |
+| **W7** | Mini VisionMaster Lite (Qt) | ✅ 100% | [README](./W7_VisionMasterLite/README.md) |
 
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder，支持 5 个算子 + 拖拽连线 + DAG 执行 + JSON 持久化
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder，支持 7 个算子 + 拖拽连线 + DAG 执行 + JSON 持久化 + 撤销重做
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 6 份，96 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 9 份，~150 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (18 KB) — W7 S2 连线 + 3 个 bug
@@ -31,6 +31,9 @@
 - `notes_W7_DAG_RunEngine_2026-09.md` (13 KB) — W7 P0 Run 引擎按图执行
 - `notes_W7_SaveLoad_2026-09.md` (13 KB) — W7 P1 Save/Load JSON
 - `notes_W7_P2P5_Finalize_2026-09.md` (9 KB) — W7 P2-P5 收尾汇总
+- `notes_GitInit_2026-09.md` (10 KB) — git init 完整记录 + 踩坑
+- `notes_W7_ImageSourceCamera_2026-09.md` (10 KB) — 工业相机图像源（MVS SDK 条件编译）
+- `notes_W7_UndoRedo_2026-09.md` (12 KB) — M6 撤销重做 + 节点 UUID + P0 悬垂指针修复
 
 ## 🔨 编译
 

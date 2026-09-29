@@ -87,13 +87,27 @@ W7_VisionMasterLite/
 ### 持久化
 - ✅ **Save/Load JSON**: 工具栏 💾 Save / 📂 Load → `.sol.json` 流水线文件 (`mainwindow.cpp:onSaveProject/onLoadProject`)
 - ✅ **参数恢复**: 加载后自动恢复每个节点的 params
+- ✅ **节点 UUID**: 每个节点自带 `QUuid`,`.sol.json` 按 UUID 引用边 —— 同名节点也能精确指认（2026-09-29）
+- ✅ **旧格式兼容**: 加载无 `uuid` 字段的老文件时,自动退回"op 名 + FIFO"匹配
+
+### 撤销/重做 (M6)
+- ✅ **Command 模式**: `commands/command.h` 抽象基类 + 6 个子类
+  - `AddNodeCmd` / `DeleteNodeCmd` / `MoveNodeCmd`(`commands/node_commands.cpp`)
+  - `AddEdgeCmd` / `RemoveEdgeCmd`(`commands/edge_commands.cpp`)
+- ✅ **双栈**: `QStack<Command*> m_undoStack / m_redoStack`,新操作自动清 redo 栈
+- ✅ **快捷键**: `Ctrl+Z` 撤销 / `Ctrl+Y` 或 `Ctrl+Shift+Z` 重做
+- ✅ **工具栏按钮**: `↶ Undo` / `↷ Redo`,栈空时自动置灰
+- ✅ **全操作可撤销**: 从算子库拖出节点、端口连线、拖动节点、右键删节点、Delete 键删选中项
+
+> **设计要点**:Command 全部按 `QUuid` 定位节点而非裸指针。
+> 撤销删除会"重建"节点(新地址),若存旧指针则后续撤销会操作已释放内存。
+> UUID 由节点创建时生成、重建时沿用,命令永远能找到正确的节点。
+> Load 新工程后会自动清空两个栈 —— 旧命令的 UUID 在新画布里已无意义。
 
 ## ⚠️ 仍待补(下一轮)
-- ❌ **节点 UUID**: 解决同名节点的 edge 引用歧义（当前用 FIFO 兜底）
 - ❌ **input pin 类型检查**: 算子声明需要哪些 key,连线时验证
-- ❌ **Ctrl+Z 撤销/重做**: 命令栈 + undo/redo
 - ❌ **最近文件列表**: 启动显示最近 5 个 `.sol.json`
-- ❌ **节点 UUID + 复杂子板支持**: 适配不同尺寸/布局的 PCB
+- ❌ **复杂子板支持**: 适配不同尺寸/布局的 PCB
 - ❌ **真实 PCB 测试**: HSV 范围 + 颜色校准
 
 ## 🛠️ 命令行构建(备选)
