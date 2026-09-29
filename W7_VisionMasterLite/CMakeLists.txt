@@ -78,7 +78,9 @@ set(SOURCES
     commands/command.cpp
     commands/node_commands.cpp
     commands/edge_commands.cpp
+    recent_files.cpp
     operators/param_form.cpp
+    operators/pin_types.cpp
     operators/operator_factory.cpp
     operators/color_segment.cpp
     operators/blob_count.cpp
@@ -102,8 +104,10 @@ set(HEADERS
     commands/command.h
     commands/node_commands.h
     commands/edge_commands.h
+    recent_files.h
     operators/operator_base.h
     operators/param_form.h
+    operators/pin_types.h
     operators/operator_factory.h
     operators/color_segment.h
     operators/blob_count.h
@@ -184,6 +188,9 @@ qt_add_executable(w7_undo_test
     commands/command.cpp
     commands/node_commands.cpp
     commands/edge_commands.cpp
+    # pipeline_view 用到 pinTypeName 显示端口类型;
+    # pin_types.cpp 只依赖 QtCore,不引入 OpenCV
+    operators/pin_types.cpp
 )
 
 target_include_directories(w7_undo_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -327,6 +334,7 @@ add_test(NAME image_sources COMMAND w7_source_test
 qt_add_executable(w7_step_test
     tests/test_step_result.cpp
     operator_node.cpp
+    operators/pin_types.cpp
 )
 
 target_include_directories(w7_step_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -338,3 +346,28 @@ if(MSVC)
 endif()
 
 add_test(NAME step_result COMMAND w7_step_test)
+
+# ============================================================
+# === pin 类型检查 + 最近文件列表 回归测试 (headless, 纯 QtCore)
+#
+# 这两块都不碰界面,也不需要 OpenCV,所以这个目标只要 Qt6::Core。
+# 重点是"哪些该拦、哪些不该拦":
+#   放错了 → 用户明明连对了却被弹窗挡住
+#   拦漏了 → 静默算错(比如图像源接数量判定,count 拿不到 → 判 FAIL,
+#             而日志上看不出任何异常)
+# ============================================================
+qt_add_executable(w7_pin_test
+    tests/test_pin_and_recent.cpp
+    operators/pin_types.cpp
+    recent_files.cpp
+)
+
+target_include_directories(w7_pin_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(w7_pin_test PRIVATE Qt6::Core)
+
+if(MSVC)
+    target_compile_options(w7_pin_test PRIVATE /utf-8)
+endif()
+
+add_test(NAME pin_and_recent COMMAND w7_pin_test)

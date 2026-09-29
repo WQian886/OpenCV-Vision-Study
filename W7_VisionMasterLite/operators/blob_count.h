@@ -18,6 +18,9 @@ public:
     QString description() const override {
         return "对二值 mask 数连通域,过滤小于 min_area 的噪点";
     }
+    // 吃 mask(是图),吐 count/total_area(是数据)
+    PinType inputPinType()  const override { return PinType::Image; }
+    PinType outputPinType() const override { return PinType::Data; }
     QJsonObject defaultParams() const override;
     QJsonObject run(const QJsonObject& params, const QJsonObject& inputs) override;
     QWidget* createParamWidget(QWidget* parent,

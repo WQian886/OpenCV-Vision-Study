@@ -17,10 +17,12 @@
 #include <QUuid>
 #include "pipeline_view.h"
 #include "commands/command.h"
+#include "recent_files.h"
 
 class QTextEdit;
 class QPlainTextEdit;
 class QLabel;
+class QMenu;
 class QPushButton;
 class QStackedWidget;
 class QLineEdit;
@@ -120,6 +122,17 @@ private:
                                    const QJsonObject& params,
                                    const QJsonObject& inputs);
 
+    // ============================================================
+    // === 最近工程 ===
+    // 存最近 5 个 .sol.json(存 QSettings,跨会话)。
+    // 每次弹出菜单时重建 —— 列表只在 Save/Load 时变,
+    // 缓存一份反而要多一套同步逻辑,不值当。
+    // ============================================================
+    void rebuildRecentMenu();
+    void loadProjectFrom(const QString& path);
+    // 文件对话框的起始目录:上次用过的目录,没有就用工程目录
+    QString lastUsedDir() const;
+
     // === M6 撤销/重做 ===
     // 执行命令:执行 + push undoStack + 清空 redoStack
     void execCommand(Command* cmd);
@@ -159,6 +172,11 @@ private:
     // === M6: 工具栏 Undo / Redo 按钮 ===
     QAction* m_undoAction = nullptr;
     QAction* m_redoAction = nullptr;
+
+    // === 最近工程 ===
+    RecentFiles* m_recentFiles = nullptr;
+    QPushButton* m_recentBtn   = nullptr;
+    QMenu*       m_recentMenu   = nullptr;
 
     // === M6: 重入防护 ===
     // undo/redo 会改场景 → 触发 nodeMoved 等信号 → 可能又生成新 Command。

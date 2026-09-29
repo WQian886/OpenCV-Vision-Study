@@ -20,6 +20,9 @@ public:
     QString description() const override {
         return "在大图滑动模板,找最相似位置";
     }
+    // 吃图,吐坐标/得分(数据)
+    PinType inputPinType()  const override { return PinType::Image; }
+    PinType outputPinType() const override { return PinType::Data; }
     QJsonObject defaultParams() const override;
     QJsonObject run(const QJsonObject& params, const QJsonObject& inputs) override;
     QWidget* createParamWidget(QWidget* parent,

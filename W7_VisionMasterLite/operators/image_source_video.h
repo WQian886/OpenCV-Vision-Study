@@ -46,6 +46,9 @@ public:
         return "从视频文件逐帧取图送进流水线(对标 VM '视频图像' 图像源)。"
                "Run 时按帧循环,每帧都让下游算子跑一遍";
     }
+    // 图像源:出图像,没有输入口
+    PinType outputPinType() const override { return PinType::Image; }
+    bool isSource() const override { return true; }
     QJsonObject defaultParams() const override;
     QJsonObject run(const QJsonObject& params, const QJsonObject& inputs) override;
     QWidget* createParamWidget(QWidget* parent,

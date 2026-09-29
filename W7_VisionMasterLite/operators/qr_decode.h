@@ -18,6 +18,9 @@ public:
     QString description() const override {
         return "检测并解码图中的 QR 码";
     }
+    // 吃图,吐解码文本
+    PinType inputPinType()  const override { return PinType::Image; }
+    PinType outputPinType() const override { return PinType::Text; }
     QJsonObject defaultParams() const override;
     QJsonObject run(const QJsonObject& params, const QJsonObject& inputs) override;
     QWidget* createParamWidget(QWidget* parent,

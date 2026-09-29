@@ -28,6 +28,9 @@ public:
     QString description() const override {
         return "按通配符批量加载文件夹内的图像(对标 VM '文件夹图像' 图像源)";
     }
+    // 图像源:出图像,没有输入口
+    PinType outputPinType() const override { return PinType::Image; }
+    bool isSource() const override { return true; }
     QJsonObject defaultParams() const override;
     QJsonObject run(const QJsonObject& params, const QJsonObject& inputs) override;
     QWidget* createParamWidget(QWidget* parent,

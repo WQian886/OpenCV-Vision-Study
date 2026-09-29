@@ -44,6 +44,14 @@ public:
         return "判定 PCB 的 7 类缺陷(缺件/错件/极性反/焊桥/焊少/偏移/短路)"
                ",阈值全部可调(源自 W6 综合项目)";
     }
+    // 吃元件清单(数据),吐缺陷清单 + PASS/FAIL(文本)
+    //
+    // 输入标成 Data 而不是 Image:这个算子读的是 components 数组,
+    // 图像路径只是顺带用的(而且由 pcb_inspect 透传下来)。
+    // 这样"图像源 → 缺陷判定"会在连线时就被挡下来 ——
+    // 那种连法 Run 时会因为缺 components 直接报错,早拦一秒。
+    PinType inputPinType()  const override { return PinType::Data; }
+    PinType outputPinType() const override { return PinType::Text; }
     QJsonObject defaultParams() const override;
     QJsonObject run(const QJsonObject& params, const QJsonObject& inputs) override;
     QWidget* createParamWidget(QWidget* parent,

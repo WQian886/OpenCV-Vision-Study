@@ -30,6 +30,9 @@ public:
     QString description() const override {
         return "从海康 GigE Vision 工业相机取一帧(对标 VM '相机采集' 图像源)。依赖 MVS SDK,环境变量 MVS_DIR 指向 SDK 根目录";
     }
+    // 图像源:出图像,没有输入口
+    PinType outputPinType() const override { return PinType::Image; }
+    bool isSource() const override { return true; }
     QJsonObject defaultParams() const override;
     QJsonObject run(const QJsonObject& params, const QJsonObject& inputs) override;
     QWidget* createParamWidget(QWidget* parent,

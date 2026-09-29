@@ -149,6 +149,21 @@ void OperatorNode::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
     p->drawText(QRectF(-W/2.0, -H/2.0 + 22, W, H - 24),
                 Qt::AlignCenter, m_opName);
 
+    // === pin 类型(一行小字) ===
+    // 没有它,连线被拒时用户只能看到"类型不匹配"却不知道
+    // 每个口到底是什么类型 —— 那等于让人猜。
+    if (!m_inLabel.isEmpty() || !m_outLabel.isEmpty()) {
+        font.setPointSize(7);
+        p->setFont(font);
+        p->setPen(QColor(90, 110, 150));
+        p->drawText(QRectF(-W/2.0, H/2.0 - 15, W, 13),
+                    Qt::AlignCenter,
+                    m_inLabel.isEmpty()
+                        ? m_outLabel
+                        : (m_outLabel.isEmpty() ? m_inLabel
+                                                 : m_inLabel + " → " + m_outLabel));
+    }
+
     // 端口(输入左 / 输出右)
     p->setBrush(QBrush(borderColor));
     p->setPen(QPen(Qt::white, 2));

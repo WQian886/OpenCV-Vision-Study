@@ -51,6 +51,13 @@ OperatorNode* PipelineView::addNode(const QString& opName,
     // === 每步结果查看:节点右键"查看该步输出" → 转发给 MainWindow ===
     connect(node, &OperatorNode::viewStepResultRequested,
             this, &PipelineView::nodeViewResultRequested);
+    // === pin 类型显示 ===
+    // 图像源没有输入口,那一侧留空(节点上就不显示"入:")
+    if (m_registry.contains(opName)) {
+        const OpMeta& meta = m_registry.value(opName);
+        const QString in  = meta.isSource ? QString() : w7::pinTypeName(meta.inType);
+        node->setPinLabels(in, w7::pinTypeName(meta.outType));
+    }
     return node;
 }
 

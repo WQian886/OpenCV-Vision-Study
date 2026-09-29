@@ -21,6 +21,10 @@ public:
     QString description() const override {
         return "在 HSV 空间按颜色范围提取像素,输出二值 mask(对应 W2 inRange)";
     }
+    // 吃图、吐 mask(mask 仍是图,所以输出还是 Image;
+    // 下游 blob_count 要的就是它)
+    PinType inputPinType()  const override { return PinType::Image; }
+    PinType outputPinType() const override { return PinType::Image; }
     QJsonObject defaultParams() const override;
     QJsonObject run(const QJsonObject& params, const QJsonObject& inputs) override;
     QWidget* createParamWidget(QWidget* parent,

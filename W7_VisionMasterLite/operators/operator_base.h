@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QWidget>
 #include <opencv2/opencv.hpp>
+#include "pin_types.h"
 
 namespace w7 {
 
@@ -47,6 +48,24 @@ public:
         Q_UNUSED(params);
         return nullptr;
     }
+
+    // ============================================================
+    // === pin 类型(连线检查用) ===
+    //
+    // 默认全给 Any —— "没声明"意味着"不检查",而不是"拒绝"。
+    // 这样新增算子时忘了写声明,功能照常,只是少一层保护;
+    // 反过来默认给具体类型的话,每个新算子都得记得覆盖这两个函数,
+    // 忘一次就在连线时被莫名拦住,比不检查更烦人。
+    // ============================================================
+
+    // 我这个算子吃什么
+    virtual PinType inputPinType() const { return PinType::Any; }
+
+    // 我这个算子吐什么
+    virtual PinType outputPinType() const { return PinType::Any; }
+
+    // 图像源:没有输入口,不能接在别的算子后面
+    virtual bool isSource() const { return false; }
 };
 
 } // namespace w7

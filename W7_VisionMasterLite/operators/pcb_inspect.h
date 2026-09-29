@@ -45,6 +45,9 @@ public:
         return "定位 PCB 上的元件(R/C/IC),支持真值坐标和自动轮廓两种模式"
                "(源自 W6 综合项目)";
     }
+    // 吃图,吐元件清单(数据)
+    PinType inputPinType()  const override { return PinType::Image; }
+    PinType outputPinType() const override { return PinType::Data; }
     QJsonObject defaultParams() const override;
     QJsonObject run(const QJsonObject& params, const QJsonObject& inputs) override;
     QWidget* createParamWidget(QWidget* parent,

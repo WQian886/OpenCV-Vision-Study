@@ -9,6 +9,7 @@
 #include <QStackedWidget>
 #include <QTextEdit>
 #include <QPlainTextEdit>
+#include <QMenu>
 #include <QLabel>
 #include <QPushButton>
 #include <QLineEdit>
@@ -195,6 +196,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle(tr("Mini VisionMaster Lite — W7"));
     resize(1400, 900);
 
+    // === 最近工程列表 ===
+    // 必须在 setupToolbar 之前建好 —— 那里要读它来决定
+    // "最近"按钮初始是否置灰
+    m_recentFiles = new w7::RecentFiles(QStringLiteral("recent/sol_json"), 5);
+
     registerOperators();
     setupUi();
     setupToolbar();
@@ -210,6 +216,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         m.display     = op.display;
         m.category    = op.category;
         m.description = op.description;
+        // === pin 类型:从算子自己问出来,免得两处各写一份表、改一处忘一处 ===
+        if (w7::OperatorBase* o = w7::createOperatorByName(op.name)) {
+            m.inType   = o->inputPinType();
+            m.outType  = o->outputPinType();
+            m.isSource = o->isSource();
+            delete o;
+        }
         registry.insert(op.name, m);
     }
     m_canvas->setOperatorRegistry(registry);
@@ -269,6 +282,19 @@ void MainWindow::setupToolbar() {
     tb->addWidget(runBtn);
     tb->addWidget(loadBtn);
     tb->addWidget(saveBtn);
+
+    // === 最近工程 ===
+    // 独立成一个下拉而不是复用 Load:流水线是"打开工程"的主入口,
+    // 藏进二级菜单等于把主入口降级了。
+    m_recentMenu = new QMenu(tr("最近工程"), this);
+    // 菜单不放进菜单栏(这个项目没有),直接由 QPushButton 弹出
+    m_recentBtn = new QPushButton(tr("最近 ▾"), this);
+    m_recentBtn->setMenu(m_recentMenu);
+    // 没内容时置灰,免得点开是个空菜单
+    m_recentBtn->setEnabled(!m_recentFiles->paths().isEmpty());
+    connect(m_recentMenu, &QMenu::aboutToShow,
+            this, &MainWindow::rebuildRecentMenu);
+    tb->addWidget(m_recentBtn);
 
     tb->addSeparator();
     tb->addWidget(new QLabel(tr(" 图像: "), this));
@@ -640,9 +666,15 @@ void MainWindow::onParamApplied() {
 
 void MainWindow::onLoadProject() {
     QString path = QFileDialog::getOpenFileName(this, tr("加载流水线"),
-        "", tr("Mini VM Pipeline (*.json *.sol.json)"));
+        lastUsedDir(), tr("Mini VM Pipeline (*.json *.sol.json)"));
     if (path.isEmpty()) return;
+    loadProjectFrom(path);
+}
 
+// 最近工程菜单和 Load 按钮走的是同一条路 ——
+// 两份加载逻辑各写一遍的话,以后加个"加载后自动 Run"之类的需求
+// 必然只改一处,两处行为开始不一致。
+void MainWindow::loadProjectFrom(const QString& path) {
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
         appendLog(tr("[Load] ❌ 无法打开文件: %1").arg(f.errorString()));
@@ -687,12 +719,60 @@ void MainWindow::onLoadProject() {
     // 用户会看到"按了没反应"。清空并重置按钮。
     clearUndoRedoStacks();
 
+    // === 加载成功才进"最近" ===
+    // 失败的也记进去的话,菜单里会攒一串打不开的路径
+    m_recentFiles->add(path);
+    m_recentBtn->setEnabled(true);
+
     statusBar()->showMessage(tr("✅ 流水线已加载: %1").arg(path), 3000);
+}
+
+QString MainWindow::lastUsedDir() const {
+    const QStringList list = m_recentFiles->paths();
+    if (!list.isEmpty()) return QFileInfo(list.first()).absolutePath();
+    // 没有历史时回到当前工程目录,总比打开"最近用过"里一堆系统目录强
+    return QDir::currentPath();
+}
+
+void MainWindow::rebuildRecentMenu() {
+    m_recentMenu->clear();
+
+    // 先剔掉已经被删掉/挪走的条目,免得点下去只得到一句"文件不存在"
+    const int dropped = m_recentFiles->pruneMissing();
+    if (dropped > 0) {
+        appendLog(tr("[最近] 已清理 %1 条不存在的路径").arg(dropped));
+    }
+
+    const QStringList list = m_recentFiles->paths();
+    if (list.isEmpty()) {
+        m_recentMenu->addAction(tr("(还没有打开过工程)"))->setEnabled(false);
+        m_recentBtn->setEnabled(false);
+        return;
+    }
+
+    for (const QString& p : list) {
+        QAction* a = m_recentMenu->addAction(QFileInfo(p).fileName());
+        // 菜单只显示文件名(不同目录下同名工程很多),
+        // 完整路径放 tooltip —— 不然用户分不清是哪一条
+        a->setToolTip(p);
+        a->setStatusTip(p);
+        // 捕获路径"值"而不是 action 指针:菜单每次弹出都重建,
+        // 捕获指针会在下一次重建后指向已释放的 action
+        connect(a, &QAction::triggered, this, [this, p] { loadProjectFrom(p); });
+    }
+    m_recentMenu->addSeparator();
+    QAction* clr = m_recentMenu->addAction(tr("清空列表"));
+    connect(clr, &QAction::triggered, this, [this] {
+        m_recentFiles->clear();
+        m_recentBtn->setEnabled(false);
+        appendLog(tr("[最近] 列表已清空"));
+    });
 }
 
 void MainWindow::onSaveProject() {
     QString path = QFileDialog::getSaveFileName(this, tr("保存流水线"),
-        "untitled.sol.json", tr("Mini VM Pipeline (*.sol.json)"));
+        QDir(lastUsedDir()).filePath("untitled.sol.json"),
+        tr("Mini VM Pipeline (*.sol.json)"));
     if (path.isEmpty()) return;
 
     QJsonDocument doc = pipelineToJson(m_canvas, m_imagePathEdit->text());
@@ -709,6 +789,10 @@ void MainWindow::onSaveProject() {
     appendLog(tr("[Save] ✅ 已保存 %1 个节点 + %2 条连线到 %3")
         .arg(nodeCount).arg(edgeCount).arg(path));
     statusBar()->showMessage(tr("✅ 已保存: %1").arg(path), 3000);
+
+    // 存过的工程自然算"最近打开过" —— 不管这次是 Save 还是 Save As
+    m_recentFiles->add(path);
+    m_recentBtn->setEnabled(true);
 }
 
 // ============================================================
@@ -1225,6 +1309,36 @@ void MainWindow::doMoveNode(w7::OperatorNode* node, const QPointF& oldPos,
 
 void MainWindow::doConnect(w7::OperatorNode* from, w7::OperatorNode* to) {
     if (!from || !to) return;
+
+    // ============================================================
+    // === pin 类型检查 ===
+    //
+    // 只拦"用户主动连线"这一条路。加载旧工程 / 撤销重做走的是
+    // PipelineView::addConnection,那边不查 —— 那些是恢复既有状态,
+    // 不是在做新决策。旧工程里存着当年合法的连法,不该因为今天
+    // 加了类型规则就打不开。
+    // ============================================================
+    w7::OperatorBase* fromOp = w7::createOperatorByName(from->opName());
+    w7::OperatorBase* toOp   = w7::createOperatorByName(to->opName());
+    if (fromOp && toOp) {
+        const QString why = w7::checkPinCompatibility(
+            fromOp->outputPinType(), toOp->inputPinType(),
+            toOp->isSource(),
+            from->displayName(), to->displayName(),
+            from == to);
+        if (!why.isEmpty()) {
+            QMessageBox::warning(this, tr("不能连线"), why);
+            appendLog(tr("[连线] ❌ 拒绝 %1 → %2: %3")
+                .arg(from->opName(), to->opName(),
+                     why.split('\n').value(0)));
+            delete fromOp;
+            delete toOp;
+            return;
+        }
+    }
+    delete fromOp;
+    delete toOp;
+
     execCommand(new w7::AddEdgeCmd(m_canvas, from->uuid(), to->uuid()));
 }
 

@@ -12,6 +12,7 @@
 #include <QList>
 #include <QUuid>
 #include <QPointF>
+#include "operators/pin_types.h"
 
 namespace w7 {
 
@@ -23,6 +24,12 @@ struct OpMeta {
     QString display;
     QString category;
     QString description;
+    // === pin 类型(画布上显示,连线时检查) ===
+    // 存在这里而不是让 PipelineView 去 new 算子:画布只负责画,
+    // 不该为了显示一个标签就去构造带 OpenCV 依赖的算子对象。
+    PinType inType  = PinType::Any;
+    PinType outType = PinType::Any;
+    bool     isSource = false;
 };
 
 class PipelineView : public QGraphicsView {

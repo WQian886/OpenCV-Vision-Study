@@ -67,6 +67,21 @@ public:
     bool hasCachedResult() const { return m_hasCachedResult; }
     void setHasCachedResult(bool b) { m_hasCachedResult = b; }
 
+    // === pin 类型(画布上显示,连错线时用户才知道为什么被拒) ===
+    // 存的是中文名而不是 enum:画布只管画,不想为了显示一行字
+    // 就去依赖 pin_types 的实现。类型转换在 PipelineView 里做完。
+    void setPinLabels(const QString& inLabel, const QString& outLabel) {
+        m_inLabel  = inLabel;
+        m_outLabel = outLabel;
+        setToolTip(inLabel.isEmpty() && outLabel.isEmpty()
+                       ? displayName()
+                       : tr("%1\n输入:%2   输出:%3")
+                             .arg(displayName(),
+                                  inLabel.isEmpty()  ? tr("无") : inLabel,
+                                  outLabel.isEmpty() ? tr("无") : outLabel));
+        update();
+    }
+
 signals:
     // === S3: 节点被点击(让 MainWindow 切换参数面板) ===
     void nodeClicked(OperatorNode* node);
@@ -102,6 +117,9 @@ private:
     // === M6: 拖动起点(松开时用来生成 MoveNodeCmd) ===
     QPointF m_dragStartPos;
     bool    m_dragMoved = false;
+
+    QString m_inLabel;
+    QString m_outLabel;
 
     // === 每步结果查看 ===
     StepStatus m_stepStatus = StepStatus::None;

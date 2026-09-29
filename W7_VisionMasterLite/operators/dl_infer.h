@@ -46,6 +46,9 @@ public:
         return "加载 ONNX 模型做目标检测,支持 YOLOv5/v8 输出布局。"
                "需 ONNX Runtime,环境变量 ONNXRUNTIME_DIR 指向 SDK 根目录";
     }
+    // 吃图,吐检测框(数据)
+    PinType inputPinType()  const override { return PinType::Image; }
+    PinType outputPinType() const override { return PinType::Data; }
     QJsonObject defaultParams() const override;
     QJsonObject run(const QJsonObject& params, const QJsonObject& inputs) override;
     QWidget* createParamWidget(QWidget* parent,
