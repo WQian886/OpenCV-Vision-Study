@@ -12,6 +12,8 @@
 #include <QTreeWidget>
 #include <QMimeData>
 #include <QStack>
+#include <QPointF>
+#include <QAction>
 #include "pipeline_view.h"
 #include "commands/command.h"
 
@@ -64,6 +66,9 @@ private slots:
     void onOperatorSelected();
     void onSceneSelectionChanged();   // === S3 ===
     void onParamApplied();            // === S3 ===
+    void onNodeDeleteRequested(w7::OperatorNode* node);   // === P0 ===
+    void onNodeMoved(w7::OperatorNode* node, const QPointF& oldPos,
+                     const QPointF& newPos);              // === M6 ===
 
 protected:
     // === 修复 2: Delete 键删除 ===
@@ -90,13 +95,24 @@ private:
                                    const QJsonObject& params,
                                    const QJsonObject& inputs);
 
-    // === M6 撤销/重做 (Step1 仅框架,Step2/3 接入 addNode/removeNode 等) ===
+    // === M6 撤销/重做 ===
     // 执行命令:执行 + push undoStack + 清空 redoStack
     void execCommand(Command* cmd);
     // 撤销:从 undoStack 弹 → undo() → push redoStack
     void execUndo();
     // 重做:从 redoStack 弹 → redo() → push undoStack
     void execRedo();
+    // 清空两个栈(Load 新工程后调用,旧命令已无意义且会指向不存在的节点)
+    void clearUndoRedoStacks();
+    // 刷新工具栏 Undo/Redo 按钮的可用状态
+    void updateUndoRedoActions();
+
+    // === M6: 各操作入口 → 生成对应 Command ===
+    void doAddNode(const QString& opName, const QString& display,
+                   const QString& category, const QPointF& pos);
+    void doDeleteNode(OperatorNode* node);
+    void doMoveNode(OperatorNode* node, const QPointF& oldPos, const QPointF& newPos);
+    void doConnect(OperatorNode* from, OperatorNode* to);
 
 private:
     PipelineView*    m_canvas    = nullptr;
@@ -105,6 +121,15 @@ private:
     QTextEdit*       m_logView   = nullptr;
     QLabel*          m_resultImg = nullptr;
     QLineEdit*       m_imagePathEdit = nullptr;
+
+    // === M6: 工具栏 Undo / Redo 按钮 ===
+    QAction* m_undoAction = nullptr;
+    QAction* m_redoAction = nullptr;
+
+    // === M6: 重入防护 ===
+    // undo/redo 会改场景 → 触发 nodeMoved 等信号 → 可能又生成新 Command。
+    // 这个标志让 undo/redo 期间产生的事件不落到栈里。
+    bool m_applyingHistory = false;
 
     // 算子注册表
     QList<OperatorInfo> m_operatorInfo;

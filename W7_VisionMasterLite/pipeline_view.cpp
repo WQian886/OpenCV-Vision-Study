@@ -41,7 +41,35 @@ OperatorNode* PipelineView::addNode(const QString& opName,
     scene()->addItem(node);
     node->setPos(pos);
     m_nodes.append(node);
+    // === P0: 节点右键"删除"→ 转发给 MainWindow 统一销毁 ===
+    // 节点不能自己 delete(PipelineView::m_nodes 会留悬垂指针)
+    connect(node, &OperatorNode::deleteRequested,
+            this, &PipelineView::nodeDeleteRequested);
+    // === M6: 节点拖动 → 转发给 MainWindow 生成 MoveNodeCmd ===
+    connect(node, &OperatorNode::nodeMoved,
+            this, &PipelineView::nodeMovedSignal);
     return node;
+}
+
+// === M6: 按 UUID 找回节点(节点可能被删又重建,地址会变但 UUID 不变) ===
+OperatorNode* PipelineView::findNodeByUuid(const QUuid& id) const {
+    if (id.isNull()) return nullptr;
+    for (auto* n : m_nodes) {
+        if (n && n->uuid() == id) return n;
+    }
+    return nullptr;
+}
+
+// === M6: 找一条 from→to 的连线(多重连线时返回第一条) ===
+ConnectionLine* PipelineView::findConnection(const QUuid& fromId,
+                                             const QUuid& toId) const {
+    for (auto* c : m_connections) {
+        if (!c || !c->fromNode() || !c->toNode()) continue;
+        if (c->fromNode()->uuid() == fromId && c->toNode()->uuid() == toId) {
+            return c;
+        }
+    }
+    return nullptr;
 }
 
 ConnectionLine* PipelineView::addConnection(OperatorNode* from, OperatorNode* to) {
@@ -172,7 +200,8 @@ void PipelineView::dropEvent(QDropEvent* event) {
             }
         }
         if (targetNode) {
-            addConnection(fromNode, targetNode);
+            // === M6: 发请求让 MainWindow 走 Command 栈(否则 Ctrl+Z 撤不掉连线) ===
+            emit connectionAddRequested(fromNode, targetNode);
         }
         event->acceptProposedAction();
         return;
@@ -193,7 +222,8 @@ void PipelineView::dropEvent(QDropEvent* event) {
         }
 
         QPointF scenePos = mapToScene(event->position().toPoint());
-        addNode(meta.name, meta.display, meta.category, scenePos);
+        // === M6: 发请求让 MainWindow 走 Command 栈(否则 Ctrl+Z 撤不掉节点) ===
+        emit nodeAddRequested(meta.name, meta.display, meta.category, scenePos);
 
         event->acceptProposedAction();
         return;

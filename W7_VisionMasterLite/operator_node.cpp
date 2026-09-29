@@ -16,7 +16,8 @@ namespace w7 {
 OperatorNode::OperatorNode(const QString& opName, const QString& displayName,
                            const QString& category, QGraphicsItem* parent)
     : QGraphicsObject(parent),
-      m_opName(opName), m_displayName(displayName), m_category(category) {
+      m_opName(opName), m_displayName(displayName), m_category(category),
+      m_uuid(QUuid::createUuid()) {   // === M6: 每个节点自带唯一 id ===
     setFlag(QGraphicsItem::ItemIsMovable, true);
     setFlag(QGraphicsItem::ItemIsSelectable, true);
     // 让 itemChange 能触发
@@ -77,6 +78,9 @@ QVariant OperatorNode::itemChange(GraphicsItemChange change, const QVariant& val
 // ============================================================
 void OperatorNode::mousePressEvent(QGraphicsSceneMouseEvent* event) {
     QPointF scenePos = event->scenePos();
+    // === M6: 记下拖动起点,松开时对比生成 MoveNodeCmd ===
+    m_dragStartPos = pos();
+    m_dragMoved    = false;
     qDebug() << "[NODE] mousePress enter, op=" << m_opName
              << "onOutputPort=" << hitOutputPort(scenePos);
 
@@ -97,6 +101,17 @@ void OperatorNode::mousePressEvent(QGraphicsSceneMouseEvent* event) {
     // 走默认(节点移动 + 选中 → scene 触发 selectionChanged → MainWindow 切换参数面板)
     QGraphicsItem::mousePressEvent(event);
     qDebug() << "[NODE] mousePress default done, isSelected=" << isSelected();
+}
+
+// === M6: 松开鼠标 → 若位置真的变了,通知外部生成 MoveNodeCmd ===
+void OperatorNode::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
+    QGraphicsItem::mouseReleaseEvent(event);
+
+    const QPointF newPos = pos();
+    if ((newPos - m_dragStartPos).manhattanLength() > 0.5) {
+        m_dragMoved = true;
+        emit nodeMoved(this, m_dragStartPos, newPos);
+    }
 }
 
 // ============================================================
@@ -147,17 +162,16 @@ void OperatorNode::setSelected(bool sel) {
 }
 
 // === P4: 右键菜单 - 删除当前节点 ===
+// === P0 修复:不再 delete this,改为发信号让 MainWindow 走 PipelineView::removeNode ===
+// 旧代码在这里 sc->removeItem(this) + delete this,但 PipelineView::m_nodes
+// 仍持有该指针 → 悬垂指针 → 右键删完立刻 Run 会段错误。
 void OperatorNode::contextMenuEvent(QGraphicsSceneContextMenuEvent* event) {
     QMenu menu;
     QAction* delAct = menu.addAction(QObject::tr("删除节点"));
     QAction* selected = menu.exec(event->screenPos());
     if (selected == delAct) {
-        // 从场景移除 + delete（让 scene 回调安全执行）
-        QGraphicsScene* sc = scene();
-        if (sc) sc->removeItem(this);
-        // 通知 PipelineView 从 m_nodes 删除（通过 dynamic_cast 父容器）
-        // 简化方案:PipelineView 重写了 selectionChanged,这里直接 delete 让 Qt 自动清理
-        delete this;
+        // 只发请求,真正的销毁由 PipelineView::removeNode 统一负责
+        emit deleteRequested(this);
         event->accept();
     } else {
         event->ignore();

@@ -40,6 +40,10 @@
 #include "operators/qr_decode.h"
 #include "operators/operator_factory.h"  // P1: for createOperatorByName
 
+// === M6 撤销/重做:具体 Command 子类 ===
+#include "commands/node_commands.h"
+#include "commands/edge_commands.h"
+
 namespace w7 {
 
 // ============================================================
@@ -65,16 +69,20 @@ static QJsonDocument pipelineToJson(PipelineView* canvas, const QString& imagePa
         nj["x"]        = n->pos().x();
         nj["y"]        = n->pos().y();
         nj["params"]   = n->params();
+        nj["uuid"]     = n->uuid().toString(QUuid::WithoutBraces);  // === M6 ===
         nodesJson.append(nj);
     }
     root["nodes"] = nodesJson;
 
-    // 序列化所有边（用 op 名引用,避免节点指针失效）
+    // === M6: 边按 UUID 引用 ===
+    // 旧版按 op 名 + FIFO 匹配,两个同名 color_segment 会连错 ——
+    // UUID 是唯一身份,同名节点也能精确指认。
     QJsonArray edgesJson;
     for (auto* c : canvas->connections()) {
+        if (!c->fromNode() || !c->toNode()) continue;
         QJsonObject ej;
-        ej["from"] = c->fromNode()->opName();
-        ej["to"]   = c->toNode()->opName();
+        ej["from"] = c->fromNode()->uuid().toString(QUuid::WithoutBraces);
+        ej["to"]   = c->toNode()->uuid().toString(QUuid::WithoutBraces);
         edgesJson.append(ej);
     }
     root["edges"] = edgesJson;
@@ -95,8 +103,13 @@ static bool pipelineFromJson(PipelineView* canvas, const QJsonDocument& doc,
 
     canvas->clearPipeline();
 
-    // 1. 按数组顺序重建节点,记录 op 名 → 节点指针的 FIFO 列表
+    // === M6: 两种索引 ===
+    // uuidIndex: 新版文件按 UUID 精确指认(同名节点也不歧义)
+    // opIndex:   旧版文件(无 uuid 字段)按 op 名 FIFO 兜底
+    QHash<QUuid, OperatorNode*> uuidIndex;
     QHash<QString, QList<OperatorNode*>> opIndex;
+
+    // 1. 按数组顺序重建节点
     QJsonArray nodesJson = root["nodes"].toArray();
     int created = 0, skipped = 0;
     for (const auto& v : nodesJson) {
@@ -117,30 +130,51 @@ static bool pipelineFromJson(PipelineView* canvas, const QJsonDocument& doc,
         // 恢复参数
         QJsonObject params = nj.value("params").toObject();
         if (!params.isEmpty()) node->setParams(params);
+        // 恢复 UUID(旧文件没有则保留自动生成的)
+        const QString uuidStr = nj["uuid"].toString();
+        if (!uuidStr.isEmpty()) {
+            const QUuid id = QUuid::fromString(uuidStr);
+            if (!id.isNull()) {
+                node->setUuid(id);
+                uuidIndex.insert(id, node);
+            }
+        }
         opIndex[opName].append(node);
         delete op;  // factory new 出来的临时实例
         ++created;
     }
 
-    // 2. 重建连线（FIFO 匹配）
+    // 2. 重建连线:有 UUID 用 UUID,没有则退回 op 名 FIFO
     QJsonArray edgesJson = root.value("edges").toArray();
     int linked = 0, edgeSkip = 0;
     for (const auto& v : edgesJson) {
         QJsonObject ej = v.toObject();
-        QString fromOp = ej["from"].toString();
-        QString toOp   = ej["to"].toString();
-        if (!opIndex.contains(fromOp) || opIndex[fromOp].isEmpty()) {
-            logFn(QString("[Load] 边的起点缺失: %1").arg(fromOp));
+        QString fromKey = ej["from"].toString();
+        QString toKey   = ej["to"].toString();
+
+        const QUuid fromId = QUuid::fromString(fromKey);
+        const QUuid toId   = QUuid::fromString(toKey);
+        const bool useUuid = !fromId.isNull() && !toId.isNull();
+
+        OperatorNode* fromN = nullptr;
+        OperatorNode* toN   = nullptr;
+
+        if (useUuid) {
+            fromN = uuidIndex.value(fromId, nullptr);
+            toN   = uuidIndex.value(toId, nullptr);
+        } else {
+            // 旧格式:from/to 存的是 op 名
+            if (opIndex.contains(fromKey) && !opIndex[fromKey].isEmpty())
+                fromN = opIndex[fromKey].takeFirst();
+            if (opIndex.contains(toKey) && !opIndex[toKey].isEmpty())
+                toN = opIndex[toKey].takeFirst();
+        }
+
+        if (!fromN || !toN) {
+            logFn(QString("[Load] 边的端点缺失: %1 → %2").arg(fromKey, toKey));
             ++edgeSkip;
             continue;
         }
-        if (!opIndex.contains(toOp) || opIndex[toOp].isEmpty()) {
-            logFn(QString("[Load] 边的终点缺失: %1").arg(toOp));
-            ++edgeSkip;
-            continue;
-        }
-        OperatorNode* fromN = opIndex[fromOp].takeFirst();
-        OperatorNode* toN   = opIndex[toOp].takeFirst();
         canvas->addConnection(fromN, toN);
         ++linked;
     }
@@ -180,12 +214,33 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(m_canvas, &w7::PipelineView::selectionChangedInScene,
             this, &MainWindow::onSceneSelectionChanged);
 
+    // === P0: 接节点右键删除请求 → 统一走 PipelineView::removeNode ===
+    connect(m_canvas, &w7::PipelineView::nodeDeleteRequested,
+            this, &MainWindow::onNodeDeleteRequested);
+
+    // === M6: 接节点拖动 → 生成 MoveNodeCmd ===
+    connect(m_canvas, &w7::PipelineView::nodeMovedSignal,
+            this, &MainWindow::onNodeMoved);
+
+    // === M6: 画布的"增节点/连线"请求 → 包成 Command ===
+    connect(m_canvas, &w7::PipelineView::nodeAddRequested,
+            this, [this](const QString& op, const QString& disp,
+                         const QString& cat, const QPointF& pos) {
+        doAddNode(op, disp, cat, pos);
+    });
+    connect(m_canvas, &w7::PipelineView::connectionAddRequested,
+            this, [this](w7::OperatorNode* from, w7::OperatorNode* to) {
+        doConnect(from, to);
+    });
+
     loadDefaultPipeline();
 
     statusBar()->showMessage(tr("就绪。点击 ▶ Run 运行默认流水线 | 从左侧算子库拖到画布创建节点 | 点击节点切参数面板"));
 }
 
 MainWindow::~MainWindow() {
+    // === M6: Command 由栈持有,必须手动 delete(QStack 不析构元素) ===
+    clearUndoRedoStacks();
     // OperatorInfo 是值类型,无需手动释放
     m_operatorInfo.clear();
 }
@@ -213,9 +268,26 @@ void MainWindow::setupToolbar() {
     m_imagePathEdit->setMinimumWidth(280);
     tb->addWidget(m_imagePathEdit);
 
+    // === M6: Undo / Redo 按钮(用 QAction 而非 QPushButton,自带快捷键+启用态) ===
+    m_undoAction = new QAction(tr("↶ Undo"), this);
+    m_undoAction->setShortcut(QKeySequence::Undo);        // Ctrl+Z
+    m_undoAction->setShortcutContext(Qt::WindowShortcut); // 在参数面板里也生效
+    m_undoAction->setEnabled(false);
+    tb->addAction(m_undoAction);
+
+    m_redoAction = new QAction(tr("↷ Redo"), this);
+    m_redoAction->setShortcut(QKeySequence::Redo);        // Ctrl+Y (Win/Linux)
+    m_redoAction->setShortcuts({QKeySequence(QKeySequence::Redo),
+                                QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Z)});
+    m_redoAction->setShortcutContext(Qt::WindowShortcut);
+    m_redoAction->setEnabled(false);
+    tb->addAction(m_redoAction);
+
     connect(runBtn,  &QPushButton::clicked, this, &MainWindow::onRunClicked);
     connect(loadBtn, &QPushButton::clicked, this, &MainWindow::onLoadProject);
     connect(saveBtn, &QPushButton::clicked, this, &MainWindow::onSaveProject);
+    connect(m_undoAction, &QAction::triggered, this, &MainWindow::execUndo);
+    connect(m_redoAction, &QAction::triggered, this, &MainWindow::execRedo);
 }
 
 void MainWindow::registerOperators() {
@@ -348,6 +420,9 @@ void MainWindow::loadDefaultPipeline() {
 
     appendLog(tr("已加载默认流水线: 文件夹批量图像 → 颜色分割 → Blob 计数 → 数量判定 (旁路: QR 解码)"));
     appendLog(tr("提示:点击 ▶ Run 执行 / 从节点右侧端口拖到另一节点左侧端口可手动连线"));
+
+    // === M6: 默认流水线是"起始状态",不该被 Ctrl+Z 撤掉 ===
+    clearUndoRedoStacks();
 }
 
 // ============================================================
@@ -559,6 +634,11 @@ void MainWindow::onLoadProject() {
     // 调整 sceneRect 适配新节点
     m_canvas->scene()->setSceneRect(
         m_canvas->scene()->itemsBoundingRect().adjusted(-50, -50, 50, 50));
+
+    // === M6: 加载的是全新流水线,旧命令栈已无意义 ===
+    // 不清的话 Ctrl+Z 会拿旧工程的 UUID 去当前画布找节点(找不到 → no-op),
+    // 用户会看到"按了没反应"。清空并重置按钮。
+    clearUndoRedoStacks();
 
     statusBar()->showMessage(tr("✅ 流水线已加载: %1").arg(path), 3000);
 }
@@ -846,7 +926,7 @@ void MainWindow::appendLog(const QString& msg) {
 }
 
 // ============================================================
-// === M6 撤销/重做 (Step1: 框架,Step2-5 接入具体 cmd) ===
+// === M6 撤销/重做 ===
 // ============================================================
 
 void MainWindow::execCommand(Command* cmd) {
@@ -856,6 +936,7 @@ void MainWindow::execCommand(Command* cmd) {
     m_redoStack.clear();                          // 新操作清空 redoStack
     appendLog(tr("[Cmd] %1 (undoStack=%2)")
         .arg(cmd->desc()).arg(m_undoStack.size()));
+    updateUndoRedoActions();
 }
 
 void MainWindow::execUndo() {
@@ -863,11 +944,16 @@ void MainWindow::execUndo() {
         appendLog(tr("[Undo] 已是最初状态,无法再撤销"));
         return;
     }
+    // undo 会改节点位置 → 触发 nodeMoved 信号。
+    // 打标志让那批事件不落进命令栈,否则一次 Ctrl+Z 会连带压回一堆 MoveNodeCmd。
+    m_applyingHistory = true;
     Command* cmd = m_undoStack.pop();
     cmd->undo();
     m_redoStack.push(cmd);
+    m_applyingHistory = false;
     appendLog(tr("[Undo] %1 (undoStack=%2, redoStack=%3)")
         .arg(cmd->desc()).arg(m_undoStack.size()).arg(m_redoStack.size()));
+    updateUndoRedoActions();
 }
 
 void MainWindow::execRedo() {
@@ -875,11 +961,84 @@ void MainWindow::execRedo() {
         appendLog(tr("[Redo] 已是最末状态,无法再重做"));
         return;
     }
+    m_applyingHistory = true;
     Command* cmd = m_redoStack.pop();
     cmd->redo();
     m_undoStack.push(cmd);
+    m_applyingHistory = false;
     appendLog(tr("[Redo] %1 (undoStack=%2, redoStack=%3)")
         .arg(cmd->desc()).arg(m_undoStack.size()).arg(m_redoStack.size()));
+    updateUndoRedoActions();
+}
+
+void MainWindow::clearUndoRedoStacks() {
+    // Command 由栈持有(delete),栈本身是 QStack 不析构元素 → 必须手动清
+    qDeleteAll(m_undoStack);
+    m_undoStack.clear();
+    qDeleteAll(m_redoStack);
+    m_redoStack.clear();
+    updateUndoRedoActions();
+}
+
+void MainWindow::updateUndoRedoActions() {
+    if (m_undoAction) m_undoAction->setEnabled(!m_undoStack.isEmpty());
+    if (m_redoAction) m_redoAction->setEnabled(!m_redoStack.isEmpty());
+}
+
+// ============================================================
+// === M6: 各操作入口(统一在这里包 Command) ===
+// ============================================================
+
+void MainWindow::doAddNode(const QString& opName, const QString& display,
+                           const QString& category, const QPointF& pos) {
+    execCommand(new w7::AddNodeCmd(m_canvas, opName, display, category, pos));
+}
+
+void MainWindow::doDeleteNode(w7::OperatorNode* node) {
+    if (!node) return;
+    // 先解绑参数面板,否则 m_currentParamNode 会指向已删节点
+    QString desc = QString("%1(%2)").arg(node->displayName(), node->opName());
+    if (m_currentParamNode == node) {
+        m_currentParamNode = nullptr;
+        m_currentParamWidget = nullptr;
+        m_paramPanel->setCurrentIndex(0);   // 切回 placeholder
+    }
+    if (m_selectedNode == node) m_selectedNode = nullptr;
+
+    execCommand(new w7::DeleteNodeCmd(m_canvas, node));
+    appendLog(tr("[删除] %1").arg(desc));
+}
+
+void MainWindow::doMoveNode(w7::OperatorNode* node, const QPointF& oldPos,
+                            const QPointF& newPos) {
+    if (!node) return;
+    if (m_applyingHistory) return;   // undo/redo 自身引起的位置变化,不记录
+    execCommand(new w7::MoveNodeCmd(m_canvas, node->uuid(), oldPos, newPos));
+}
+
+void MainWindow::doConnect(w7::OperatorNode* from, w7::OperatorNode* to) {
+    if (!from || !to) return;
+    execCommand(new w7::AddEdgeCmd(m_canvas, from->uuid(), to->uuid()));
+}
+
+// ============================================================
+// === M6: 画布信号转发 ===
+// ============================================================
+
+void MainWindow::onNodeMoved(w7::OperatorNode* node, const QPointF& oldPos,
+                             const QPointF& newPos) {
+    doMoveNode(node, oldPos, newPos);
+}
+
+// ============================================================
+// === P0: 节点右键删除请求 ===
+// ============================================================
+// 节点自己不能 delete(PipelineView::m_nodes 仍持有该指针 → 悬垂指针
+// → 右键删完立刻 Run 会段错误)。这里统一走 PipelineView::removeNode,
+// 它已经实现了正确的顺序:收集关联线 → 从容器和 scene 移除 → 统一 delete。
+void MainWindow::onNodeDeleteRequested(w7::OperatorNode* node) {
+    // === M6: 走 Command 栈,这样右键删也能 Ctrl+Z 撤销 ===
+    doDeleteNode(node);
 }
 
 // ============================================================
@@ -931,27 +1090,26 @@ void MainWindow::deleteSelectedItems() {
         return;
     }
 
-    // 第三遍:从 scene 和容器移除(不 delete)
-    QGraphicsScene* sc = m_canvas->scene();
-    for (auto* line : connsToDelete) {
-        sc->removeItem(line);
-    }
+    // === M6: 走 Command 栈,Delete 键删除也能 Ctrl+Z 撤销 ===
+    // 顺序:先删节点(DeleteNodeCmd 自己会连带删线并记录,供 undo 重建),
+    // 再删"没沾任何待删节点"的独立连线。
     for (auto* node : nodesToDelete) {
-        sc->removeItem(node);
+        doDeleteNode(node);
     }
-
-    // 第四遍:统一 delete(此时 scene 已不再引用)
-    for (auto* line : connsToDelete) delete line;
-    for (auto* node : nodesToDelete) delete node;
-
-    // 第五遍:从 PipelineView 内部 list 清掉
     for (auto* line : connsToDelete) {
-        m_canvas->connectionsRef().removeAll(line);
+        bool attachedToDeletedNode = false;
+        for (auto* n : nodesToDelete) {
+            if (line->fromNode() == n || line->toNode() == n) {
+                attachedToDeletedNode = true;
+                break;
+            }
+        }
+        if (attachedToDeletedNode) continue;   // 已随节点一起删,不再单独记一笔
+        if (!line->fromNode() || !line->toNode()) continue;
+        execCommand(new w7::RemoveEdgeCmd(m_canvas,
+                                          line->fromNode()->uuid(),
+                                          line->toNode()->uuid()));
     }
-    for (auto* node : nodesToDelete) {
-        m_canvas->nodesRef().removeAll(node);
-    }
-
     appendLog(tr("[Delete] 删除 %1 个节点,%2 条连线").arg(delNodes).arg(delConns));
 }
 

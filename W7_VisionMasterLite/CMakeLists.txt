@@ -29,6 +29,8 @@ set(SOURCES
     operator_node.cpp
     connection_line.cpp
     commands/command.cpp
+    commands/node_commands.cpp
+    commands/edge_commands.cpp
     operators/param_form.cpp
     operators/operator_factory.cpp
     operators/color_segment.cpp
@@ -45,6 +47,9 @@ set(HEADERS
     pipeline_view.h
     operator_node.h
     connection_line.h
+    commands/command.h
+    commands/node_commands.h
+    commands/edge_commands.h
     operators/operator_base.h
     operators/param_form.h
     operators/operator_factory.h

@@ -10,6 +10,8 @@
 #include <QHash>
 #include <QString>
 #include <QList>
+#include <QUuid>
+#include <QPointF>
 
 namespace w7 {
 
@@ -44,10 +46,27 @@ public:
     void removeNode(OperatorNode* node);
     void removeConnection(ConnectionLine* line);
 
+    // === M6: 按 UUID 找回节点 ===
+    // Command 在 undo/redo 时用它定位节点 —— 节点被删又重建后地址会变,
+    // 但 UUID 保持不变,所以命令不会操作到野指针。
+    OperatorNode* findNodeByUuid(const QUuid& id) const;
+    ConnectionLine* findConnection(const QUuid& fromId, const QUuid& toId) const;
+
     void setOperatorRegistry(const QHash<QString, OpMeta>& registry);
 
 signals:
     void selectionChangedInScene();
+    // === P0: 节点请求删除(来自节点右键菜单) ===
+    // 节点自己不 delete,由 MainWindow 调 removeNode 统一销毁
+    void nodeDeleteRequested(OperatorNode* node);
+    // === M6: 节点被拖动 ===
+    void nodeMovedSignal(OperatorNode* node, const QPointF& oldPos, const QPointF& newPos);
+    // === M6: 画布请求创建节点(由 MainWindow 决定是否包成 Command) ===
+    // 画布自己不 addNode —— 否则新增动作绕过了命令栈,Ctrl+Z 撤不掉
+    void nodeAddRequested(const QString& opName, const QString& display,
+                          const QString& category, const QPointF& pos);
+    // === M6: 画布请求连线 ===
+    void connectionAddRequested(OperatorNode* from, OperatorNode* to);
 
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
