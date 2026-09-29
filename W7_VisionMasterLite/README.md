@@ -24,7 +24,7 @@ W7_VisionMasterLite/
 │   ├── command.h / .cpp        #   抽象基类
 │   ├── node_commands.h / .cpp  #   增/删/移节点
 │   └── edge_commands.h / .cpp  #   增/删连线
-├── operators/                  # 算子库(11 个)
+├── operators/                  # 算子库(12 个)
 │   ├── operator_base.h         #   抽象基类
 │   ├── pin_types.h / .cpp      #   pin 类型系统 + 连线检查
 │   ├── operator_factory.h/.cpp #   名字 → 算子
@@ -39,9 +39,10 @@ W7_VisionMasterLite/
 │   ├── qr_decode               #   QR 解码
 │   ├── pcb_inspect             #   PCB 元件定位(W6)
 │   ├── pcb_defect_judge        #   PCB 7 类缺陷判定(W6)
+│   ├── line_fit                #   直线测量(长度 + 角度)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 6 个无头回归测试(216 断言)
+├── tests/                      # 7 个无头回归测试(240 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -81,7 +82,7 @@ CMake 会真实探测并在 configure 时打印结果:
 ## 🎬 使用方法
 
 启动后界面分 4 个区域:
-- **左侧**:算子库(按模块分组,11 个算子)
+- **左侧**:算子库(按模块分组,12 个算子)
 - **中央**:流程图画布(默认已有 4 个节点 + 连线)
 - **右侧**:参数面板(选中节点查看/编辑)
 - **底部**:结果图 + **该步输出字段** + 运行日志
@@ -124,7 +125,7 @@ CMake 会真实探测并在 configure 时打印结果:
 工具栏 **最近** 下拉,记最近 5 个 `.sol.json`(存 QSettings,跨会话)。
 菜单显示文件名、tooltip 给完整路径;弹出时自动剔掉已被删/挪走的条目。
 
-## 📚 算子清单(11 个)
+## 📚 算子清单(12 个)
 
 | 算子 | VM 对标 | OpenCV API | 吃 → 吐 | 用途 |
 |---|---|---|---|---|
@@ -138,7 +139,37 @@ CMake 会真实探测并在 configure 时打印结果:
 | `qr_decode` | 二维码识别 | `QRCodeDetector` | 图像 → 文本 | 解 QR 内容 + 4 角点 |
 | `pcb_inspect` | — | `findContours`/`moments` | 图像 → 数据 | PCB 元件定位(真值坐标 / 自动轮廓) |
 | `pcb_defect_judge` | — | `inRange`/`morphologyEx` | 数据 → 文本 | 7 类缺陷判定,9 个阈值可调 |
+| `line_fit` | 直线测量 | 无(纯几何) | 图像 → 数据 | 给两点,量长度 + 角度(0~180°) |
 | `dl_infer` | — | ONNX Runtime | 图像 → 数据 | YOLOv5/v8 目标检测 |
+
+### VM 四大模块的覆盖情况
+
+| VM 模块 | 本项目算子 | 状态 |
+|---|---|---|
+| 定位 Positioning | `template_match` / `pcb_inspect` | ✅ |
+| **测量 Measurement** | **`line_fit`** | ✅ |
+| 识别 Identification | `qr_decode` / `dl_infer` | ✅ |
+| 检测 Detection | `color_segment` / `blob_count` / `count_check` / `pcb_defect_judge` | ✅ |
+
+> 测量类原先是唯一空缺的一类。`line_fit` 补上了最短的那块,
+> 但它只是"两点定一线",**不是** VM 的卡尺 —— 真正的卡尺是
+> 有状态的交互工具(选边 → 亚像素拟合 → 成对测量),
+> 处理"用户点歪了"的复杂度远高于这里。
+
+### 加一个算子要走哪 5 步
+
+这是本项目最该记住的一条实操经验:
+
+```
+1. operators/xxx.h + .cpp    写算子本体(实现 6 个纯虚函数)
+2. operators/operator_factory.cpp   加一行 if
+3. mainwindow.cpp                   m_operatorInfo.append({名字, 显示名, 分类, 描述})
+4. CMakeLists.txt                   加 .cpp;测试还要加 target + add_test
+5. tests/test_xxx.cpp               写测试
+```
+
+第 2、3、4 步配错**不报错**,只是"算子没出现在左侧列表里"——
+卡住时先查这三步,再怀疑代码。
 
 ### W6 深度联动
 `pcb_inspect` + `pcb_defect_judge` 把 W6 的 PCB 算法整个搬上了流水线:
@@ -205,11 +236,11 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,216 断言 / 6 个套件)
+## 🧪 回归测试(无头,240 断言 / 7 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
-# 一次跑完全部 6 个套件
+# 一次跑完全部 7 个套件
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build --output-on-failure'
 ```
 
@@ -221,6 +252,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `image_sources` | 20 | 帧循环契约(按 frame_index 真的换帧/换张)、坏输入不崩 | OpenCV |
 | `step_result` | 21 | 状态点判定边界、每步缓存用 UUID 做 key | Qt |
 | `pin_and_recent` | 44 | 该拦的拦/不该拦的放行、路径归一化、已删条目剔除 | QtCore |
+| `line_fit` | 24 | 长度/角度算术、**角度 0~180 的约定**、两点重合不报错、没图照样能算 | OpenCV |
 
 单独跑一个:
 ```powershell

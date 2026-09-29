@@ -94,6 +94,7 @@ set(SOURCES
     operators/pcb_defect_judge.cpp
     operators/dl_postprocess.cpp
     operators/dl_infer.cpp
+    operators/line_fit.cpp
 )
 
 set(HEADERS
@@ -121,6 +122,7 @@ set(HEADERS
     operators/pcb_defect_judge.h
     operators/dl_postprocess.h
     operators/dl_infer.h
+    operators/line_fit.h
 )
 
 qt_add_executable(w7_vm_lite WIN32 ${SOURCES} ${HEADERS})
@@ -371,3 +373,41 @@ if(MSVC)
 endif()
 
 add_test(NAME pin_and_recent COMMAND w7_pin_test)
+
+# ============================================================
+# === line_fit 回归测试 (headless, 纯几何)
+#
+# 这个算子只有两行公式,验算术没意义 —— 值得测的是**约定**:
+# 角度 0~180 还是 0~360、两点重合报不报错、没给图报不报错。
+# 这些都不崩,只是结果悄悄变了,而测量结果直接决定判废。
+#
+# 不需要图片文件,所以工作目录不设 WORKING_DIRECTORY。
+# ============================================================
+qt_add_executable(w7_line_test
+    tests/test_line_fit.cpp
+    operators/param_form.cpp
+    operators/line_fit.cpp
+)
+
+target_include_directories(w7_line_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w7_line_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+    ${OpenCV_LIBS}
+)
+
+if(MSVC)
+    target_compile_options(w7_line_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_line_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        D:/opencv-src/build/install/bin
+        $<TARGET_FILE_DIR:w7_line_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+add_test(NAME line_fit COMMAND w7_line_test)

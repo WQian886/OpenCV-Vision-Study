@@ -11,6 +11,7 @@
 #include "pcb_inspect.h"
 #include "pcb_defect_judge.h"
 #include "dl_infer.h"
+#include "line_fit.h"
 
 namespace w7 {
 
@@ -26,6 +27,7 @@ OperatorBase* createOperatorByName(const QString& name) {
     if (name == "pcb_inspect")        return new PcbInspect();
     if (name == "pcb_defect_judge")   return new PcbDefectJudge();
     if (name == "dl_infer")           return new DlInfer();
+    if (name == "line_fit")           return new LineFit();
     return nullptr;
 }
 

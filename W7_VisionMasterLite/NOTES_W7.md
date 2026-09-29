@@ -107,7 +107,7 @@ QJsonObject run(params, inputs);   // 输出也是 JSON
 
 ---
 
-## 7️⃣ 对标 VM 算子清单(Mini VM 11 个 vs VM 1000+ 个)
+## 7️⃣ 对标 VM 算子清单(Mini VM 12 个 vs VM 1000+ 个)
 
 | Mini VM 算子 | VM 对标 | OpenCV 实现 | 吃 → 吐 | 复杂度 |
 |---|---|---|---|---|
@@ -119,11 +119,12 @@ QJsonObject run(params, inputs);   // 输出也是 JSON
 | count_check | 数量判定 | 纯逻辑 | 数据 → 文本 | ⭐ |
 | template_match | 模板匹配 | `cv::matchTemplate + minMaxLoc` | 图像 → 数据 | ⭐⭐ |
 | qr_decode | 二维码识别 | `cv::QRCodeDetector` | 图像 → 文本 | ⭐⭐ |
+| line_fit | 直线测量 | 纯几何(不用 fitLine) | 图像 → 数据 | ⭐ |
 | pcb_inspect | — | `findContours` / `moments` | 图像 → 数据 | ⭐⭐⭐ |
 | pcb_defect_judge | — | `inRange` / `morphologyEx` | 数据 → 文本 | ⭐⭐⭐ |
 | dl_infer | — | ONNX Runtime | 图像 → 数据 | ⭐⭐⭐ |
 
-还能加:`circle_find` (HoughCircles) / `line_fit` (fitLine) / `image_diff` (absdiff) / `edge_find` (Canny)。
+还能加:`circle_find` (HoughCircles) / `image_diff` (absdiff) / `edge_find` (Canny)。
 
 > 三个图像源都是 `isSource()` = true:它们没有输入口。
 > 注意 `dl_postprocess` 不在这个表里 —— 它不是画布上的节点,
@@ -136,7 +137,7 @@ QJsonObject run(params, inputs);   // 输出也是 JSON
 | VM 模块 | Mini VM 算子(已有) | 可补 |
 |---|---|---|
 | **定位 Positioning** | template_match / pcb_inspect | circle_find / line_find / corner_find / shape_match |
-| **测量 Measurement** | (暂无) | caliper / distance / angle / area / line_fit / circle_fit |
+| **测量 Measurement** | line_fit | caliper / distance / angle / area / circle_fit |
 | **识别 Identification** | qr_decode / dl_infer | barcode / ocr / color_classify |
 | **检测 Detection** | color_segment / blob_count / count_check / pcb_defect_judge | image_diff / edge_defect / texture_defect |
 
@@ -253,7 +254,7 @@ Run 引擎遍历会段错误。正确做法是发信号,由 MainWindow 统一走
 
 > 下面这些当初都写着"MVP 暂未实现" / "下一轮再做",现在都做完了。
 
-- 11 个算子(从 5 个)
+- 12 个算子(从 5 个)
 - 可视化拖拽建节点 / 连线 / 删除(不是硬编码流水线)
 - JSON 持久化 `.sol.json`(节点 + 连线 + 参数 + UUID + 图像路径)
 - 参数面板按算子动态生成
@@ -263,16 +264,44 @@ Run 引擎遍历会段错误。正确做法是发信号,由 MainWindow 统一走
 - **帧循环 + 批量汇总**
 - **最近工程列表**
 - 6 个无头回归测试 / 216 条断言
+- **测量类算子** `line_fit`(长度 + 角度),四大模块集齐
 
-**还缺的**:测量类算子(卡尺/距离/角度)、子图复用、多前驱合并策略、
+**还缺的**:真正的卡尺(亚像素/成对测量)、子图复用、多前驱合并策略、
 Linux/macOS 移植。
+
+---
+
+## 1️⃣5️⃣ 角度约定:有向 vs 无向
+
+**是什么**:量一条线时,角度报 0~180 还是 0~360?
+
+**`line_fit` 选的是 0~180(无向直线)。** 因为 (10,0)→(0,0) 和
+(0,0)→(10,0) 是**同一条线**,报有向角会让"量一条边"出现两个答案。
+对标 VM 的 line fit 就是无向的。
+
+**归一化只要两步**(`atan2` 返回 `(-180, 180]`):
+
+```cpp
+if (angle < 0.0)    angle += 180.0;   // (-180,0) → (0,180)
+if (angle >= 180.0) angle -= 180.0;   // 180 和 0 是同一条线
+```
+
+> 为什么值得单独讲:公式本身简单到不可能错,**会错的是约定**。
+> 半年后有人看到 `atan2` 返回 180° 觉得"这明显该改成 180 而不是 0",
+> 就"顺手优化"掉了 —— 而 `test_line_fit.cpp` 用例 2 会先红,
+> 告诉他这是有意为之。这类测试叫**特征测试**。
+
+**顺带一条工程约定**:两点重合时给 `warning` 而**不是** `error`。
+用户在参数面板上还没把两个点拉开,是常态不是异常,
+流水线该照常跑完 —— 报 error 会让画布上的节点亮橙点,
+看起来像流水线坏了。
 
 ---
 
 ## 📚 一句话总结 W7
 
 **Mini VisionMaster = 算子基类 + QGraphicsView 流程图 + QDockWidget 工作区,
-用约 6400 行 Qt6/OpenCV 代码复刻海康 VM 的核心思路。**
+用约 6700 行 Qt6/OpenCV 代码复刻海康 VM 的核心思路。**
 
 ---
 
@@ -307,5 +336,15 @@ Linux/macOS 移植。
      (本项目的 `HAS_MVS_SDK` 就这么坑过一回)
 
 9. **Mini VM 跟 VM 的差距还在哪?**
-   → 算子数量(11 vs 1000+)、测量类算子全缺、子图复用、
-     多分支合并策略、性能优化、Linux/macOS 移植
+   → 算子数量(12 vs 1000+)、真正的卡尺(亚像素/成对测量)、
+     子图复用、多分支合并策略、性能优化、Linux/macOS 移植
+
+10. **加一个新算子要走哪几步?**
+    → ① 写 .h/.cpp(实现 6 个纯虚函数)② `operator_factory.cpp` 加一行
+      ③ `mainwindow.cpp` 的 `m_operatorInfo.append` ④ `CMakeLists.txt`
+      ⑤ 写测试。**②③④ 配错不报错**,只会"算子没出现在左侧列表里"
+
+11. **为什么 `line_fit` 的测试 24 条里大半不是测算术?**
+    → 公式就两行,不会错。会错的是约定:角度 0~180 还是 0~360、
+      两点重合报不报 error、没给图报不报 error。
+      这些都不崩,只是结果悄悄变了,而测量直接决定判废

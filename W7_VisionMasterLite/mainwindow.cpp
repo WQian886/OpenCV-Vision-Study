@@ -44,6 +44,7 @@
 #include "operators/image_source_camera.h"
 #include "operators/pcb_inspect.h"
 #include "operators/pcb_defect_judge.h"
+#include "operators/line_fit.h"
 
 // === M6 撤销/重做:具体 Command 子类 ===
 #include "commands/node_commands.h"
@@ -350,6 +351,9 @@ void MainWindow::registerOperators() {
     m_operatorInfo.append({"dl_infer", tr("DL 推理 (ONNX)"), "dl",
                            tr("加载 ONNX 模型做目标检测(YOLOv5/v8);"
                               "需 ONNX Runtime,未装时算子仍可用只是 Run 会提示")});
+    // === 测量类:补齐 VM 四大模块里最后一个(定位/识别/检测都有了) ===
+    m_operatorInfo.append({"line_fit", tr("直线测量"), "measurement",
+                           tr("给两个点,量出直线的长度和角度(0~180°)")});
 }
 
 void MainWindow::setupOperatorLibrary() {
