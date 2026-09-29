@@ -154,6 +154,34 @@ void OperatorNode::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
     p->setPen(QPen(Qt::white, 2));
     p->drawEllipse(QPointF(-W/2.0, 0), PORT_HALF, PORT_HALF);  // 输入
     p->drawEllipse(QPointF( W/2.0, 0), PORT_HALF, PORT_HALF);  // 输出
+
+    // === 每步运行状态(右上角小圆点) ===
+    // 画在端口之后、方框之内,避免和端口图形重叠。
+    if (m_stepStatus != StepStatus::None) {
+        QColor dot;
+        switch (m_stepStatus) {
+            case StepStatus::Ok:    dot = QColor(40, 170, 60);   break;
+            case StepStatus::Fail:  dot = QColor(220, 50, 50);  break;
+            case StepStatus::Error: dot = QColor(240, 140, 20); break;  // 橙=算子自己报错
+            default: break;
+        }
+        const QPointF c(W/2.0 - 12, -H/2.0 + 12);
+        p->setBrush(QBrush(dot));
+        p->setPen(QPen(Qt::white, 1));
+        p->drawEllipse(c, 5, 5);
+    }
+}
+
+OperatorNode::StepStatus OperatorNode::statusFromOutput(const QJsonObject& out) {
+    // 顺序不能换:error 和 result 可能同时存在(算子判了 FAIL 又发现
+    // 写盘失败),这时"执行失败"比"判废"更值得先说。
+    if (out.contains("error"))          return StepStatus::Error;
+    const QString r = out.value("result").toString();
+    if (r == "FAIL")                    return StepStatus::Fail;
+    // 没有 result 字段的算子(分割/计数/找模板)不做判定,
+    // 它们没报错就是跑成功了 —— 画红点等于谎报。
+    // 空的 out 同样按 Ok:算子跑了但什么字段都没产,不是失败。
+    return StepStatus::Ok;
 }
 
 void OperatorNode::setSelected(bool sel) {
@@ -167,9 +195,21 @@ void OperatorNode::setSelected(bool sel) {
 // 仍持有该指针 → 悬垂指针 → 右键删完立刻 Run 会段错误。
 void OperatorNode::contextMenuEvent(QGraphicsSceneContextMenuEvent* event) {
     QMenu menu;
+    // === 每步结果查看 ===
+    // 没跑过 / 跑完又改了流水线,缓存里的结果已经不对了 —— 置灰,
+    // 让"看到的是旧结果"这件事在菜单上就说得清,而不是点进去才发现。
+    QAction* viewAct = menu.addAction(QObject::tr("查看该步输出"));
+    viewAct->setEnabled(m_hasCachedResult);
+    if (m_hasCachedResult) {
+        viewAct->setToolTip(QObject::tr("显示这一步上次运行时的输出图和全部字段"));
+    }
+    menu.addSeparator();
     QAction* delAct = menu.addAction(QObject::tr("删除节点"));
     QAction* selected = menu.exec(event->screenPos());
-    if (selected == delAct) {
+    if (selected == viewAct) {
+        emit viewStepResultRequested(this);
+        event->accept();
+    } else if (selected == delAct) {
         // 只发请求,真正的销毁由 PipelineView::removeNode 统一负责
         emit deleteRequested(this);
         event->accept();

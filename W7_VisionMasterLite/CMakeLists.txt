@@ -313,3 +313,28 @@ add_custom_command(TARGET w7_source_test POST_BUILD
 # 测试会往 images/ 里造临时视频和图,工作目录必须是工程根
 add_test(NAME image_sources COMMAND w7_source_test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# ============================================================
+# === 每步结果查看 回归测试 (headless, 纯逻辑)
+#
+# 只测 OperatorNode —— 状态点判定 + UUID 键。
+# 不测 MainWindow:那需要真窗口和真算子,测出来的多半是 Qt 自己
+# 的行为,不是我们的逻辑。
+#
+# 状态点那段为什么值得测:它错了不崩,只是让一条全判废的流水线
+# 画出一排绿点 —— 要到产线漏检才发现。
+# ============================================================
+qt_add_executable(w7_step_test
+    tests/test_step_result.cpp
+    operator_node.cpp
+)
+
+target_include_directories(w7_step_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(w7_step_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+
+if(MSVC)
+    target_compile_options(w7_step_test PRIVATE /utf-8)
+endif()
+
+add_test(NAME step_result COMMAND w7_step_test)

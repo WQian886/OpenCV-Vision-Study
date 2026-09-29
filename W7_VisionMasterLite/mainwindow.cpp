@@ -8,6 +8,7 @@
 #include <QTreeWidget>
 #include <QStackedWidget>
 #include <QTextEdit>
+#include <QPlainTextEdit>
 #include <QLabel>
 #include <QPushButton>
 #include <QLineEdit>
@@ -225,6 +226,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     connect(m_canvas, &w7::PipelineView::nodeMovedSignal,
             this, &MainWindow::onNodeMoved);
 
+    // === 每步结果查看:节点右键 → 显示该步缓存的输出 ===
+    connect(m_canvas, &w7::PipelineView::nodeViewResultRequested,
+            this, &MainWindow::onViewStepResultRequested);
+
     // === M6: 画布的"增节点/连线"请求 → 包成 Command ===
     connect(m_canvas, &w7::PipelineView::nodeAddRequested,
             this, [this](const QString& op, const QString& disp,
@@ -384,12 +389,33 @@ void MainWindow::setupResultPanel() {
     auto* container = new QWidget;
     auto* layout = new QVBoxLayout(container);
 
+    // === 每步结果查看:标题条 ===
+    // 让人一眼知道现在显示的是「整条流水线的最终结果」还是
+    // 「我刚点开的第 3 步」。二者长得不一样,不标出来会以为
+    // 右键看到的那张图就是判定结果。
+    m_resultTitle = new QLabel(tr("最终结果"));
+    m_resultTitle->setStyleSheet("font-weight:bold; color:#444; padding:2px;");
+    layout->addWidget(m_resultTitle);
+
     // 图像预览
     m_resultImg = new QLabel(tr("(运行后显示标注图)"));
     m_resultImg->setAlignment(Qt::AlignCenter);
     m_resultImg->setMinimumHeight(180);
     m_resultImg->setStyleSheet("background:#222; color:#ddd; border:1px solid #555;");
     layout->addWidget(m_resultImg);
+
+    // === 每步结果查看:该步的完整输出字段 ===
+    // 图像只说明"看起来对不对",数值才是判定的依据
+    // (阈值、得分、框坐标、缺陷清单)。没有这块,看到图不对
+    // 也无从判断是哪一步的哪个参数导致的。
+    m_stepDetail = new QPlainTextEdit;
+    m_stepDetail->setReadOnly(true);
+    m_stepDetail->setMaximumHeight(110);
+    m_stepDetail->setPlaceholderText(tr("(运行后,右键任意节点可查看该步输出)"));
+    m_stepDetail->setStyleSheet(
+        "background:#f7f7f7; color:#222; font-family:Consolas,monospace;"
+        "border:1px solid #bbb;");
+    layout->addWidget(m_stepDetail);
 
     // 日志
     m_logView = new QTextEdit;
@@ -589,6 +615,13 @@ void MainWindow::updateParamPanelForNode(w7::OperatorNode* node) {
                         return;
                     }
                     m_currentParamNode->setParams(p);
+                    // === 每步结果查看:参数一改,这一步的旧结果就不作数了 ===
+                    // 不清的话用户调完阈值右键回看,看到的还是调参之前的
+                    // output,还会以为"改了没生效"。宁可看不到,别给旧的。
+                    const QUuid id = m_currentParamNode->uuid();
+                    m_stepOutputs.remove(id);
+                    m_stepLabels.remove(id);
+                    m_currentParamNode->setHasCachedResult(false);
                     appendLog(tr("[参数应用] %1 → %2 个字段")
                         .arg(m_currentParamNode->opName())
                         .arg(p.size()));
@@ -767,11 +800,17 @@ void MainWindow::onRunClicked() {
     // 先跑第 0 帧拿到 frame_count,再决定要不要继续 ——
     // 所以循环上界是动态的,不是先算好再跑。
     // 引擎通过 inputs["frame_index"] 告诉源"这轮要第几帧"。
-    QHash<OperatorNode*, QJsonObject> nodeOutputs;   // 每个节点的输出缓存
+    QHash<OperatorNode*, QJsonObject> nodeOutputs;   // 每个节点的输出缓存(本帧内传递用)
     OperatorNode* finalNode = nullptr;
     QJsonObject finalResult;                        // 保留最后一帧的结果供显示
     int totalFrames = 1;
     int passCount = 0, failCount = 0, frameDone = 0;
+
+    // === 清掉上一次的每步缓存和状态点 ===
+    // 不清的话:用户改了参数没重跑,右键看到的是旧结果,
+    // 还会以为"我明明调了阈值怎么没用" —— 比看不到更误导。
+    clearStepCache();
+    for (OperatorNode* n : order) n->setStepStatus(OperatorNode::StepStatus::None);
 
     for (int frame = 0; frame < totalFrames; ++frame) {
         nodeOutputs.clear();
@@ -779,7 +818,8 @@ void MainWindow::onRunClicked() {
         QJsonObject frameResult;
         appendLog(tr("──────── 第 %1 帧 ────────").arg(frame + 1));
 
-        for (OperatorNode* n : order) {
+        for (int step = 0; step < order.size(); ++step) {
+        OperatorNode* n = order[step];
         m_canvas->highlightNode(n->opName(), true);
         QApplication::processEvents();
 
@@ -805,6 +845,7 @@ void MainWindow::onRunClicked() {
         if (!op) {
             appendLog(tr("  ❌ 算子 %1 未注册,跳过").arg(n->opName()));
             m_canvas->highlightNode(n->opName(), false);
+            n->setStepStatus(OperatorNode::StepStatus::Error);
             continue;
         }
 
@@ -816,6 +857,25 @@ void MainWindow::onRunClicked() {
         nodeOutputs[n] = out;
         finalNode = n;
         if (out.contains("result")) frameResult = out;
+
+        // ============================================================
+        // === 每步结果查看:把这一步的输出留下 ===
+        //
+        // 只留最后一帧。多帧时中间帧的结果没有保留价值 ——
+        // 用户右键要回答的是"这条流水线现在为什么这么判",
+        // 而末帧就是流水线当前的产出;m_stepCacheFrame 记着来自第几帧。
+        // ============================================================
+        if (frame == totalFrames - 1 || totalFrames == 1) {
+            m_stepOutputs[n->uuid()] = out;
+            m_stepLabels[n->uuid()]  = tr("第 %1 步 · %2")
+                                        .arg(step + 1).arg(n->displayName());
+            n->setHasCachedResult(true);
+        }
+
+        // 画布状态点:有 error 是橙,result 是 FAIL/OK 是红/绿,
+        // 中间算子(分割/计数)没有 result 字段,只要没 error 就是绿的
+        // —— 它们确实跑成功了,只是这一级不做判定。
+        n->setStepStatus(OperatorNode::statusFromOutput(out));
 
         // 日志输出关键字段(沿用旧格式)
         QString summary;
@@ -855,6 +915,9 @@ void MainWindow::onRunClicked() {
             }
         }
     }   // ← 帧循环结束
+
+    // 记下缓存来自第几帧,右键回看时标题里要能说清
+    m_stepCacheFrame = frameDone;
 
     // === 多帧汇总 ===
     // 只看最后一帧的 PASS/FAIL 是不够的:抽检 30 帧里 1 帧有问题,
@@ -899,95 +962,165 @@ void MainWindow::onRunClicked() {
     }
 
     // === P3: 根据最后节点 output 决定显示什么 ===
-    // 优先级: mask (color_segment) > 模板框 (template_match) > 大字 (count_check) > 原图
+    // 真正的挑选逻辑抽成了 renderOutputToResultPanel ——
+    // 「查看该步输出」要显示的是同一套东西,两份各写一份必然跑偏。
+    renderOutputToResultPanel(finalResult, fallbackPath, tr("最终结果"));
+
+    appendLog("[Run] 完成");
+    appendLog("========================================");
+}
+
+// ============================================================
+// === 每步结果查看 ===
+// ============================================================
+
+void MainWindow::clearStepCache() {
+    m_stepOutputs.clear();
+    m_stepLabels.clear();
+    m_stepCacheFrame = 0;
+}
+
+void MainWindow::onViewStepResultRequested(OperatorNode* node) {
+    if (!node) return;
+    const QUuid id = node->uuid();
+    if (!m_stepOutputs.contains(id)) {
+        // 理论上右键菜单已经置灰了,这里再兜一次 ——
+        // 菜单和信号之间隔着事件循环,中间状态可能已经变了
+        appendLog(tr("[每步] %1 没有缓存结果,请先 Run").arg(node->displayName()));
+        return;
+    }
+    QString title = m_stepLabels.value(id, node->displayName());
+    // 多帧时必须标出这是第几帧的结果,否则用户会以为是第一帧
+    if (m_stepCacheFrame > 1) {
+        title += tr("  (第 %1/%2 帧)").arg(m_stepCacheFrame);
+    }
+    renderOutputToResultPanel(m_stepOutputs.value(id), m_imagePathEdit->text(), title);
+    appendLog(tr("[每步] 查看 %1").arg(title));
+}
+
+// 把 output 渲染到结果区:挑一张最能说明问题的图 + 写全部字段
+bool MainWindow::renderOutputToResultPanel(const QJsonObject& out,
+                                           const QString& fallbackPath,
+                                           const QString& title) {
+    m_resultTitle->setText(title);
+    showStepDetail(title, out);
+
+    // 算子自己报错了 —— 结果图没有意义,直接把错误摆出来。
+    // (以前这种情况会掉到最后的 fallback 分支,显示一张原图,
+    //  看上去"图出来了、挺正常",但其实这一步压根没跑成。)
+    if (out.contains("error")) {
+        m_resultImg->setPixmap(QPixmap());
+        m_resultImg->setText(tr("⚠️ 该步执行失败\n\n%1").arg(out.value("error").toString()));
+        return false;
+    }
+
     QPixmap pix;
     bool rendered = false;
 
-    // 1) mask 图（color_segment 输出）
-    QString maskPath = finalResult.value("mask_path").toString();
+    // 优先级说明 —— 这里写的是代码的实际行为,不是理想行为:
+    //   1) mask_path        color_segment 的分割图
+    //   2) 模板框            template_match
+    //   3) image_path + PASS/FAIL 大字
+    // 判定结果有大字图时会盖掉前两张,这是有意的:
+    // 结果面板首先回答"判没判废",其次才是"为什么"。
+    // 以前这段是"先画 mask,再无条件用大字图盖掉",而日志只在
+    // 没画过时记一行 —— 于是日志写着 mask、屏幕上却是大字图,对不上。
+
+    // 1) mask 图
+    const QString maskPath = out.value("mask_path").toString();
     if (!maskPath.isEmpty() && QFile::exists(maskPath)) {
         pix.load(maskPath);
-        if (!pix.isNull()) {
-            m_resultImg->setPixmap(pix.scaled(m_resultImg->width(),
-                                              m_resultImg->height(),
-                                              Qt::KeepAspectRatio));
-            appendLog(QString("[结果图] mask: %1").arg(maskPath));
-            rendered = true;
-        }
+        if (!pix.isNull()) rendered = true;
     }
 
-    // 2) 模板位置红框 (template_match 输出)
-    if (!rendered && finalResult.contains("position_x")
-                 && finalResult.contains("template_w")) {
-        // 优先 finalResult.image_path(节点产出),没有则 fallback 工具栏
-        QString tplImgPath = finalResult.value("image_path").toString();
-        if (tplImgPath.isEmpty()) tplImgPath = fallbackPath;
-        QImage srcImg(tplImgPath);
+    // 2) 模板位置红框
+    if (!rendered && out.contains("position_x") && out.contains("template_w")) {
+        QString imgPath = out.value("image_path").toString();
+        if (imgPath.isEmpty()) imgPath = fallbackPath;
+        QImage srcImg(imgPath);
         if (!srcImg.isNull()) {
             QPainter painter(&srcImg);
-            painter.setPen(QPen(QColor(0, 0, 255), 3));  // 红框
-            int x = finalResult.value("position_x").toInt();
-            int y = finalResult.value("position_y").toInt();
-            int w = finalResult.value("template_w").toInt();
-            int h = finalResult.value("template_h").toInt();
+            painter.setPen(QPen(QColor(0, 0, 255), 3));  // 蓝框
+            int x = out.value("position_x").toInt();
+            int y = out.value("position_y").toInt();
+            int w = out.value("template_w").toInt();
+            int h = out.value("template_h").toInt();
             painter.drawRect(x, y, w, h);
-            double score = finalResult.value("score").toDouble();
+            double score = out.value("score").toDouble();
             painter.setPen(Qt::red);
             painter.setFont(QFont("Arial", 14, QFont::Bold));
             painter.drawText(x, qMax(0, y - 8),
                 QString("score=%1").arg(score, 0, 'f', 3));
             painter.end();
             pix = QPixmap::fromImage(srcImg);
-            m_resultImg->setPixmap(pix.scaled(m_resultImg->width(),
-                                              m_resultImg->height(),
-                                              Qt::KeepAspectRatio));
-            appendLog(QString("[结果图] 模板匹配红框: (%1,%2) %3x%4 score=%5")
-                .arg(x).arg(y).arg(w).arg(h).arg(score, 0, 'f', 3));
             rendered = true;
         }
     }
 
-    // 3) PASS/FAIL 大字叠加
-    if (result == "PASS" || result == "FAIL") {
-        // 优先用 finalResult.image_path(节点产出),没有则用工具栏 fallbackPath
-        QString resultImgPath = finalResult.value("image_path").toString();
-        if (resultImgPath.isEmpty()) resultImgPath = fallbackPath;
-        QImage srcImg(resultImgPath);
+    // 3) 原图 + PASS/FAIL 大字
+    const QString verdict = out.value("result").toString();
+    if (verdict == "PASS" || verdict == "FAIL") {
+        QString imgPath = out.value("image_path").toString();
+        if (imgPath.isEmpty()) imgPath = fallbackPath;
+        QImage srcImg(imgPath);
         if (!srcImg.isNull()) {
             QPainter painter(&srcImg);
-            QColor c = (result == "PASS") ? QColor(0, 200, 0) : QColor(255, 0, 0);
+            QColor c = (verdict == "PASS") ? QColor(0, 200, 0) : QColor(255, 0, 0);
             painter.setPen(QPen(c, 6));
             painter.setFont(QFont("Arial", 120, QFont::Bold));
-            painter.drawText(50, 200, result);
+            painter.drawText(50, 200, verdict);
             painter.setFont(QFont("Arial", 28));
-            painter.drawText(50, 250, finalResult.value("description").toString());
+            painter.drawText(50, 250, out.value("description").toString());
             painter.end();
             pix = QPixmap::fromImage(srcImg);
-            m_resultImg->setPixmap(pix.scaled(m_resultImg->width(),
-                                              m_resultImg->height(),
-                                              Qt::KeepAspectRatio));
-            if (!rendered) {
-                appendLog(QString("[结果图] %1 大字").arg(result));
-                rendered = true;
-            }
+            rendered = true;
         }
     }
 
-    // 4) fallback 原图
+    // 4) fallback 原图(源算子 / 中间算子大多走这里)
     if (!rendered) {
-        // 优先 finalResult.image_path(节点产出),没有则 fallback 工具栏
-        QString fallbackImgPath = finalResult.value("image_path").toString();
-        if (fallbackImgPath.isEmpty()) fallbackImgPath = fallbackPath;
-        pix.load(fallbackImgPath);
-        if (!pix.isNull()) {
-            m_resultImg->setPixmap(pix.scaled(m_resultImg->width(),
-                                              m_resultImg->height(),
-                                              Qt::KeepAspectRatio));
+        QString imgPath = out.value("image_path").toString();
+        if (imgPath.isEmpty()) imgPath = fallbackPath;
+        pix.load(imgPath);
+        rendered = !pix.isNull();
+        if (!rendered) {
+            // 这一步没有图可显示(纯数值算子),但字段照常显示在详情框里,
+            // 不要用占位文字把图区盖住 —— 数值才是这类算子的全部产出
+            m_resultImg->setPixmap(QPixmap());
+            m_resultImg->setText(tr("(该步不产生图像,见下方输出字段)"));
         }
     }
 
-    appendLog("[Run] 完成");
-    appendLog("========================================");
+    if (rendered) {
+        m_resultImg->setText(QString());
+        m_resultImg->setPixmap(pix.scaled(m_resultImg->width(),
+                                          m_resultImg->height(),
+                                          Qt::KeepAspectRatio,
+                                          Qt::SmoothTransformation));
+    }
+    return rendered;
+}
+
+void MainWindow::showStepDetail(const QString& title, const QJsonObject& out) {
+    if (out.isEmpty()) {
+        m_stepDetail->setPlainText(tr("(无输出)"));
+        return;
+    }
+    QStringList lines;
+    lines << tr("── %1 ──").arg(title);
+    // 按 key 排序:输出字段是 QJsonObject,本身无序,
+    // 不排序的话每次显示的行顺序都可能不一样,肉眼对不上。
+    for (auto it = out.constBegin(); it != out.constEnd(); ++it) {
+        QString v = it.value().toVariant().toString();
+        // 长文本(比如缺陷清单 JSON)换行显示,挤成一行横向拉不到底
+        if (v.size() > 80) {
+            lines << QString("%1 =").arg(it.key());
+            lines << QString(v);
+        } else {
+            lines << QString("%1 = %2").arg(it.key(), v);
+        }
+    }
+    m_stepDetail->setPlainText(lines.join('\n'));
 }
 
 QJsonObject MainWindow::runOperatorByName(const QString&, const QJsonObject&, const QJsonObject&) {
@@ -1113,6 +1246,10 @@ void MainWindow::onNodeMoved(w7::OperatorNode* node, const QPointF& oldPos,
 void MainWindow::onNodeDeleteRequested(w7::OperatorNode* node) {
     // === M6: 走 Command 栈,这样右键删也能 Ctrl+Z 撤销 ===
     doDeleteNode(node);
+    // === 每步结果查看:顺手把这一步的缓存摘掉 ===
+    // 不摘也不会有人点到(uuid 唯一,菜单走的是活节点),
+    // 但留着就是个永远查不到的条目,工程反复删了几十次会攒不少。
+    if (node) m_stepOutputs.remove(node->uuid());
 }
 
 // ============================================================

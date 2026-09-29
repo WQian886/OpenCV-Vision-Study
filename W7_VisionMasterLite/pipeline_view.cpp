@@ -48,6 +48,9 @@ OperatorNode* PipelineView::addNode(const QString& opName,
     // === M6: 节点拖动 → 转发给 MainWindow 生成 MoveNodeCmd ===
     connect(node, &OperatorNode::nodeMoved,
             this, &PipelineView::nodeMovedSignal);
+    // === 每步结果查看:节点右键"查看该步输出" → 转发给 MainWindow ===
+    connect(node, &OperatorNode::viewStepResultRequested,
+            this, &PipelineView::nodeViewResultRequested);
     return node;
 }
 

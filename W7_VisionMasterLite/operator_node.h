@@ -16,6 +16,12 @@ namespace w7 {
 class OperatorNode : public QGraphicsObject {
     Q_OBJECT
 public:
+    // === 每步结果查看:节点在画布上显示的运行态 ===
+    // 以前只有 m_execHighlight(执行瞬间闪一下绿),跑完就没了 ——
+    // 一条 8 步的流水线跑完,画布上看不出哪一步出了错,
+    // 只能去日志里翻。VM 的做法是每步跑完留个状态标记。
+    enum class StepStatus { None, Ok, Fail, Error };
+
     OperatorNode(const QString& opName, const QString& displayName,
                  const QString& category, QGraphicsItem* parent = nullptr);
 
@@ -50,6 +56,17 @@ public:
     // === S2: itemChange + 节点移动通知 ===
     QVariant itemChange(GraphicsItemChange change, const QVariant& value) override;
 
+    // === 每步结果查看 ===
+    StepStatus stepStatus() const { return m_stepStatus; }
+    void setStepStatus(StepStatus s) { m_stepStatus = s; update(); }
+    // 从算子 output 推出该画什么状态点。
+    // 抽成静态函数是为了能单独测 —— 这段判断错了不会崩,只会让
+    // 一条全 FAIL 的流水线画出一排绿点,属于最难发现的那类错。
+    static StepStatus statusFromOutput(const QJsonObject& out);
+    // 有没有缓存过这一步的输出(决定右键菜单里"查看该步输出"能不能点)
+    bool hasCachedResult() const { return m_hasCachedResult; }
+    void setHasCachedResult(bool b) { m_hasCachedResult = b; }
+
 signals:
     // === S3: 节点被点击(让 MainWindow 切换参数面板) ===
     void nodeClicked(OperatorNode* node);
@@ -62,6 +79,10 @@ signals:
     void deleteRequested(OperatorNode* node);
     // === M6: 拖动结束(位置真的变了才发) → 生成 MoveNodeCmd ===
     void nodeMoved(OperatorNode* node, const QPointF& oldPos, const QPointF& newPos);
+    // === 每步结果查看:右键"查看该步输出" ===
+    // 只发请求,数据在 MainWindow 的缓存里 —— 节点自己不持有 output
+    // (output 可能很大,每个节点存一份会让画布白白吃掉几百 MB)
+    void viewStepResultRequested(OperatorNode* node);
 
 protected:
     void mousePressEvent(QGraphicsSceneMouseEvent* event) override;
@@ -81,6 +102,10 @@ private:
     // === M6: 拖动起点(松开时用来生成 MoveNodeCmd) ===
     QPointF m_dragStartPos;
     bool    m_dragMoved = false;
+
+    // === 每步结果查看 ===
+    StepStatus m_stepStatus = StepStatus::None;
+    bool       m_hasCachedResult = false;
 
     static constexpr int W = 140;
     static constexpr int H = 60;

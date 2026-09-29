@@ -67,6 +67,8 @@ signals:
                           const QString& category, const QPointF& pos);
     // === M6: 画布请求连线 ===
     void connectionAddRequested(OperatorNode* from, OperatorNode* to);
+    // === 每步结果查看:节点请求显示该步输出(来自节点右键菜单) ===
+    void nodeViewResultRequested(OperatorNode* node);
 
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;

@@ -14,10 +14,12 @@
 #include <QStack>
 #include <QPointF>
 #include <QAction>
+#include <QUuid>
 #include "pipeline_view.h"
 #include "commands/command.h"
 
 class QTextEdit;
+class QPlainTextEdit;
 class QLabel;
 class QPushButton;
 class QStackedWidget;
@@ -69,6 +71,7 @@ private slots:
     void onNodeDeleteRequested(w7::OperatorNode* node);   // === P0 ===
     void onNodeMoved(w7::OperatorNode* node, const QPointF& oldPos,
                      const QPointF& newPos);              // === M6 ===
+    void onViewStepResultRequested(w7::OperatorNode* node);  // === 每步结果查看 ===
 
 protected:
     // === 修复 2: Delete 键删除 ===
@@ -88,6 +91,28 @@ private:
 
     // === S3 ===
     void updateParamPanelForNode(w7::OperatorNode* node);
+
+    // ============================================================
+    // === 每步结果查看 ===
+    //
+    // 以前 Run 完只保留最后一个节点的输出,前面 7 步的结果全丢了。
+    // 要看中间某步出了什么,只能重跑一次、把别的节点删掉 —— 调试
+    // 一条 8 步的流水线时这个循环很要命。
+    //
+    // 现在 Run 时把每个节点的 output 都缓存下来(按 QUuid 索引,
+    // 不用裸指针:节点删了重建会换地址),右键节点即可回看。
+    // ============================================================
+
+    // 把一个 output 渲染到结果区(挑合适的图 + 写详情文本)
+    // 返回是否真的画出了图。final result 和「查看该步输出」共用这一份逻辑 ——
+    // 两处各写一份的话,加一种新输出类型就必然只改一处,两处会跑偏。
+    bool renderOutputToResultPanel(const QJsonObject& out,
+                                   const QString& fallbackPath,
+                                   const QString& title);
+    // 把 output 的全部字段按 类型 = 值 写进详情框
+    void showStepDetail(const QString& title, const QJsonObject& out);
+    // 节点被删 / 流水线被改动 → 缓存失效
+    void clearStepCache();
 
     // 工具函数
     void appendLog(const QString& msg);
@@ -120,7 +145,16 @@ private:
     QStackedWidget*  m_paramPanel= nullptr;
     QTextEdit*       m_logView   = nullptr;
     QLabel*          m_resultImg = nullptr;
+    QLabel*          m_resultTitle = nullptr;   // === 每步结果查看:当前显示的是哪一步 ===
+    QPlainTextEdit*  m_stepDetail  = nullptr;   // === 每步结果查看:该步全部输出字段 ===
     QLineEdit*       m_imagePathEdit = nullptr;
+
+    // === 每步结果查看:上次 Run 每个节点的输出 ===
+    // 用 QUuid 索引而不是 OperatorNode* —— 节点删掉重建后地址会变,
+    // 裸指针做 key 会留下指向已释放内存的 key,清缓存时直接崩。
+    QHash<QUuid, QJsonObject> m_stepOutputs;
+    QHash<QUuid, QString>     m_stepLabels;   // "第 3 步 · 颜色分割"
+    int m_stepCacheFrame = 0;                // 这些结果来自第几帧(多帧时要说清)
 
     // === M6: 工具栏 Undo / Redo 按钮 ===
     QAction* m_undoAction = nullptr;
