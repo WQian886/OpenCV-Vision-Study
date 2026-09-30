@@ -23,11 +23,12 @@ PipelineView::PipelineView(QWidget* parent)
     scene->setSceneRect(0, 0, 2000, 1500);
     setScene(scene);
     setRenderHint(QPainter::Antialiasing);
-    // === perf v2: SmartViewportUpdate — Qt 自己判断每次该重画哪一块,
-    //   对快速移动 / 拖拽比 MinimalViewportUpdate 更稳(更少残影) ===
-    setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
-    // === perf v2: 关掉 painter state 保存,加速 paint() ===
-    setOptimizationFlag(QGraphicsView::DontSavePainterState, true);
+    // === perf v5: 回退 SmartViewportUpdate / DontSavePainterState ===
+    //   实测发现 SmartViewportUpdate 配合 connection_line::boundingRect
+    //   的 m_cachedBoundingRect.united(m_lastBoundingRect) 会在画布
+    //   初始化时触发无限重画循环 → 打开就卡死。
+    //   默认 MinimalViewportUpdate + 全 SavePainterState 反而稳。
+    //   保留 view 自身抗锯齿,关掉这两个新加的开关。
     setDragMode(QGraphicsView::RubberBandDrag);
     setBackgroundBrush(QBrush(QColor(250, 250, 250)));
 

@@ -54,19 +54,22 @@ ConnectionLine::EndpointKey ConnectionLine::currentKey() const {
     return k;
 }
 
+// === perf v5: 回退 m_cachedBoundingRect.united(m_lastBoundingRect) ===
+//   实测发现这个 union 在画布初始化 + SmartViewportUpdate 一起会触发
+//   无限重画循环 → 打开就卡死。
+//   改回纯 m_cachedBoundingRect。连线残影接受"partial now-
+//   compensate"(节点本身的 prepareGeometryChange + 拖动结束后重画)。
 QRectF ConnectionLine::boundingRect() const {
     if (!m_from || !m_to) return QRectF();
     const EndpointKey k = currentKey();
+    if (m_shapeCacheValid && k == m_lastKey) return m_cachedBoundingRect;
     QPointF p1(k.x1, k.y1), p2(k.x2, k.y2);
     qreal xMin = std::min(p1.x(), p2.x()) - CTRL_OFFSET - 10;
     qreal xMax = std::max(p1.x(), p2.x()) + CTRL_OFFSET + 10;
     qreal yMin = std::min(p1.y(), p2.y()) - CTRL_OFFSET - 10;
     qreal yMax = std::max(p1.y(), p2.y()) + CTRL_OFFSET + 10;
     m_cachedBoundingRect = QRectF(xMin, yMin, xMax - xMin, yMax - yMin);
-    // === perf v3: 与上次 boundingRect 取并集,让旧位置也被 Qt 划进重画区
-    //   否则节点拖动时连线的"旧路径段"不会被擦除 → 残影
-    //   (Qt 不允许外部对它调 prepareGeometryChange(),只能让它自己扩 rect)
-    return m_cachedBoundingRect.united(m_lastBoundingRect);
+    return m_cachedBoundingRect;
 }
 
 // ============================================================
