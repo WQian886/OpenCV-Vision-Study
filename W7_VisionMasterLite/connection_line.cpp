@@ -20,6 +20,7 @@ ConnectionLine::ConnectionLine(OperatorNode* from, OperatorNode* to,
 }
 
 void ConnectionLine::onNodesMoved() {
+    m_shapeCacheValid = false;
     if (m_from || m_to) update();
 }
 
@@ -42,27 +43,49 @@ QPointF ConnectionLine::controlPoint(QPointF endpoint,
     return endpoint;
 }
 
+// === perf fix v2: 缓存端点 key(坐标 + side 索引) ===
+ConnectionLine::EndpointKey ConnectionLine::currentKey() const {
+    EndpointKey k{};
+    if (m_from) {
+        const QPointF p = m_from->portScenePos(m_fromSide);
+        k.x1 = p.x(); k.y1 = p.y();
+    }
+    if (m_to) {
+        const QPointF p = m_to->portScenePos(m_toSide);
+        k.x2 = p.x(); k.y2 = p.y();
+    }
+    k.s1 = static_cast<int>(m_fromSide);
+    k.s2 = static_cast<int>(m_toSide);
+    return k;
+}
+
 QRectF ConnectionLine::boundingRect() const {
     if (!m_from || !m_to) return QRectF();
-    QPointF p1 = m_from->portScenePos(m_fromSide);
-    QPointF p2 = m_to->portScenePos(m_toSide);
+    const EndpointKey k = currentKey();
+    if (m_shapeCacheValid && k == m_lastKey) return m_cachedBoundingRect;
+    // 缓存失效 → 重算
+    QPointF p1(k.x1, k.y1), p2(k.x2, k.y2);
     qreal xMin = std::min(p1.x(), p2.x()) - CTRL_OFFSET - 10;
     qreal xMax = std::max(p1.x(), p2.x()) + CTRL_OFFSET + 10;
     qreal yMin = std::min(p1.y(), p2.y()) - CTRL_OFFSET - 10;
     qreal yMax = std::max(p1.y(), p2.y()) + CTRL_OFFSET + 10;
-    return QRectF(xMin, yMin, xMax - xMin, yMax - yMin);
+    m_cachedBoundingRect = QRectF(xMin, yMin, xMax - xMin, yMax - yMin);
+    return m_cachedBoundingRect;
 }
 
 // ============================================================
 // 修复 2: shape() 返回加宽的路径,让命中区变成 16 像素宽的带
 // === M7: 控制点按 fromSide/toSide 自适应 — 水平 or 垂直延展 ===
+// === perf v2: 缓存。端点不变直接返回缓存,QPainterPathStroker::createStroke
+//   只在端点变了(端点位置或 side 变了)时才跑一次 ===
 // ============================================================
 QPainterPath ConnectionLine::shape() const {
     if (!m_from || !m_to) return QGraphicsItem::shape();
 
-    QPointF p1 = m_from->portScenePos(m_fromSide);
-    QPointF p2 = m_to->portScenePos(m_toSide);
+    const EndpointKey k = currentKey();
+    if (m_shapeCacheValid && k == m_lastKey) return m_cachedShapePath;
 
+    QPointF p1(k.x1, k.y1), p2(k.x2, k.y2);
     QPointF start = mapFromScene(p1);
     QPointF end   = mapFromScene(p2);
     QPointF ctrl1 = mapFromScene(controlPoint(p1, m_fromSide));
@@ -76,7 +99,17 @@ QPainterPath ConnectionLine::shape() const {
     stroker.setWidth(HIT_WIDTH);
     stroker.setCapStyle(Qt::RoundCap);
     stroker.setJoinStyle(Qt::RoundJoin);
-    return stroker.createStroke(path);
+    m_cachedShapePath = stroker.createStroke(path);
+    m_lastKey = k;
+    m_shapeCacheValid = true;
+    return m_cachedShapePath;
+}
+
+// === perf fix v2: 节点移动后 Qt 会调 invalidate / repaint,
+//   这时把缓存标脏,下一次 shape() 调用重算 ===
+void ConnectionLine::onNodesMoved() {
+    m_shapeCacheValid = false;
+    if (m_from || m_to) update();
 }
 
 void ConnectionLine::paint(QPainter* p, const QStyleOptionGraphicsItem* option, QWidget*) {

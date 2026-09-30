@@ -23,6 +23,11 @@ PipelineView::PipelineView(QWidget* parent)
     scene->setSceneRect(0, 0, 2000, 1500);
     setScene(scene);
     setRenderHint(QPainter::Antialiasing);
+    // === perf v2: SmartViewportUpdate — Qt 自己判断每次该重画哪一块,
+    //   对快速移动 / 拖拽比 MinimalViewportUpdate 更稳(更少残影) ===
+    setViewportUpdateMode(QGraphicsView::SmartViewportUpdate);
+    // === perf v2: 关掉 painter state 保存,加速 paint() ===
+    setOptimizationFlag(QGraphicsView::DontSavePainterState, true);
     setDragMode(QGraphicsView::RubberBandDrag);
     setBackgroundBrush(QBrush(QColor(250, 250, 250)));
 

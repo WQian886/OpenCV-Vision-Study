@@ -98,26 +98,42 @@ QPointF OperatorNode::inputPortScenePos() const {
 
 // ============================================================
 // 节点位置变化时通知监听者(连线跟随)+ 限制在画布内
-// === perf fix: 改用 ItemPositionHasChanged + 手术刀式只重画相连连线 ===
+// === perf fix v2: 加 prepareGeometryChange 消除残影 + 手术刀式更新连线 ===
 //
-// 旧实现用 ItemPositionChange + scene()->update() 会导致:
-//   · 拖动节点时每像素都触发一次(60 fps × N 次移动像素)
-//   · scene()->update() 让整画布重绘,所有 connection 都得重算 shape()
-//   · shape() 里 QPainterPathStroker::createStroke 是 O(N) 贝塞尔采样
-//   · 几样叠加 = 拖动节点卡顿,甚至可能引起 Qt 的鼠标事件重派发
-//     (表现为节点位置在拖动过程中"乱跑")。
+// 三个根因:
+//   1) 没调 prepareGeometryChange → 节点旧位置的像素不被 Qt 清掉 → 残影
+//   2) 之前用 ItemPositionChange + scene()->update() 全场景刷新 → 60fps 卡顿
+//   3) ConnectionLine::shape() 每次 paint 都 QPainterPathStroker::createStroke → 热点
 //
 // 新实现:
-//   · ItemPositionHasChanged 在 move 结束后触发,频率比 ItemPositionChange 低
-//   · 只对 fromNode/toNode 是自己的 connection 调 update(),不动其他 item
-//   · #include "connection_line.h" 在文件顶部(本类不持有 line,只取指针问 fromNode/toNode)
+//   - ItemPositionChange (move 前): prepareGeometryChange() 通知 Qt 清旧区域,
+//     并对相连连线也调一遍,让连线清掉自己的旧区域。
+//   - ItemPositionHasChanged (move 后): surgical update 让相连连线画新位置。
+//   - ConnectionLine shape 缓存见 connection_line.cpp。
 // ============================================================
 QVariant OperatorNode::itemChange(GraphicsItemChange change, const QVariant& value) {
-    if (change == ItemPositionHasChanged) {
+    if (change == ItemPositionChange) {
+        // === perf v2: 必须先通知 Qt 清旧 bounding rect ===
+        // 没这一句,节点旧位置的像素不会被擦除,后面只画新位置 → 残影
+        prepareGeometryChange();
+
+        // 让相连连线也清掉自己的旧 bounding rect(否则连线的"旧路径段"也残影)
         if (scene()) {
             const QList<QGraphicsItem*> all = scene()->items();
             for (QGraphicsItem* gi : all) {
-                // dynamic_cast 比 qobject_cast 安全(ConnectionLine 不是 QObject)
+                if (auto* line = dynamic_cast<ConnectionLine*>(gi)) {
+                    if (line->fromNode() == this || line->toNode() == this) {
+                        line->prepareGeometryChange();
+                    }
+                }
+            }
+        }
+    }
+    if (change == ItemPositionHasChanged) {
+        // move 完了 → 手术刀式只重画与本节点相连的连线
+        if (scene()) {
+            const QList<QGraphicsItem*> all = scene()->items();
+            for (QGraphicsItem* gi : all) {
                 if (auto* line = dynamic_cast<ConnectionLine*>(gi)) {
                     if (line->fromNode() == this || line->toNode() == this) {
                         line->update();
