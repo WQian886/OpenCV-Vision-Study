@@ -120,6 +120,65 @@ block.setTo(cv::Scalar(0,0,255)); // 改 block 就是改 img
 ```
 像示波器的"触发窗口"——换个观察视角，底层数据没动。
 
+#### ⑥ `cv::cvtColor` —— 色彩空间转换（W2 重点，本节先把"参数语义"沉淀）
+
+```cpp
+cv::cvtColor(bgr, hsv, cv::COLOR_BGR2HSV);
+//              │     │      │
+//              │     │      └─ 第3参：方向码（COLOR_<源>2<目标>）
+//              │     └──────── 第2参：输出图（结果写到这里）
+//              └────────────── 第1参：输入图（从这里读）
+```
+
+**记忆口诀**："**输入 → 输出 → 选项码**"，OpenCV 里绝大多数函数都按这个顺序（inRange、setTo、bitwise_and 等）。
+
+**方向码名字锁死参数位置**：`COLOR_BGR2HSV` = 第 1 参必是 BGR、第 2 参必是 HSV。反向时参数位置一起对调：
+
+```cpp
+cv::cvtColor(hsv, bgr, cv::COLOR_HSV2BGR);  // hsv 在前，bgr 在后
+```
+
+**输出图是新内存（与 ROI 形成对比）**：
+
+| 操作 | 输入内存 | 输出内存 | 类比 |
+|---|---|---|---|
+| `img(cv::Rect(...))` | 原图 | **共享**原图那块 | 借阅窗口牌 |
+| `cvtColor(img, hsv, ...)` | 原图 | **新开**一块独立的 | 复印 + 重新组织 |
+| `img.clone()` | 原图 | **新开**一块独立的（同格式） | 原样复印 |
+
+> 笔记原话 "cvtColor 不复制数据，是新开一块内存" 有歧义，正确读法是：**不开在原图那块内存上，新开一块，并写入转换结果**——输出图和输入图是"两份独立内存，互不干扰"。
+
+**典型坑（不是坑，是被误以为会原地改）**：
+
+```cpp
+// ✅ 安全写法
+cv::Mat hsv;
+cv::cvtColor(bgr, hsv, cv::COLOR_BGR2HSV);  // hsv 自动变成 HSV 类型
+
+// ⚠️ 真正会崩的写法
+cv::Mat hsv(2, 2, CV_8UC1);              // 灰度图（1 通道）
+cv::cvtColor(bgr, hsv, cv::COLOR_BGR2HSV); // 报错：通道不匹配
+```
+
+**W1 验证代码**：改输出不影响输入。
+
+```cpp
+cv::Mat bgr(2, 2, CV_8UC3, cv::Scalar(255, 255, 255));  // 全白
+cv::Mat hsv;
+cv::cvtColor(bgr, hsv, cv::COLOR_BGR2HSV);
+hsv.setTo(cv::Scalar(0, 255, 255));
+// bgr 仍是 (255,255,255)；hsv 变成 (0,255,255)
+```
+
+**工业用 cvtColor 的常用 4 个枚举**（W2 会大量用）：
+
+| 枚举 | 用途 | W1/V |
+|---|---|---|
+| `COLOR_BGR2HSV` | 按颜色找目标（W2 颜色过滤的核心） | W2 |
+| `COLOR_BGR2GRAY` | 3 通道彩图转 1 通道灰度 | W2 / W3 |
+| `COLOR_BGR2RGB` | 跨库对接（matplotlib / PIL） | W1 已用 |
+| `COLOR_GRAY2BGR` | 1 通道转 3 通道（让 mask 能和 BGR 拼接） | W2 |
+
 ---
 
 ## 💡 Part 4：这些知识有啥用？（回到你的兴趣）
