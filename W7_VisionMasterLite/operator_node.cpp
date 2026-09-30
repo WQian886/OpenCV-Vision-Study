@@ -1,4 +1,5 @@
 #include "operator_node.h"
+#include "connection_line.h"   // === perf fix: itemChange 里 dynamic_cast 用 ===
 #include <QPainter>
 #include <QBrush>
 #include <QPen>
@@ -109,9 +110,8 @@ QPointF OperatorNode::inputPortScenePos() const {
 // 新实现:
 //   · ItemPositionHasChanged 在 move 结束后触发,频率比 ItemPositionChange 低
 //   · 只对 fromNode/toNode 是自己的 connection 调 update(),不动其他 item
-//   · 加 #include "connection_line.h"(本类不持有 line,只取指针问 fromNode/toNode)
+//   · #include "connection_line.h" 在文件顶部(本类不持有 line,只取指针问 fromNode/toNode)
 // ============================================================
-#include "connection_line.h"   // === perf fix ===
 QVariant OperatorNode::itemChange(GraphicsItemChange change, const QVariant& value) {
     if (change == ItemPositionHasChanged) {
         if (scene()) {
