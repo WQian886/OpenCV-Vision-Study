@@ -19,11 +19,6 @@ ConnectionLine::ConnectionLine(OperatorNode* from, OperatorNode* to,
     setFlag(QGraphicsItem::ItemIsSelectable, true);
 }
 
-void ConnectionLine::onNodesMoved() {
-    m_shapeCacheValid = false;
-    if (m_from || m_to) update();
-}
-
 // === M7: 自适应控制点 ===
 // Left/Right 端口 → 沿水平方向偏移(曲线在水平面延展)
 // Top/Bottom 端口 → 沿垂直方向偏移(曲线在垂直面延展)
