@@ -97,11 +97,34 @@ QPointF OperatorNode::inputPortScenePos() const {
 
 // ============================================================
 // 节点位置变化时通知监听者(连线跟随)+ 限制在画布内
+// === perf fix: 改用 ItemPositionHasChanged + 手术刀式只重画相连连线 ===
+//
+// 旧实现用 ItemPositionChange + scene()->update() 会导致:
+//   · 拖动节点时每像素都触发一次(60 fps × N 次移动像素)
+//   · scene()->update() 让整画布重绘,所有 connection 都得重算 shape()
+//   · shape() 里 QPainterPathStroker::createStroke 是 O(N) 贝塞尔采样
+//   · 几样叠加 = 拖动节点卡顿,甚至可能引起 Qt 的鼠标事件重派发
+//     (表现为节点位置在拖动过程中"乱跑")。
+//
+// 新实现:
+//   · ItemPositionHasChanged 在 move 结束后触发,频率比 ItemPositionChange 低
+//   · 只对 fromNode/toNode 是自己的 connection 调 update(),不动其他 item
+//   · 加 #include "connection_line.h"(本类不持有 line,只取指针问 fromNode/toNode)
 // ============================================================
+#include "connection_line.h"   // === perf fix ===
 QVariant OperatorNode::itemChange(GraphicsItemChange change, const QVariant& value) {
-    if (change == ItemPositionChange) {
-        // 通知 scene:位置变了(连线跟随重画)
-        if (scene()) scene()->update();
+    if (change == ItemPositionHasChanged) {
+        if (scene()) {
+            const QList<QGraphicsItem*> all = scene()->items();
+            for (QGraphicsItem* gi : all) {
+                // dynamic_cast 比 qobject_cast 安全(ConnectionLine 不是 QObject)
+                if (auto* line = dynamic_cast<ConnectionLine*>(gi)) {
+                    if (line->fromNode() == this || line->toNode() == this) {
+                        line->update();
+                    }
+                }
+            }
+        }
     }
     return QGraphicsItem::itemChange(change, value);
 }
@@ -118,15 +141,29 @@ void OperatorNode::mousePressEvent(QGraphicsSceneMouseEvent* event) {
     m_dragMoved    = false;
 
     // === M7: 找最近端口 — 同时支持 4 边 ===
-    // 按距离而不是固定顺序,可以避免 4 端口挤在角点时的误中。
+    // === perf fix: 用 item 本地坐标算距离,不再每次都 mapToScene 4 次 ===
+    // 旧实现每次 mousePress 都 portScenePos(s) → mapToScene,4 次坐标转换。
+    // 现在把 scenePos 转成 itemPos(1 次),距离计算全在本地坐标里。
+    // 角点 4 端口挤在一起时,本地坐标距离更稳定(不依赖 scene 缩放/平移)。
     PortSide bestSide = PortSide::Right;   // 默认 Right(向后兼容)
     qreal    bestDist = std::numeric_limits<qreal>::infinity();
+    const QPointF itemPos = mapFromScene(scenePos);
+    // 端口在 item 坐标系里的中心(注意:rect 中心 = 边中心)
+    auto portItemPos = [](PortSide s) -> QPointF {
+        switch (s) {
+            case PortSide::Left:   return QPointF(-W/2.0, 0);
+            case PortSide::Right:  return QPointF( W/2.0, 0);
+            case PortSide::Top:    return QPointF(0, -H/2.0);
+            case PortSide::Bottom: return QPointF(0,  H/2.0);
+        }
+        return QPointF();
+    };
     const PortSide sides[4] = { PortSide::Left, PortSide::Right,
                                 PortSide::Top,  PortSide::Bottom };
     for (PortSide s : sides) {
-        const QPointF center = portScenePos(s);
-        const qreal d = std::hypot(scenePos.x() - center.x(),
-                                  scenePos.y() - center.y());
+        const QPointF center = portItemPos(s);
+        const qreal d = std::hypot(itemPos.x() - center.x(),
+                                  itemPos.y() - center.y());
         if (d < bestDist) {
             bestDist = d;
             bestSide = s;
