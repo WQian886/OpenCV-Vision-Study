@@ -57,6 +57,9 @@ private:
     mutable bool        m_shapeCacheValid = false;
     mutable QPainterPath m_cachedShapePath;
     mutable QRectF      m_cachedBoundingRect;
+    // === perf v3: 上次 paint 时的 boundingRect,用于自动 union 旧位置防止残影
+    //   (Qt 不允许外部对它调 prepareGeometryChange())
+    mutable QRectF      m_lastBoundingRect;
     // 端点变化侦测:用 4 个 double 描述两个 scene 坐标 + side 索引
     struct EndpointKey {
         qreal x1, y1, x2, y2;

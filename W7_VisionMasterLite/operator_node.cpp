@@ -98,7 +98,7 @@ QPointF OperatorNode::inputPortScenePos() const {
 
 // ============================================================
 // 节点位置变化时通知监听者(连线跟随)+ 限制在画布内
-// === perf fix v2: 加 prepareGeometryChange 消除残影 + 手术刀式更新连线 ===
+// === perf fix v3: prepareGeometryChange 只对自己(合法) + surgical 更新连线 ===
 //
 // 三个根因:
 //   1) 没调 prepareGeometryChange → 节点旧位置的像素不被 Qt 清掉 → 残影
@@ -106,28 +106,20 @@ QPointF OperatorNode::inputPortScenePos() const {
 //   3) ConnectionLine::shape() 每次 paint 都 QPainterPathStroker::createStroke → 热点
 //
 // 新实现:
-//   - ItemPositionChange (move 前): prepareGeometryChange() 通知 Qt 清旧区域,
-//     并对相连连线也调一遍,让连线清掉自己的旧区域。
-//   - ItemPositionHasChanged (move 后): surgical update 让相连连线画新位置。
-//   - ConnectionLine shape 缓存见 connection_line.cpp。
+//   - ItemPositionChange (move 前): 节点自己 prepareGeometryChange() 通知 Qt 清旧区域
+//   - ItemPositionHasChanged (move 后): surgical update 让相连连线画新位置
+//   - ConnectionLine shape 缓存 + boundingRect 扩张见 connection_line.cpp
+//
+// 注: 不能对别的 QGraphicsItem 调 prepareGeometryChange()(它是 protected),
+//     连线的"旧位置清不掉"问题在 connection_line.cpp 内部用 boundingRect
+//     与 lastBoundingRect 取并集解决 —— 让 Qt 一次清掉旧+新两块。
 // ============================================================
 QVariant OperatorNode::itemChange(GraphicsItemChange change, const QVariant& value) {
     if (change == ItemPositionChange) {
         // === perf v2: 必须先通知 Qt 清旧 bounding rect ===
         // 没这一句,节点旧位置的像素不会被擦除,后面只画新位置 → 残影
+        // 这是 protected,只对自己(this)合法 —— 这是 QGraphicsItem 的约定
         prepareGeometryChange();
-
-        // 让相连连线也清掉自己的旧 bounding rect(否则连线的"旧路径段"也残影)
-        if (scene()) {
-            const QList<QGraphicsItem*> all = scene()->items();
-            for (QGraphicsItem* gi : all) {
-                if (auto* line = dynamic_cast<ConnectionLine*>(gi)) {
-                    if (line->fromNode() == this || line->toNode() == this) {
-                        line->prepareGeometryChange();
-                    }
-                }
-            }
-        }
     }
     if (change == ItemPositionHasChanged) {
         // move 完了 → 手术刀式只重画与本节点相连的连线

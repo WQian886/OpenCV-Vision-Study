@@ -62,15 +62,16 @@ ConnectionLine::EndpointKey ConnectionLine::currentKey() const {
 QRectF ConnectionLine::boundingRect() const {
     if (!m_from || !m_to) return QRectF();
     const EndpointKey k = currentKey();
-    if (m_shapeCacheValid && k == m_lastKey) return m_cachedBoundingRect;
-    // 缓存失效 → 重算
     QPointF p1(k.x1, k.y1), p2(k.x2, k.y2);
     qreal xMin = std::min(p1.x(), p2.x()) - CTRL_OFFSET - 10;
     qreal xMax = std::max(p1.x(), p2.x()) + CTRL_OFFSET + 10;
     qreal yMin = std::min(p1.y(), p2.y()) - CTRL_OFFSET - 10;
     qreal yMax = std::max(p1.y(), p2.y()) + CTRL_OFFSET + 10;
     m_cachedBoundingRect = QRectF(xMin, yMin, xMax - xMin, yMax - yMin);
-    return m_cachedBoundingRect;
+    // === perf v3: 与上次 boundingRect 取并集,让旧位置也被 Qt 划进重画区
+    //   否则节点拖动时连线的"旧路径段"不会被擦除 → 残影
+    //   (Qt 不允许外部对它调 prepareGeometryChange(),只能让它自己扩 rect)
+    return m_cachedBoundingRect.united(m_lastBoundingRect);
 }
 
 // ============================================================
@@ -136,6 +137,10 @@ void ConnectionLine::paint(QPainter* p, const QStyleOptionGraphicsItem* option, 
     p->setPen(QPen(lineColor, lineWidth));
     p->setBrush(Qt::NoBrush);
     p->drawPath(path);
+
+    // === perf v3: paint 完把这次的 boundingRect 记下来,下次 boundingRect() 会和它取并集 ===
+    //   实现"自动 union 旧位置"防止连线残影(无法外部调 prepareGeometryChange 时)
+    m_lastBoundingRect = m_cachedBoundingRect;
 
     // 箭头 — 朝向 end 的切线方向
     QPointF tangent(end.x() - ctrl2.x(), end.y() - ctrl2.y());
