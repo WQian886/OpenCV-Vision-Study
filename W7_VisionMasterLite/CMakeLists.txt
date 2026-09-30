@@ -97,6 +97,9 @@ set(SOURCES
     operators/line_fit.cpp
     operators/circle_fit.cpp
     operators/caliper_dist.cpp
+    operators/point_point_dist.cpp
+    operators/point_line_dist.cpp
+    operators/angle.cpp
 )
 
 set(HEADERS
@@ -127,6 +130,9 @@ set(HEADERS
     operators/line_fit.h
     operators/circle_fit.h
     operators/caliper_dist.h
+    operators/point_point_dist.h
+    operators/point_line_dist.h
+    operators/angle.h
 )
 
 qt_add_executable(w7_vm_lite WIN32 ${SOURCES} ${HEADERS})
@@ -429,6 +435,9 @@ qt_add_executable(w7_measure_test
     operators/param_form.cpp
     operators/circle_fit.cpp
     operators/caliper_dist.cpp
+    operators/point_point_dist.cpp
+    operators/point_line_dist.cpp
+    operators/angle.cpp
 )
 
 target_include_directories(w7_measure_test PRIVATE

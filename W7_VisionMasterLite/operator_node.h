@@ -49,6 +49,17 @@ public:
     QPointF outputPortScenePos() const;
     QPointF inputPortScenePos() const;
 
+    // === M7: 4 端口升级(左右 + 上下),支持水平+垂直连线 ===
+    // 端口位于节点边的中心位置;按 side 索引可拿到对应位置的 hit/pos。
+    // Left / Top 是 Input,Right / Bottom 是 Output。
+    // 鼠标按下时按距离最近判定 hit,避免 4 个端口挤在角点时误中。
+    enum class PortSide { Left, Right, Top, Bottom };
+    bool        hitPort(PortSide side, const QPointF& scenePos) const;
+    QPointF     portScenePos(PortSide side) const;
+    static bool sideIsInput(PortSide s) { return s == PortSide::Left || s == PortSide::Top; }
+    static bool sideIsOutput(PortSide s) { return s == PortSide::Right || s == PortSide::Bottom; }
+    PortSide    dragSide() const { return m_dragSide; }   // 鼠标按下时落在哪条边
+
     // === S3: 节点参数 ===
     void setParams(const QJsonObject& p) { m_params = p; }
     QJsonObject params() const { return m_params; }
@@ -105,6 +116,8 @@ protected:
     void contextMenuEvent(QGraphicsSceneContextMenuEvent* event) override;  // === P4 ===
     QRectF outputPortRect() const;
     QRectF inputPortRect() const;
+    QRectF topPortRect() const;       // 顶部 Input
+    QRectF bottomPortRect() const;    // 底部 Output
 
 private:
     QString m_opName;
@@ -120,6 +133,9 @@ private:
 
     QString m_inLabel;
     QString m_outLabel;
+
+    // === M7: 鼠标按下时落在哪条边,拖出连接时携带在 MIME payload 里 ===
+    PortSide m_dragSide = PortSide::Right;
 
     // === 每步结果查看 ===
     StepStatus m_stepStatus = StepStatus::None;

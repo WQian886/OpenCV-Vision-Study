@@ -82,7 +82,9 @@ ConnectionLine* PipelineView::findConnection(const QUuid& fromId,
     return nullptr;
 }
 
-ConnectionLine* PipelineView::addConnection(OperatorNode* from, OperatorNode* to) {
+ConnectionLine* PipelineView::addConnection(OperatorNode* from, OperatorNode* to,
+                                           OperatorNode::PortSide fromSide,
+                                           OperatorNode::PortSide toSide) {
     if (!from || !to || from == to) return nullptr;
 
     // === 修复 3: 只删除"同 from→to 对"的旧线,允许多输入/多输出(fan-in/fan-out) ===
@@ -96,7 +98,7 @@ ConnectionLine* PipelineView::addConnection(OperatorNode* from, OperatorNode* to
         }
     }
 
-    ConnectionLine* line = new ConnectionLine(from, to);
+    ConnectionLine* line = new ConnectionLine(from, to, fromSide, toSide);
     scene()->addItem(line);
     m_connections.append(line);
     return line;
@@ -186,7 +188,23 @@ void PipelineView::dropEvent(QDropEvent* event) {
     // === S2: 处理连线 mime ===
     if (event->mimeData()->hasFormat(MIME_CONNECTION)) {
         QByteArray payload = event->mimeData()->data(MIME_CONNECTION);
-        QString fromOpName = QString::fromUtf8(payload);
+        const QString payloadStr = QString::fromUtf8(payload);
+        // === M7: payload 格式 "opName|side",side ∈ {0,1,2,3} ===
+        // 旧格式(只有 opName)在 M7 之前存的工程里可能存在,
+        // 向后兼容:拆不出 | 就当 1(Right 输出端)。
+        QString fromOpName;
+        OperatorNode::PortSide fromSide = OperatorNode::PortSide::Right;
+        const int sepIdx = payloadStr.lastIndexOf('|');
+        if (sepIdx >= 0) {
+            fromOpName = payloadStr.left(sepIdx);
+            bool ok = false;
+            const int sideInt = payloadStr.mid(sepIdx + 1).toInt(&ok);
+            if (ok && sideInt >= 0 && sideInt <= 3) {
+                fromSide = static_cast<OperatorNode::PortSide>(sideInt);
+            }
+        } else {
+            fromOpName = payloadStr;
+        }
         QPointF scenePos = mapToScene(event->position().toPoint());
 
         // 找源节点
@@ -196,22 +214,34 @@ void PipelineView::dropEvent(QDropEvent* event) {
         }
         if (!fromNode) { event->ignore(); return; }
 
-        // 找最近的输入端口所在节点
+        // === M7: 找最近的输入端口(Left 或 Top 都查),同时返回 toSide ===
         OperatorNode* targetNode = nullptr;
+        OperatorNode::PortSide toSide = OperatorNode::PortSide::Left;
         qreal bestDist = 50.0;  // 容差半径 50 像素
         for (auto* n : m_nodes) {
             if (n == fromNode) continue;
-            QPointF inputPos = n->inputPortScenePos();
-            qreal dist = std::hypot(scenePos.x() - inputPos.x(),
-                                    scenePos.y() - inputPos.y());
-            if (dist < bestDist) {
-                bestDist = dist;
+            // 输入端口有 Left 和 Top 两个,逐个比对距离
+            const QPointF inputLeft  = n->portScenePos(OperatorNode::PortSide::Left);
+            const qreal   distLeft   = std::hypot(scenePos.x() - inputLeft.x(),
+                                                  scenePos.y() - inputLeft.y());
+            if (distLeft < bestDist) {
+                bestDist = distLeft;
                 targetNode = n;
+                toSide = OperatorNode::PortSide::Left;
+            }
+            const QPointF inputTop   = n->portScenePos(OperatorNode::PortSide::Top);
+            const qreal   distTop    = std::hypot(scenePos.x() - inputTop.x(),
+                                                  scenePos.y() - inputTop.y());
+            if (distTop < bestDist) {
+                bestDist = distTop;
+                targetNode = n;
+                toSide = OperatorNode::PortSide::Top;
             }
         }
         if (targetNode) {
             // === M6: 发请求让 MainWindow 走 Command 栈(否则 Ctrl+Z 撤不掉连线) ===
-            emit connectionAddRequested(fromNode, targetNode);
+            // === M7: 携带 fromSide/toSide ===
+            emit connectionAddRequested(fromNode, targetNode, fromSide, toSide);
         }
         event->acceptProposedAction();
         return;

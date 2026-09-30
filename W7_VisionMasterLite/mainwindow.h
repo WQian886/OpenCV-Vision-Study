@@ -150,7 +150,10 @@ private:
                    const QString& category, const QPointF& pos);
     void doDeleteNode(OperatorNode* node);
     void doMoveNode(OperatorNode* node, const QPointF& oldPos, const QPointF& newPos);
-    void doConnect(OperatorNode* from, OperatorNode* to);
+    // === M7: doConnect 加 side 参数,带侧位走到 AddEdgeCmd ===
+    void doConnect(OperatorNode* from, OperatorNode* to,
+                   OperatorNode::PortSide fromSide = OperatorNode::PortSide::Right,
+                   OperatorNode::PortSide toSide   = OperatorNode::PortSide::Left);
 
 private:
     PipelineView*    m_canvas    = nullptr;

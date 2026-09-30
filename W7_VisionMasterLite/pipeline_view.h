@@ -13,6 +13,7 @@
 #include <QUuid>
 #include <QPointF>
 #include "operators/pin_types.h"
+#include "operator_node.h"   // === M7: 拿 PortSide 枚举 ===
 
 namespace w7 {
 
@@ -39,7 +40,10 @@ public:
 
     OperatorNode* addNode(const QString& opName, const QString& displayName,
                           const QString& category, const QPointF& pos);
-    ConnectionLine* addConnection(OperatorNode* from, OperatorNode* to);
+    // === M7: addConnection 加 fromSide / toSide 参数 ===
+    ConnectionLine* addConnection(OperatorNode* from, OperatorNode* to,
+                                 OperatorNode::PortSide fromSide = OperatorNode::PortSide::Right,
+                                 OperatorNode::PortSide toSide   = OperatorNode::PortSide::Left);
 
     void clearPipeline();
     void highlightNode(const QString& opName, bool on);
@@ -73,7 +77,10 @@ signals:
     void nodeAddRequested(const QString& opName, const QString& display,
                           const QString& category, const QPointF& pos);
     // === M6: 画布请求连线 ===
-    void connectionAddRequested(OperatorNode* from, OperatorNode* to);
+    // === M7: 加 fromSide/toSide — 拖出时携带,落点时确定 ===
+    void connectionAddRequested(OperatorNode* from, OperatorNode* to,
+                                OperatorNode::PortSide fromSide,
+                                OperatorNode::PortSide toSide);
     // === 每步结果查看:节点请求显示该步输出(来自节点右键菜单) ===
     void nodeViewResultRequested(OperatorNode* node);
 

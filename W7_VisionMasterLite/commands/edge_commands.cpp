@@ -13,15 +13,19 @@ namespace w7 {
 // ============================================================
 // AddEdgeCmd
 // ============================================================
-AddEdgeCmd::AddEdgeCmd(PipelineView* canvas, const QUuid& fromId, const QUuid& toId)
-    : m_canvas(canvas), m_fromId(fromId), m_toId(toId) {}
+AddEdgeCmd::AddEdgeCmd(PipelineView* canvas, const QUuid& fromId, const QUuid& toId,
+                       OperatorNode::PortSide fromSide,
+                       OperatorNode::PortSide toSide)
+    : m_canvas(canvas), m_fromId(fromId), m_toId(toId),
+      m_fromSide(fromSide), m_toSide(toSide) {}   // === M7: 持久化两侧的端口 ===
 
 void AddEdgeCmd::exec() {
     if (!m_canvas) return;
     OperatorNode* from = m_canvas->findNodeByUuid(m_fromId);
     OperatorNode* to   = m_canvas->findNodeByUuid(m_toId);
     if (!from || !to) return;
-    m_canvas->addConnection(from, to);
+    // === M7: 把存下来的 side 传给 addConnection ===
+    m_canvas->addConnection(from, to, m_fromSide, m_toSide);
 }
 
 void AddEdgeCmd::undo() {

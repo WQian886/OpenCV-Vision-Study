@@ -62,12 +62,16 @@ DeleteNodeCmd::DeleteNodeCmd(PipelineView* canvas, OperatorNode* node)
     m_uuid    = node->uuid();
 
     // 快照被连带删除的连线(removeNode 会一起删掉它们)
+    // === M7: 记下每条线的 fromSide/toSide,undo 重建时还原 ===
     if (m_canvas) {
         for (auto* line : m_canvas->connections()) {
             if (!line || !line->fromNode() || !line->toNode()) continue;
             bool touches = (line->fromNode() == node) || (line->toNode() == node);
             if (touches) {
-                m_edges.append({line->fromNode()->uuid(), line->toNode()->uuid()});
+                m_edges.append({line->fromNode()->uuid(),
+                                line->toNode()->uuid(),
+                                line->fromSide(),
+                                line->toSide()});
             }
         }
     }
@@ -89,11 +93,13 @@ void DeleteNodeCmd::undo() {
     n->setParams(m_params);
 
     // 重建连线:两端节点都还在才连得上
+    // === M7: 还原 side — 否则 undo 后的连线变默认 Right→Left,
+    //   原来从上端拖出的垂直连线就丢了 ===
     for (const auto& e : m_edges) {
         OperatorNode* from = m_canvas->findNodeByUuid(e.from);
         OperatorNode* to   = m_canvas->findNodeByUuid(e.to);
         if (from && to) {
-            m_canvas->addConnection(from, to);
+            m_canvas->addConnection(from, to, e.fromSide, e.toSide);
         }
     }
 }

@@ -14,6 +14,9 @@
 #include "line_fit.h"
 #include "circle_fit.h"
 #include "caliper_dist.h"
+#include "point_point_dist.h"
+#include "point_line_dist.h"
+#include "angle.h"
 
 namespace w7 {
 
@@ -32,6 +35,9 @@ OperatorBase* createOperatorByName(const QString& name) {
     if (name == "line_fit")           return new LineFit();
     if (name == "circle_fit")         return new CircleFit();
     if (name == "caliper_dist")       return new CaliperDist();
+    if (name == "point_point_dist")   return new PointPointDist();
+    if (name == "point_line_dist")    return new PointLineDist();
+    if (name == "angle")              return new Angle();
     return nullptr;
 }
 

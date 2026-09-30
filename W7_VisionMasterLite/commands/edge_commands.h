@@ -14,6 +14,7 @@
 // ============================================================
 
 #include "command.h"
+#include "../operator_node.h"   // === M7: PortSide ===
 #include <QUuid>
 #include <QString>
 
@@ -23,10 +24,13 @@ class PipelineView;
 
 // ============================================================
 // AddEdgeCmd — 端口拖拽连线
+// === M7: 携带 fromSide / toSide,支持 4 端口 + 垂直连线 ===
 // ============================================================
 class AddEdgeCmd : public Command {
 public:
-    AddEdgeCmd(PipelineView* canvas, const QUuid& fromId, const QUuid& toId);
+    AddEdgeCmd(PipelineView* canvas, const QUuid& fromId, const QUuid& toId,
+               OperatorNode::PortSide fromSide = OperatorNode::PortSide::Right,
+               OperatorNode::PortSide toSide   = OperatorNode::PortSide::Left);
     void exec() override;
     void undo() override;
     void redo() override;
@@ -35,6 +39,8 @@ private:
     PipelineView* m_canvas;
     QUuid m_fromId;
     QUuid m_toId;
+    OperatorNode::PortSide m_fromSide;   // === M7 ===
+    OperatorNode::PortSide m_toSide;     // === M7 ===
 };
 
 // ============================================================

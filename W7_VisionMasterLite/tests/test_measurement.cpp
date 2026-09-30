@@ -25,6 +25,9 @@
 
 #include "operators/circle_fit.h"
 #include "operators/caliper_dist.h"
+#include "operators/point_point_dist.h"
+#include "operators/point_line_dist.h"
+#include "operators/angle.h"
 
 using namespace w7;
 
@@ -242,6 +245,201 @@ static void test_caliper_degenerate() {
     check(r.contains("error"), "给了路径但读不到 → error");
 }
 
+// ============================================================
+// === point_point_dist ===
+//
+// 公式:√((x2-x1)² + (y2-y1)²),一行就能算对。
+// 真正要测的是"两点重合 → distance=0 + warning"和"没图也能算"。
+// ============================================================
+
+static QJsonObject pp(int x1, int y1, int x2, int y2) {
+    return QJsonObject{{"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2}};
+}
+
+static void test_point_point_basic() {
+    beginCase("两点距离:基本几何");
+    PointPointDist op;
+
+    // 水平 3 格 → 距离 3
+    QJsonObject r = op.run(pp(0, 0, 3, 0), QJsonObject());
+    checkNear(r.value("distance").toDouble(), 3.0, 1e-9, "水平 3 → 3");
+
+    // 垂直 4 格 → 距离 4
+    r = op.run(pp(0, 0, 0, 4), QJsonObject());
+    checkNear(r.value("distance").toDouble(), 4.0, 1e-9, "垂直 4 → 4");
+
+    // 3-4-5 三角 → 距离 5
+    r = op.run(pp(0, 0, 3, 4), QJsonObject());
+    checkNear(r.value("distance").toDouble(), 5.0, 1e-9, "3-4-5 → 5");
+
+    // 顺序无关:(A,B) 和 (B,A) 是同一条距离
+    r = op.run(pp(3, 4, 0, 0), QJsonObject());
+    checkNear(r.value("distance").toDouble(), 5.0, 1e-9, "(B,A) 距离相同");
+}
+
+static void test_point_point_degenerate() {
+    beginCase("两点距离:退化输入");
+    PointPointDist op;
+
+    // 两点重合 → distance = 0,给 warning,不算 error
+    QJsonObject r = op.run(pp(50, 50, 50, 50), QJsonObject());
+    checkNear(r.value("distance").toDouble(), 0.0, 1e-9, "重合 → 0");
+    check(r.contains("warning"), "重合给 warning");
+    check(!r.contains("error"), "重合不是 error");
+
+    // 没图也能算(纯几何)
+    r = op.run(pp(0, 0, 3, 4), QJsonObject{{"image_path", ""}});
+    checkNear(r.value("distance").toDouble(), 5.0, 1e-9, "没图也能量");
+
+    // 给了路径但读不到
+    r = op.run(pp(0, 0, 3, 4), QJsonObject{{"image_path", "images/_不存在.png"}});
+    check(r.contains("error"), "路径读不到 → error");
+}
+
+// ============================================================
+// === point_line_dist ===
+//
+// 公式与 caliper_dist 一致(叉积 / 模);真正要测的是退化情形
+// 和"它跟 caliper_dist 在两条等价输入下报同一值"。
+// ============================================================
+
+static QJsonObject pl(int ax, int ay, int bx, int by, int cx, int cy) {
+    return QJsonObject{{"ax", ax}, {"ay", ay},
+                       {"bx", bx}, {"by", by},
+                       {"cx", cx}, {"cy", cy}};
+}
+
+static void test_point_line_basic() {
+    beginCase("点到线:基本几何");
+    PointLineDist op;
+
+    // 水平基准,C 在正上方 3 格 → 距离 3
+    QJsonObject r = op.run(pl(0, 0, 10, 0, 5, 3), QJsonObject());
+    checkNear(r.value("distance").toDouble(), 3.0, 1e-9, "水平基准距离 = 3");
+    checkNear(r.value("base_length").toDouble(), 10.0, 1e-9, "基准线长 = 10");
+
+    // **关键**:量的是垂直距离,不是到 A 或 B 的直线距离
+    // A=(0,0) B=(10,0) C=(1,1) → 直线 √2,垂直 = 1
+    r = op.run(pl(0, 0, 10, 0, 1, 1), QJsonObject());
+    checkNear(r.value("distance").toDouble(), 1.0, 1e-9,
+              "垂直距离不是 √2 直线距离");
+
+    // 与 caliper_dist 在等价输入下报同一值
+    // 同一个 (A,B,C) → point_line_dist 和 caliper_dist 都给 1
+    CaliperDist caliper;
+    QJsonObject rCaliper = caliper.run(cal(0, 0, 10, 0, 1, 1), QJsonObject());
+    checkNear(r.value("distance").toDouble(),
+              rCaliper.value("distance").toDouble(), 1e-9,
+              "point_line_dist 与 caliper_dist 报同一值");
+}
+
+static void test_point_line_degenerate() {
+    beginCase("点到线:退化输入");
+    PointLineDist op;
+
+    // A、B 重合 → 退化成直接量 A→C
+    QJsonObject r = op.run(pl(10, 10, 10, 10, 30, 40), QJsonObject());
+    checkNear(r.value("base_length").toDouble(), 0.0, 1e-9, "基准线长 = 0");
+    check(r.contains("warning"), "A、B 重合给 warning");
+    checkNear(r.value("distance").toDouble(), std::sqrt(1300.0), 1e-9,
+              "退化成 A→C = √1300");
+
+    // 没图也能算
+    r = op.run(pl(0, 0, 10, 0, 5, 3), QJsonObject{{"image_path", ""}});
+    checkNear(r.value("distance").toDouble(), 3.0, 1e-9, "没图也能量");
+}
+
+// ============================================================
+// === angle ===
+//
+// 公式:lineAngleDeg 两边各算一次,差折到 0~90°。
+// 真正要测的:
+//   · 0°(平行)、90°(垂直)、45°(斜对角)
+//   · 超过 90° 的差值要折半(0° vs 150° → 30°)
+//   · 任一线段两点重合 → 0 + warning
+// ============================================================
+
+static QJsonObject ang(int x1, int y1, int x2, int y2,
+                       int x3, int y3, int x4, int y4) {
+    return QJsonObject{{"x1", x1}, {"y1", y1}, {"x2", x2}, {"y2", y2},
+                       {"x3", x3}, {"y3", y3}, {"x4", x4}, {"y4", y4}};
+}
+
+static void test_angle_basic() {
+    beginCase("角度:基本几何");
+    Angle op;
+
+    // 水平 + 垂直 → 夹角 90°
+    QJsonObject r = op.run(ang(0, 100, 200, 100,    // 线 1:水平
+                               100, 0, 100, 200), QJsonObject());   // 线 2:垂直
+    checkNear(r.value("angle_deg").toDouble(), 90.0, 1e-6, "水平 ⊥ 垂直 = 90°");
+
+    // 水平 + 水平 → 夹角 0°
+    r = op.run(ang(0, 100, 200, 100,    // 线 1:水平
+                   0, 200, 200, 200), QJsonObject());   // 线 2:水平
+    checkNear(r.value("angle_deg").toDouble(), 0.0, 1e-6, "水平 ∥ 水平 = 0°");
+
+    // 水平 + 45° 斜线 → 夹角 45°
+    r = op.run(ang(0, 100, 200, 100,    // 线 1:水平(无向 0°)
+                   0, 100, 100, 200), QJsonObject());   // 线 2:atan2(100,100)=45°
+    checkNear(r.value("angle_deg").toDouble(), 45.0, 1e-6, "水平 vs 45° = 45°");
+
+    // **关键**:夹角是无向的(不分先后)
+    // 水平 vs 反向水平:方向相反的两条线段夹角仍是 0°
+    r = op.run(ang(0, 100, 200, 100,    // 线 1:0,100 → 200,100(向右)
+                   200, 100, 0, 100), QJsonObject());   // 线 2:向右但端点反
+    checkNear(r.value("angle_deg").toDouble(), 0.0, 1e-6,
+              "反向同一条线 → 夹角 0°(继承 line_fit 的无向约定)");
+}
+
+static void test_angle_half_fold() {
+    beginCase("角度:折半约定");
+    Angle op;
+
+    // 差 ≤ 90° → 夹角 = 差(直接)
+    // 线 1 水平(0°) vs 线 2 atan2(1,1)=45° → 差 45°
+    QJsonObject r = op.run(ang(0, 0, 100, 0,    // 线 1:无向 0°
+                               0, 0, 100, 100), QJsonObject());  // 线 2:无向 45°
+    checkNear(r.value("angle_deg").toDouble(), 45.0, 1e-6,
+              "差 ≤ 90°:夹角 = 差");
+
+    // 差 > 90° → 夹角 = 180° - 差(折半)
+    // 怎么造"无向角 116.565°"的线段:
+    //   atan2(100, -50) = 116.565°,无向归一化仍是 116.565°
+    //   与 0° 的差 = 116.565° → 折成 63.435°
+    const double a2 = std::atan2(100.0, -50.0) * 180.0 / CV_PI;
+    const double a2norm = (a2 < 0.0) ? a2 + 180.0
+                    : ((a2 >= 180.0) ? a2 - 180.0 : a2);
+    r = op.run(ang(0, 0, 100, 0,                  // 线 1:无向 0°
+                   0, 0, -50, 100), QJsonObject());   // 线 2:无向 ≈116.565°
+    checkNear(r.value("angle_deg").toDouble(),
+              180.0 - a2norm, 1e-4,
+              QString("差 > 90° 时折半:无向角 %1° → 夹角 %2°")
+                  .arg(a2norm, 0, 'f', 2).arg(180.0 - a2norm, 0, 'f', 2));
+}
+
+static void test_angle_degenerate() {
+    beginCase("角度:退化输入");
+    Angle op;
+
+    // 线 1 重合 → 0 + warning
+    QJsonObject r = op.run(ang(50, 50, 50, 50,    // 线 1 重合
+                               0, 0, 100, 100), QJsonObject());
+    checkNear(r.value("angle_deg").toDouble(), 0.0, 1e-9, "线 1 重合 → 0");
+    check(r.contains("warning"), "线 1 重合给 warning");
+
+    // 线 2 重合 → 0 + warning
+    r = op.run(ang(0, 0, 100, 100,
+                   50, 50, 50, 50), QJsonObject());  // 线 2 重合
+    checkNear(r.value("angle_deg").toDouble(), 0.0, 1e-9, "线 2 重合 → 0");
+    check(r.contains("warning"), "线 2 重合给 warning");
+
+    // 没图也能算
+    r = op.run(ang(0, 100, 200, 100, 100, 0, 100, 200),
+               QJsonObject{{"image_path", ""}});
+    checkNear(r.value("angle_deg").toDouble(), 90.0, 1e-6, "没图也能算");
+}
+
 int main(int argc, char* argv[]) {
     SetConsoleOutputCP(CP_UTF8);
     QCoreApplication app(argc, argv);
@@ -253,6 +451,13 @@ int main(int argc, char* argv[]) {
     test_circle_degenerate();
     test_caliper_basic();
     test_caliper_degenerate();
+    test_point_point_basic();
+    test_point_point_degenerate();
+    test_point_line_basic();
+    test_point_line_degenerate();
+    test_angle_basic();
+    test_angle_half_fold();
+    test_angle_degenerate();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;

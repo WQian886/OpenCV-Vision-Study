@@ -253,8 +253,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         doAddNode(op, disp, cat, pos);
     });
     connect(m_canvas, &w7::PipelineView::connectionAddRequested,
-            this, [this](w7::OperatorNode* from, w7::OperatorNode* to) {
-        doConnect(from, to);
+            this, [this](w7::OperatorNode* from, w7::OperatorNode* to,
+                         w7::OperatorNode::PortSide fromSide,
+                         w7::OperatorNode::PortSide toSide) {
+        doConnect(from, to, fromSide, toSide);
     });
 
     loadDefaultPipeline();
@@ -360,6 +362,12 @@ void MainWindow::registerOperators() {
                            tr("在二值图里找出圆形目标,量圆心/半径/圆度")});
     m_operatorInfo.append({"caliper_dist", tr("卡尺距离"), "measurement",
                            tr("三点卡尺:AB 定基准,量 C 到 AB 的垂直距离")});
+    m_operatorInfo.append({"point_point_dist", tr("两点距离"), "measurement",
+                           tr("给两个点,量出它们的欧氏距离(像素)")});
+    m_operatorInfo.append({"point_line_dist", tr("点到线距离"), "measurement",
+                           tr("三点:AB 定基准,量 C 到 AB 的垂直距离")});
+    m_operatorInfo.append({"angle", tr("两线夹角"), "measurement",
+                           tr("给四点(AB/CD 各一条线),量两线之间夹角(0~90°)")});
 }
 
 void MainWindow::setupOperatorLibrary() {
@@ -1317,7 +1325,9 @@ void MainWindow::doMoveNode(w7::OperatorNode* node, const QPointF& oldPos,
     execCommand(new w7::MoveNodeCmd(m_canvas, node->uuid(), oldPos, newPos));
 }
 
-void MainWindow::doConnect(w7::OperatorNode* from, w7::OperatorNode* to) {
+void MainWindow::doConnect(w7::OperatorNode* from, w7::OperatorNode* to,
+                           w7::OperatorNode::PortSide fromSide,
+                           w7::OperatorNode::PortSide toSide) {
     if (!from || !to) return;
 
     // ============================================================
@@ -1349,7 +1359,9 @@ void MainWindow::doConnect(w7::OperatorNode* from, w7::OperatorNode* to) {
     delete fromOp;
     delete toOp;
 
-    execCommand(new w7::AddEdgeCmd(m_canvas, from->uuid(), to->uuid()));
+    // === M7: AddEdgeCmd 携带 fromSide/toSide ===
+    execCommand(new w7::AddEdgeCmd(m_canvas, from->uuid(), to->uuid(),
+                                   fromSide, toSide));
 }
 
 // ============================================================

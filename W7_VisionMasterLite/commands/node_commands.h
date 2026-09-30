@@ -12,6 +12,7 @@
 // ============================================================
 
 #include "command.h"
+#include "../operator_node.h"   // === M7: PortSide ===
 #include <QPointF>
 #include <QString>
 #include <QJsonObject>
@@ -70,8 +71,14 @@ private:
     QJsonObject m_params;
     QUuid    m_uuid;
 
-    // 被连带删除的连线:每项是 (fromUuid, toUuid)
-    struct EdgeRef { QUuid from; QUuid to; };
+    // 被连带删除的连线:每项是 (fromUuid, toUuid, fromSide, toSide)
+    // === M7: 加 side 字段,undo 重建时用对的端口连 ===
+    struct EdgeRef {
+        QUuid from;
+        QUuid to;
+        OperatorNode::PortSide fromSide = OperatorNode::PortSide::Right;
+        OperatorNode::PortSide toSide   = OperatorNode::PortSide::Left;
+    };
     QList<EdgeRef> m_edges;
 };
 

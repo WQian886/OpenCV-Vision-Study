@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <QMenu>
 #include <QAction>
+#include <limits>   // === M7: std::numeric_limits 用于最近端口判定 ===
 
 namespace w7 {
 
@@ -42,6 +43,17 @@ QRectF OperatorNode::inputPortRect() const {
                   PORT_HALF*2, PORT_HALF*2);
 }
 
+// === M7: 上 / 下端口(垂直连线用) ===
+QRectF OperatorNode::topPortRect() const {
+    // 顶端口 = 顶边中心一个小矩形
+    return QRectF(-PORT_HALF, -H/2.0 - PORT_HALF,
+                  PORT_HALF*2, PORT_HALF*2);
+}
+QRectF OperatorNode::bottomPortRect() const {
+    return QRectF(-PORT_HALF, H/2.0 - PORT_HALF,
+                  PORT_HALF*2, PORT_HALF*2);
+}
+
 bool OperatorNode::hitOutputPort(const QPointF& scenePos) const {
     // scenePos → item 坐标
     QPointF itemPos = mapFromScene(scenePos);
@@ -53,12 +65,34 @@ bool OperatorNode::hitInputPort(const QPointF& scenePos) const {
     return inputPortRect().contains(itemPos);
 }
 
+// === M7: 通用 hit / pos,按 side 索引 ===
+bool OperatorNode::hitPort(PortSide side, const QPointF& scenePos) const {
+    const QPointF itemPos = mapFromScene(scenePos);
+    switch (side) {
+        case PortSide::Left:   return inputPortRect().contains(itemPos);
+        case PortSide::Right:  return outputPortRect().contains(itemPos);
+        case PortSide::Top:    return topPortRect().contains(itemPos);
+        case PortSide::Bottom: return bottomPortRect().contains(itemPos);
+    }
+    return false;
+}
+
+QPointF OperatorNode::portScenePos(PortSide side) const {
+    switch (side) {
+        case PortSide::Left:   return mapToScene(QPointF(-W/2.0, 0));
+        case PortSide::Right:  return mapToScene(QPointF( W/2.0, 0));
+        case PortSide::Top:    return mapToScene(QPointF(0, -H/2.0));
+        case PortSide::Bottom: return mapToScene(QPointF(0,  H/2.0));
+    }
+    return QPointF();
+}
+
 QPointF OperatorNode::outputPortScenePos() const {
-    return mapToScene(QPointF(W/2.0, 0));
+    return portScenePos(PortSide::Right);
 }
 
 QPointF OperatorNode::inputPortScenePos() const {
-    return mapToScene(QPointF(-W/2.0, 0));
+    return portScenePos(PortSide::Left);
 }
 
 // ============================================================
@@ -75,21 +109,43 @@ QVariant OperatorNode::itemChange(GraphicsItemChange change, const QVariant& val
 // ============================================================
 // 鼠标按下:检测端口 → 启动拖拽;普通点击 → 默认拖动+选中
 // === 修复 2: 移除 emit nodeClicked(没人连,且在 mousePress 中触发 selectionChanged 会重入闪退) ===
+// === M7: 4 端口 — 找出离鼠标最近的端口(支持上下边的拖出) ===
 // ============================================================
 void OperatorNode::mousePressEvent(QGraphicsSceneMouseEvent* event) {
     QPointF scenePos = event->scenePos();
     // === M6: 记下拖动起点,松开时对比生成 MoveNodeCmd ===
     m_dragStartPos = pos();
     m_dragMoved    = false;
-    qDebug() << "[NODE] mousePress enter, op=" << m_opName
-             << "onOutputPort=" << hitOutputPort(scenePos);
 
-    // === S2: 检查是否点在输出端口上 ===
-    if (hitOutputPort(scenePos)) {
+    // === M7: 找最近端口 — 同时支持 4 边 ===
+    // 按距离而不是固定顺序,可以避免 4 端口挤在角点时的误中。
+    PortSide bestSide = PortSide::Right;   // 默认 Right(向后兼容)
+    qreal    bestDist = std::numeric_limits<qreal>::infinity();
+    const PortSide sides[4] = { PortSide::Left, PortSide::Right,
+                                PortSide::Top,  PortSide::Bottom };
+    for (PortSide s : sides) {
+        const QPointF center = portScenePos(s);
+        const qreal d = std::hypot(scenePos.x() - center.x(),
+                                  scenePos.y() - center.y());
+        if (d < bestDist) {
+            bestDist = d;
+            bestSide = s;
+        }
+    }
+    // 命中阈值:PORT_HALF*2 = 16 像素的容差半径
+    m_dragSide = bestSide;
+    qDebug() << "[NODE] mousePress enter, op=" << m_opName
+             << "nearestSide=" << static_cast<int>(bestSide)
+             << "dist=" << bestDist;
+
+    if (bestDist <= PORT_HALF * 2.0 && sideIsOutput(bestSide)) {
+        // === M7: payload 编码 "opName|side",side 是 0..3 ===
+        // 之前的 payload 只有 opName — 升级后 PipelineView 必须解析 |side
         QDrag* drag = new QDrag(this);
         QMimeData* mime = new QMimeData;
+        const QString payload = QString("%1|%2").arg(m_opName).arg(static_cast<int>(bestSide));
         mime->setData("application/x-vm-connection",
-                      m_opName.toUtf8());
+                      payload.toUtf8());
         drag->setMimeData(mime);
 
         Qt::DropAction action = drag->exec(Qt::CopyAction);
@@ -164,11 +220,13 @@ void OperatorNode::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
                                                  : m_inLabel + " → " + m_outLabel));
     }
 
-    // 端口(输入左 / 输出右)
+    // 端口(4 个:左输入 / 右输出 / 上输入 / 下输出 — M7 升级)
     p->setBrush(QBrush(borderColor));
     p->setPen(QPen(Qt::white, 2));
-    p->drawEllipse(QPointF(-W/2.0, 0), PORT_HALF, PORT_HALF);  // 输入
-    p->drawEllipse(QPointF( W/2.0, 0), PORT_HALF, PORT_HALF);  // 输出
+    p->drawEllipse(QPointF(-W/2.0, 0), PORT_HALF, PORT_HALF);  // 左:输入
+    p->drawEllipse(QPointF( W/2.0, 0), PORT_HALF, PORT_HALF);  // 右:输出
+    p->drawEllipse(QPointF(0, -H/2.0), PORT_HALF, PORT_HALF);  // 上:输入
+    p->drawEllipse(QPointF(0,  H/2.0), PORT_HALF, PORT_HALF);  // 下:输出
 
     // === 每步运行状态(右上角小圆点) ===
     // 画在端口之后、方框之内,避免和端口图形重叠。
