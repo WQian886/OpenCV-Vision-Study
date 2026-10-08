@@ -33,6 +33,18 @@ void addDefect(QJsonArray& arr, const QString& label, const char* type,
     arr.append(d);
 }
 
+// 本算子真正写了判定规则的标签。run() 里按 label 分支的六处
+// (R2 missing / R3 wrong / C1 polarity / R1 bridge / U1 insufficient /
+//  R2 shifted)只认这些名字 —— 拿别的名字进来,一条规则都跑不了。
+const char* const kJudgeableLabels[] = {"R1", "R2", "R3", "C1", "U1"};
+
+bool isJudgeableLabel(const QString& label) {
+    for (const char* l : kJudgeableLabels) {
+        if (label == QString::fromUtf8(l)) return true;
+    }
+    return false;
+}
+
 } // namespace
 
 QJsonObject PcbDefectJudge::defaultParams() const {
@@ -61,6 +73,62 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     if (comps.isEmpty()) {
         output["error"] = "上游未提供 components(需要先接 pcb_inspect 算子)";
         return output;
+    }
+
+    // ============================================================
+    // 拿不到判定依据时,绝不能输出 PASS
+    //
+    // pcb_inspect 的"自动轮廓(换板型)"模式输出的是 C1/C2/C3...,
+    // 而且编号来自**轮廓扫描顺序**,和真值模式的站点标签没有对应关系 ——
+    // 自动模式的 C1 不是同一颗元件。于是下面按 label 分支的六条规则里,
+    // 只有 "C1" 会命中,而且命中的是随便一颗元件;R1/U1/R2/R3 四个分支
+    // 一次都进不去。
+    //
+    // 结果:defects 永远是空的 → result 永远是 PASS。
+    // 判废算子在**什么都没检查**的情况下报"合格" —— 这是最坏的一种错。
+    // 比崩了还难查:画布上状态点是绿的,日志一片正常,产线上直接漏检。
+    //
+    // 所以不能靠"恰好没报缺陷"反推出合格 —— 判定结果必须对应
+    // 真正跑过的规则。kind 是可靠的区分依据:真值模式来自 SITES
+    // (kind 是 R/C/U),自动模式写死 kind="AUTO"。
+    // ============================================================
+    int autoCount = 0;
+    for (const auto& v : comps) {
+        if (v.toObject().value("kind").toString() == "AUTO") ++autoCount;
+    }
+    if (autoCount > 0) {
+        output["error"] = QString(
+            "上游给的是 pcb_inspect 的【自动轮廓】模式产物(%1 个元件,标签是"
+            "按轮廓扫描顺序编的 C1/C2/C3...,不是站点标签),而本算子的判定规则"
+            "是按真值标签 R1/R2/R3/C1/U1 写的。拿自动标签去匹配只会误命中一颗"
+            "元件,其余规则全部空转,最后报出一个没有依据的 PASS。"
+            "请把 pcb_inspect 的模式切回真值模式再判定。").arg(autoCount);
+        output["component_count"] = comps.size();
+        // result 故意不给:没判定过就没有判定结果可给。
+        return output;
+    }
+
+    // 兜底(手改过的 JSON 可能没有 kind 字段):一个 label 都对不上时同样
+    // 不能判 PASS。宁可拒绝判定,也不能给一个没跑过规则的合格。
+    int judgeable = 0;
+    for (const auto& v : comps) {
+        if (isJudgeableLabel(v.toObject().value("label").toString())) ++judgeable;
+    }
+    if (judgeable == 0) {
+        output["error"] = QString(
+            "%1 个元件的标签里没有一个是本算子认得的(R1/R2/R3/C1/U1),"
+            "判定规则一条都跑不了 —— 不给 result,而不是报 PASS。")
+                .arg(comps.size());
+        output["component_count"] = comps.size();
+        return output;
+    }
+    // 认得一部分:判定只覆盖了其中几个元件,必须说清楚覆盖了多少,
+    // 否则"合格"会被当成整板都查过了。
+    if (judgeable < comps.size()) {
+        output["warning"] = QString(
+            "%1 个元件里只有 %2 个有对应判定规则,另外 %3 个未判定 —— "
+            "result 只覆盖已判定的那些。")
+                .arg(comps.size()).arg(judgeable).arg(comps.size() - judgeable);
     }
     cv::Mat img = cv::imread(imgPath.toStdString(), cv::IMREAD_COLOR);
     if (img.empty()) {

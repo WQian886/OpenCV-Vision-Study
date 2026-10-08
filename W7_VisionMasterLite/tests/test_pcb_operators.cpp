@@ -247,6 +247,97 @@ static void test_auto_contour_mode() {
 //
 // 如果判定逻辑改好了(短路桥不再串到 wrong),删掉本用例即可。
 // ------------------------------------------------------------
+
+// ============================================================
+// 用例 7:判废算子不能对"没检查过"的东西报合格
+//
+// 这是本项目里最坏的一类错,比崩溃难查得多:
+// 崩溃你会立刻知道,报错你会看见,而"什么都没检查却报 PASS"是**安静地错**。
+//
+// 成因:pcb_inspect 有两种模式 ——
+//   真值模式      :按 SITES 构造 ROI,标签是 R1/C1/U1/R2/C2/R3(真站点)
+//   自动轮廓模式  :聚类连通域,标签是 C1/C2/C3...,**编号来自轮廓扫描顺序**
+// 而 pcb_defect_judge 的六条规则全部按 label 硬匹配
+// (R2→missing、R3→wrong、C1→polarity、R1→bridge、U1→insufficient、R2→shifted)。
+// 把自动模式的产物喂进去:只有 "C1" 会命中,而且命中的是随便一颗元件;
+// R1/U1/R2/R3 四个分支一次都进不去。
+//
+// 于是 defects 永远是空的 → result 永远是 PASS,而 component_count 还显示 6。
+// 判废算子在什么都没检查的情况下报"合格"。
+//
+// 注意 test_auto_contour_mode 只单独测了 inspect(框数>0、<30、落盘),
+// 从来没跑过 inspect(auto) → judge 这一对 —— 断链就藏在这个缝里。
+// ============================================================
+static void test_judge_refuses_uninspectable_components() {
+    beginCase("判废算子:没有判定依据时拒绝判定,而不是报 PASS");
+
+    // --- 前置:先确认 auto 模式确实产出 kind="AUTO" 的组件 ---
+    PcbInspect inspect;
+    QJsonObject ip = inspect.defaultParams();
+    ip["mode"] = "auto_contour";
+    const QJsonObject iout =
+        inspect.run(ip, QJsonObject{{"image_path", "images/baseline.png"}});
+    const QJsonArray autoComps = iout.value("components").toArray();
+    check(autoComps.size() > 0,
+          QString("前置:auto 模式产出 %1 个元件").arg(autoComps.size()));
+    bool allAuto = autoComps.size() > 0;
+    for (const auto& v : autoComps) {
+        if (v.toObject().value("kind").toString() != "AUTO") allAuto = false;
+    }
+    check(allAuto, "前置:auto 模式每个元件的 kind 都是 AUTO");
+
+    // --- 核心:把它喂给判废算子 ---
+    PcbDefectJudge judge;
+    const QJsonObject jout = judge.run(
+        QJsonObject{}, QJsonObject{{"image_path", "images/baseline.png"},
+                                   {"components", autoComps}});
+
+    check(jout.contains("error"),
+          QString("自动标签 -> 报错而不是判定(实际 error=\"%1\")")
+            .arg(jout.value("error").toString()));
+    check(!jout.value("error").toString().isEmpty() &&
+              jout.value("error").toString().contains("自动轮廓"),
+          "报错要点明是自动轮廓模式的问题(用户不看代码也该知道怎么改)");
+    check(jout.value("result").toString() != "PASS",
+          QString("绝不能报 PASS(实际 result=\"%1\")")
+            .arg(jout.value("result").toString()));
+    check(!jout.contains("result"),
+          "连 result 字段都不给 —— 没判定过就没有判定结果,"
+          "空字符串会被下游当成\"判了但没值\"");
+
+    // --- 兜底:手改的 JSON 可能压根没有 kind 字段 ---
+    {
+        QJsonArray bogus;
+        QJsonObject c;
+        c["label"] = "焊盘7";      // 本算子不认的标签
+        c["x"] = 10; c["y"] = 10; c["w"] = 30; c["h"] = 30;
+        bogus.append(c);
+        const QJsonObject out = judge.run(
+            QJsonObject{}, QJsonObject{{"image_path", "images/baseline.png"},
+                                       {"components", bogus}});
+        check(out.contains("error"), "标签一个都不认得 -> 报错");
+        check(out.value("result").toString() != "PASS",
+              "标签一个都不认得时也不报 PASS");
+    }
+
+    // --- 对照组:真值模式必须照常判定 ---
+    // 没有这条,"永远报错"也能让上面全绿 —— 而那等于把判废功能整个废了。
+    {
+        RunResult r = runPipeline("baseline.png");
+        check(r.judgeOut.value("result").toString() == "PASS",
+              QString("对照组:真值模式 baseline 照常判 PASS(实际 \"%1\")")
+                .arg(r.judgeOut.value("result").toString()));
+        check(!r.judgeOut.contains("error"),
+              QString("对照组:真值模式不报错(实际 error=\"%1\")")
+                .arg(r.judgeOut.value("error").toString()));
+        // 真值模式 6 个元件里 C2 本来就没有判定规则(W6 从没给 C2 定义过
+        // 缺陷类型),所以应该有"覆盖不全"的提示,而不是假装全查过了。
+        check(r.judgeOut.value("warning").toString().contains("未判定"),
+              QString("只判定了部分元件时要说明覆盖范围(实际 warning=\"%1\")")
+                .arg(r.judgeOut.value("warning").toString()));
+    }
+}
+// ------------------------------------------------------------
 static void test_known_cross_talk() {
     beginCase("已知串扰:short.png 的短路桥会顺带触发 wrong");
     RunResult r = runPipeline("short.png");
@@ -282,6 +373,7 @@ int main(int argc, char* argv[]) {
     test_missing_input_error();
     test_threshold_actually_controls();
     test_auto_contour_mode();
+    test_judge_refuses_uninspectable_components();
     test_known_cross_talk();
 
     qInfo().noquote() << "\n================================";
