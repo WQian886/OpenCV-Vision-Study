@@ -28,6 +28,7 @@
 #include "pipeline_view.h"
 #include "operator_node.h"
 #include "connection_line.h"
+#include "connection_payload.h"   // 纯逻辑编解码,零 QtWidgets 依赖
 #include "commands/node_commands.h"
 #include "commands/edge_commands.h"
 
@@ -354,6 +355,91 @@ static void test_no_dangling_after_clear() {
     check(cv.scene()->items().isEmpty(), "scene 已无残留图元");
 }
 
+// 13. 关键回归:连线拖拽 payload 的编解码
+//
+//     这条锁的是把用户坑了的那三个渲染 bug 里最难查的一个:
+//     "连线后元件乱跑"。真凶在 dropEvent —— 以前按【算子名】去找源节点,
+//     算子名不唯一,画布里放两个 color_segment 时必然接到第一个身上;
+//     而 addConnection 开头会顶掉第一个节点原有的连线,
+//     于是 GUI 上看��是"被连的那个节点自己跳走",真凶隔了三层。
+//
+//     编码/解码抽成纯函数(connection_payload.h)就是为了能被这里直接验。
+static void test_connection_payload_codec() {
+    beginCase("13. 连线 payload 编解码");
+    PipelineView cv;
+
+    // --- 13.1 同名节点必须编出不同的 payload ---
+    // 这条就是 bug 本身:以前编的是算子名,两个 color_segment 编码完全相同,
+    // 落点根本无从分辨。UUID 才是稳定身份。
+    auto* a1 = addPlain(&cv, "color_segment", {0, 0});
+    auto* a2 = addPlain(&cv, "color_segment", {0, 300});   // 与 a1 同名同类
+    check(a1->uuid() != a2->uuid(), "两个同名节点 UUID 不同");
+
+    const QString p1 = encodeConnectionPayload(a1->uuid(), 1);   // Right
+    const QString p2 = encodeConnectionPayload(a2->uuid(), 1);
+    check(p1 != p2, "两个同名节点编出的 payload 不同(否则必然接错)");
+    check(!p1.contains("color_segment") && !p2.contains("color_segment"),
+          "payload 里不含算子名(算子名不唯一)");
+
+    // --- 13.2 往返:编什么就解得回什么 ---
+    QUuid gotId;
+    int   gotSide = -1;
+    check(decodeConnectionPayload(p2, &gotId, &gotSide),
+          "合法 payload 解码成功");
+    check(gotId == a2->uuid(), "解出的 UUID 与 a2 一致(不是 a1)");
+    check(gotSide == 1, "解出的 side 一致");
+    // 落到 dropEvent 那一步的真实动作:按 UUID 找回节点
+    check(cv.findNodeByUuid(gotId) == a2, "按解出的 UUID 找回的是 a2");
+
+    // 四个 side 都要能原样往返 —— 少一个就是"某个方向连不上"
+    for (int s = kPortSideMin; s <= kPortSideMax; ++s) {
+        QUuid sid; int ss = -1;
+        const bool ok = decodeConnectionPayload(
+            encodeConnectionPayload(a1->uuid(), s), &sid, &ss);
+        check(ok && sid == a1->uuid() && ss == s,
+              QString("side=%1 往返一致").arg(s));
+    }
+
+    // --- 13.3 坏 payload 必须解不出来,且不能留半截结果 ---
+    // 关键:解失败时不能写出半截数据。dropEvent 若拿到半截 UUID 去
+    // findNodeByUuid,拿到的是空 UUID → 找不到节点 → 顶多这次连线不成立;
+    // 但如果解函数"尽力而为"地填了个默认值,就会静默接到别的节点上。
+    const QStringList bad = {
+        "",                              // 空串
+        "color_segment|1",               // 旧格式:算子名不是 UUID
+        "|1",                            // 左半段为空
+        "550e8400-e29b-41d4-a716-446655440000|",  // 右半段为空
+        "550e8400-e29b-41d4-a716-446655440000",    // 没有分隔符
+        "550e8400-e29b-41d4-a716-446655440000|-1", // side 越界
+        "550e8400-e29b-41d4-a716-446655440000|4",  // side 越界(上界)
+        "550e8400-e29b-41d4-a716-446655440000|x",  // side 不是数字
+        "not-a-uuid-at-all|1",           // 两半都不合法
+    };
+    for (const QString& s : bad) {
+        QUuid sid; int ss = -1;
+        check(!decodeConnectionPayload(s, &sid, &ss),
+              QString("拒绝坏 payload:\"%1\"").arg(s));
+    }
+
+    // --- 13.4 空 UUID 编出来的东西必须解不出来 ---
+    // 免得有人传了个空 UUID 进 addNode,结果编出一个"看着合法"的 payload
+    QUuid nid; int ns = -1;
+    check(!decodeConnectionPayload(encodeConnectionPayload(QUuid(), 1), &nid, &ns),
+          "空 UUID 编出的 payload 解不出来(不会伪装成合法连线)");
+
+    // --- 13.5 节点删了重建,旧 payload 指向的 UUID 仍然找得到新节点 ---
+    // UUID 稳定的意义就在这:payload 在拖拽过程中编码,松手才解码
+    const QUuid survivor = a1->uuid();
+    cv.removeNode(a1);
+    auto* rebuilt = cv.addNode("color_segment", "颜色分割", "detection", {0, 0});
+    rebuilt->setUuid(survivor);   // Command 重建时就沿用原 UUID
+
+    QUuid did; int ds = -1;
+    decodeConnectionPayload(encodeConnectionPayload(survivor, 0), &did, &ds);
+    check(cv.findNodeByUuid(did) == rebuilt,
+          "节点删了重建后,旧 payload 仍指向重建的那个节点");
+}
+
 // ============================================================
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");   // headless
@@ -375,6 +461,7 @@ int main(int argc, char* argv[]) {
     test_uuids_unique();
     test_same_name_edges_by_uuid();
     test_no_dangling_after_clear();
+    test_connection_payload_codec();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;

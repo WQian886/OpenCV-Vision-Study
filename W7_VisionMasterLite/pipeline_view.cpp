@@ -1,6 +1,7 @@
 #include "pipeline_view.h"
 #include "operator_node.h"
 #include "connection_line.h"
+#include "connection_payload.h"   // === payload 编解码(uuid|side) ===
 #include <QPainter>
 #include <QWheelEvent>
 #include <QGraphicsScene>
@@ -191,23 +192,26 @@ void PipelineView::dragLeaveEvent(QDragLeaveEvent* event) {
     event->accept();
 }
 
+// ============================================================
+// 连线拖拽 payload 的编解码 —— 见 connection_payload.h
+//
+// payload 必须是 "uuid|side",不能是 "opName|side" ——
+// 算子名不唯一,两个同名节点会编出完全一样的 payload,落点必然接错。
+// ============================================================
 void PipelineView::dropEvent(QDropEvent* event) {
     // === S2: 处理连线 mime ===
     if (event->mimeData()->hasFormat(MIME_CONNECTION)) {
-        QByteArray payload = event->mimeData()->data(MIME_CONNECTION);
-        const QString payloadStr = QString::fromUtf8(payload);
-        // === payload 格式 "uuid|side",side ∈ {0,1,2,3} ===
-        // 必须用 UUID 定位源节点:算子名不唯一(画布里可以有两个 color_segment),
-        // 按名字找会接错节点 —— 表现为"连线时那个节点自己跳走"。
-        OperatorNode::PortSide fromSide = OperatorNode::PortSide::Right;
-        const int sepIdx = payloadStr.lastIndexOf('|');
-        if (sepIdx < 0) { event->ignore(); return; }
-        const QUuid fromId = QUuid::fromString(payloadStr.left(sepIdx));
-        bool sideOk = false;
-        const int sideInt = payloadStr.mid(sepIdx + 1).toInt(&sideOk);
-        if (sideOk && sideInt >= 0 && sideInt <= 3) {
-            fromSide = static_cast<OperatorNode::PortSide>(sideInt);
+        const QString payloadStr = QString::fromUtf8(
+            event->mimeData()->data(MIME_CONNECTION));
+
+        QUuid fromId;
+        int sideInt = static_cast<int>(OperatorNode::PortSide::Right);
+        // 解不出就放弃落点,不能"猜一个默认源节点" —— 猜错就是接到别的节点上
+        if (!decodeConnectionPayload(payloadStr, &fromId, &sideInt)) {
+            event->ignore();
+            return;
         }
+        const auto fromSide = static_cast<OperatorNode::PortSide>(sideInt);
         QPointF scenePos = mapToScene(event->position().toPoint());
 
         OperatorNode* fromNode = findNodeByUuid(fromId);

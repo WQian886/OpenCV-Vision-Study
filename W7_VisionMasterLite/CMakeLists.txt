@@ -75,6 +75,7 @@ set(SOURCES
     pipeline_view.cpp
     operator_node.cpp
     connection_line.cpp
+    connection_payload.h   # 头文件,列出来是为了 IDE 里能跳转 + 改完能触发重编
     commands/command.cpp
     commands/node_commands.cpp
     commands/edge_commands.cpp
@@ -107,6 +108,7 @@ set(HEADERS
     pipeline_view.h
     operator_node.h
     connection_line.h
+    connection_payload.h
     commands/command.h
     commands/node_commands.h
     commands/edge_commands.h

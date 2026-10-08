@@ -1,5 +1,6 @@
 #include "operator_node.h"
 #include "connection_line.h"   // === perf fix: itemChange 里 dynamic_cast 用 ===
+#include "connection_payload.h"  // === 连线拖拽 payload 编码(uuid|side) ===
 #include <QPainter>
 #include <QBrush>
 #include <QPen>
@@ -201,14 +202,12 @@ void OperatorNode::mousePressEvent(QGraphicsSceneMouseEvent* event) {
         // 算子名【不唯一】—— 画布里可以有两个 color_segment,从第二个拖出去
         // 会接到第一个身上。更糟的是 addConnection 开头会删掉"同 from→to 对"
         // 的旧线,于是第一个节点原有的连线被顶掉,看上去就像节点在乱跳。
-        // UUID 才是稳定身份(节点删了重建也还是同一个)。
+        // 编解码抽到 connection_payload.h,让这段能被无头测试直接验。
         QDrag* drag = new QDrag(this);
         QMimeData* mime = new QMimeData;
-        const QString payload = QString("%1|%2")
-            .arg(m_uuid.toString(QUuid::WithoutBraces))
-            .arg(static_cast<int>(bestSide));
         mime->setData("application/x-vm-connection",
-                      payload.toUtf8());
+                      encodeConnectionPayload(m_uuid, static_cast<int>(bestSide))
+                          .toUtf8());
         drag->setMimeData(mime);
 
         Qt::DropAction action = drag->exec(Qt::CopyAction);

@@ -19,6 +19,7 @@ W7_VisionMasterLite/
 ├── pipeline_view.h / .cpp      # 流程图画布(QGraphicsView 子类)
 ├── operator_node.h / .cpp      # 流程图节点(QGraphicsObject 子类)
 ├── connection_line.h / .cpp    # 贝塞尔连线
+├── connection_payload.h        # 连线拖拽 payload 编解码(uuid|side,纯逻辑)
 ├── recent_files.h / .cpp       # 最近工程列表(QSettings)
 ├── commands/                   # M6 撤销/重做
 │   ├── command.h / .cpp        #   抽象基类
@@ -44,7 +45,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 8 个无头回归测试(271 断言)
+├── tests/                      # 8 个无头回归测试(329 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -249,7 +250,7 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,271 断言 / 8 个套件)
+## 🧪 回归测试(无头,329 断言 / 8 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
@@ -259,14 +260,31 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 
 | 套件 | 断言 | 测什么 | 需要 |
 |---|---|---|---|
-| `undo_redo` | 50 | 增删改节点/连线的往返、参数保留、同名节点 UUID 精确指认、节点消失后命令静默 no-op | Qt(不链 OpenCV) |
+| `undo_redo` | 72 | 增删改节点/连线的往返、参数保留、同名节点 UUID 精确指认、节点消失后命令静默 no-op、**连线 payload 编解码** | Qt(不链 OpenCV) |
 | `pcb_operators` | 32 | **W6 那 8 张样本图**:baseline 零缺陷,7 张缺陷图各自命中自己那类 | OpenCV |
 | `dl_postprocess` | 49 | letterbox 补边/缩放、NMS 阈值、YOLOv5-v8 布局解析、退化输入不越界 | OpenCV |
 | `image_sources` | 20 | 帧循环契约(按 frame_index 真的换帧/换张)、坏输入不崩 | OpenCV |
-| `step_result` | 21 | 状态点判定边界、每步缓存用 UUID 做 key | Qt |
+| `step_result` | 29 | 状态点判定边界、每步缓存用 UUID 做 key、**boundingRect 圈住端口圆** | Qt |
 | `pin_and_recent` | 44 | 该拦的拦/不该拦的放行、路径归一化、已删条目剔除 | QtCore |
 | `line_fit` | 24 | 长度/角度算术、**角度 0~180 的约定**、两点重合不报错、没图照样能算 | OpenCV |
-| `measurement` | 31 | 圆度阈值真在滤方块、周长 0 不除零、**量的是垂直距离不是直线距离**、A/B 重合退化 | OpenCV |
+| `measurement` | 59 | 圆度阈值真在滤方块、周长 0 不除零、**量的是垂直距离不是直线距离**、A/B 重合退化、**夹角退化为 0 而不是假角度** | OpenCV |
+
+### 画布渲染 bug 的回归测试
+
+残影和"连线接错节点"这两个 bug 都**不会崩、不打日志**,只是屏幕上脏一点、
+连线接错一根 —— 纯编译和启动都验不出来,手点一遍还容易看成"渲染正常"。
+所以给它们各钉了一条断言:
+
+- `boundingRect` 必须包住 4 个端口圆(含白描边)。Qt 移动 item 时
+  **只擦 boundingRect 内的像素**,超出范围的它根本不知道存在,于是每拖一次
+  就在原地留一份 —— 这就是残影的成因。以前 `boundingRect` 只写了本体矩形,
+  而端口圆画在本体**外面**
+- 连线 payload 必须是 `uuid|side`,不能是 `算子名|side`。算子名不唯一,
+  画布里放两个 `color_segment` 时两个 payload 完全一样,落点必然接错;
+  GUI 上的表现还特别误导 —— 看着像"被连的节点自己跳走",真凶隔了三层
+
+> 这两条断言做过**变异测试**:把 bug 版代码临时放回去,两条测试分别挂 11 条和 7 条,
+> 确认它们真的抓得住 —— 只会跟着 bug 一起变的测试等于没写。
 
 ### 三个测量算子的测试为什么长这样
 
@@ -283,7 +301,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 单独跑一个:
 ```powershell
 $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
-# 期望末行:SUMMARY: pass=50 fail=0   RESULT=PASS(退出码 0)
+# 期望末行:SUMMARY: pass=72 fail=0   RESULT=PASS(退出码 0)
 ```
 
 > `pcb_operators` / `image_sources` 会在 `images/` 下写标注图和临时素材,

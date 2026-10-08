@@ -152,6 +152,80 @@ static void test_uuid_keyed_cache() {
           "同名节点存的是自己的结果");
 }
 
+// ------------------------------------------------------------
+// 用例 4:关键回归 —— boundingRect 必须包住所有真正画出去的像素
+//
+// 这条锁的是"拖动节点留下一圈残影"那个 bug。
+//
+// Qt 移动 item 时只按 boundingRect 擦除旧像素:超出这个范围的,
+// Qt 根本不知道它存在,于是永远留在屏幕上。4 个端口圆画在本体矩形
+// **外面**(圆心在边的中心,半径 8,再加一圈白色描边),
+// 以前 boundingRect 只写了本体矩形那一圈 —— 于是每拖一次,
+// 4 个端口圆和描边就原地留一份残影。
+//
+// 为什么这条值得单测:残影不会崩,不会打日志,只是屏幕上脏一点。
+// 纯编译和启动都验不出来,手点一遍也容易看成"渲染正常"。
+// 而它是一行边界数字 —— 正好是断言能钉死的那种东西。
+// ------------------------------------------------------------
+static void test_bounding_rect_covers_ports() {
+    beginCase("boundingRect 圈住 4 个端口圆(残影回归)");
+    OperatorNode n("color_segment", "颜色分割", "detection");
+
+    using S = OperatorNode::PortSide;
+    const S sides[4] = {S::Left, S::Right, S::Top, S::Bottom};
+
+    // 端口圆的实际绘制范围(照抄 operator_node.cpp::paint):
+    //   drawEllipse(圆心, PORT_HALF=8, PORT_HALF) + 白色描边宽 2
+    // 所以最外缘 = 圆心再往外 8 + 1。
+    // 这两个数字必须跟着 paint() 一起改 —— 否则测试就在验一个
+    // 假想的图形,测过了但残影还在。
+    const qreal reach = 8.0 + 1.0;
+
+    // 节点在 (0,0) 时 scene 坐标 == item 坐标,直接拿 portScenePos 当局部坐标用
+    QRectF ports;   // 4 个端口绘制矩形的并集
+    for (S s : sides) {
+        const QPointF c = n.portScenePos(s);
+        ports |= QRectF(c.x() - reach, c.y() - reach, reach * 2, reach * 2);
+    }
+
+    const QRectF br   = n.boundingRect();
+    const QRectF body = n.bodyRect();
+
+    // 本体矩形本身当然要包住
+    check(br.contains(body), "boundingRect 包住本体矩形");
+    check(br.width() > body.width() && br.height() > body.height(),
+          "boundingRect 比本体矩形大(端口圆画在本体之外)");
+
+    // === 关键断言 ===
+    // 以前 boundingRect 只有本体那一圈,这条必挂 —— 它就是残影的成因:
+    // Qt 移动 item 时只擦 boundingRect 内的像素,端口圆落在外面,
+    // Qt 不知道它存在,于是每拖一次就在原地留一份。
+    check(br.contains(ports), "4 个端口圆(含描边)的并集整体被 boundingRect 包住");
+
+    // 逐个再钉一遍,失败时能直接看出是哪个方向漏了。
+    // 端口圆心正好在本体某条边的中点上,所以"从中心指向端口"的方向
+    // 就是纯 x 或纯 y —— 直接取符号,不用求模长。
+    for (S s : sides) {
+        const QPointF c = n.portScenePos(s);
+        const QPointF dir((c.x() > 0) - (c.x() < 0),   // 中心 → 端口
+                          (c.y() > 0) - (c.y() < 0));
+        check(br.contains(c + dir * reach),
+              QString("端口(%1)最外缘在 boundingRect 内 ← 残影成因")
+                  .arg(static_cast<int>(s)));
+    }
+
+    // 节点挪到别处后,同样的端口范围(映射回局部坐标)仍然要被包住。
+    // 这条守的是 mapToScene/mapFromScene 那条路径没被改坏。
+    n.setPos(500, 400);
+    QRectF portsMoved;
+    for (S s : sides) {
+        const QPointF c = n.mapFromScene(n.portScenePos(s));   // scene → item
+        portsMoved |= QRectF(c.x() - reach, c.y() - reach, reach * 2, reach * 2);
+    }
+    check(n.boundingRect().contains(portsMoved),
+          "节点移动后,映射回局部坐标的端口范围仍被包住");
+}
+
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     SetConsoleOutputCP(CP_UTF8);
@@ -162,6 +236,7 @@ int main(int argc, char* argv[]) {
     test_status_from_output();
     test_node_state();
     test_uuid_keyed_cache();
+    test_bounding_rect_covers_ports();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;
