@@ -54,17 +54,25 @@ QJsonObject Angle::run(const QJsonObject& params, const QJsonObject& inputs) {
     //     0° 和 150° → 夹角 150° → 折成 30°
     //     10° 和 100° → 夹角 90°
     //     10° 和 170° → 夹角 160° → 折成 20°
-    double diff = std::fabs(a1 - a2);
-    if (diff > 90.0) diff = 180.0 - diff;
-    output["angle_deg"] = diff;
 
-    // 退化情形:任一线段两点重合 → angle = 0,给 warning
-    // 两点重合时 lineAngleDeg() 已经返回 0;但要分别检查是否真退化了
+    // 退化情形:任一线段两点重合 → 夹角定义为 0
+    //
+    // 必须在这里就把 diff 钉死成 0,不能指望 diff = |a1 - a2| 自然算对:
+    // lineAngleDeg 退化时返回的 0 和"一条真实的 0° 水平线"在数值上完全一样,
+    // 于是 |0 - a2| 会算出一个看起来完全正常的夹角(实测:线2 为 45° 时算出 45°),
+    // 而不是约定的 0 —— 这比直接报错更难发现,下游拿到的是"假但合理"的数据。
     const bool line1Degenerate = (x1 == x2 && y1 == y2);
     const bool line2Degenerate = (x3 == x4 && y3 == y4);
+
+    double diff;
     if (line1Degenerate || line2Degenerate) {
+        diff = 0.0;
         output["warning"] = QObject::tr("线段两点重合,角度定义为 0");
+    } else {
+        diff = std::fabs(a1 - a2);
+        if (diff > 90.0) diff = 180.0 - diff;   // 折半到 0~90°
     }
+    output["angle_deg"] = diff;
 
     // 把四个端点回显给下游
     output["l1_p1"] = QJsonObject{{"x", x1}, {"y", y1}};

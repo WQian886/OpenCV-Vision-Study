@@ -346,6 +346,9 @@ add_test(NAME image_sources COMMAND w7_source_test
 qt_add_executable(w7_step_test
     tests/test_step_result.cpp
     operator_node.cpp
+    # operator_node::itemChange 里会调 ConnectionLine::onNodesMoved(),
+    # 只编 operator_node.cpp 会 LNK2019 —— 连线类的源必须跟节点一起进目标
+    connection_line.cpp
     operators/pin_types.cpp
 )
 
@@ -463,3 +466,19 @@ add_custom_command(TARGET w7_measure_test POST_BUILD
 
 add_test(NAME measurement COMMAND w7_measure_test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# ============================================================
+# 让测试失败时能看到是哪条断言挂了
+#
+# Qt 6 在 Windows 上默认把 qInfo/qDebug 送到 Windows 调试通道而不是 stderr,
+# 结果是 ctest --output-on-failure 只能看到一个非零退出码,断言详情一条都不打。
+# 实测踩过:angle 算子退化时返回 45°(约定是 0°)导致 measurement 挂了,
+# 输出里却只有 OpenCV 自己的 WARN,连 "[FAIL]" 都看不到,只能靠猜。
+#
+# QT_FORCE_STDERR_LOGGING=1 把日志打回 stderr,失败详情才进得了 ctest 输出。
+# ============================================================
+set_tests_properties(
+    undo_redo pcb_operators dl_postprocess image_sources
+    step_result pin_and_recent line_fit measurement
+    PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1"
+)

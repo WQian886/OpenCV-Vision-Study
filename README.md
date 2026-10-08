@@ -19,7 +19,7 @@
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看 + 帧循环 + JSON 持久化 + 撤销重做，8 个无头回归测试共 271 条断言
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看 + 帧循环 + JSON 持久化 + 撤销重做，8 个无头回归测试共 299 条断言
 
 ### W7 最终版补上的东西
 
@@ -41,8 +41,12 @@ cd W7_VisionMasterLite
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build --output-on-failure'
 ```
 
-8 个套件 / 271 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+8 个套件 / 299 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试。
+
+> 测试失败时想看是哪条断言挂了，CMakeLists 里已经给 8 个套件都设了
+> `QT_FORCE_STDERR_LOGGING=1`。不加的话 Qt 6 在 Windows 上会把 `qInfo`
+> 送到调试通道而不是 stderr，`--output-on-failure` 只能看到一个非零退出码。
 
 ## 📖 变更日志
 
@@ -93,5 +97,5 @@ OpenCV/
 - 7 个 C++ 项目
 - 68 个 C++ 文件 / ~8600 行代码
 - 9 份变更日志 / 131 KB
-- W7 单项 8 个无头回归测试 / 271 条断言
+- W7 单项 8 个无头回归测试 / 299 条断言
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
