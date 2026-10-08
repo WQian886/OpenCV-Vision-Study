@@ -45,7 +45,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 10 个无头回归测试(431 断言)
+├── tests/                      # 11 个无头回归测试(459 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -250,11 +250,11 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,431 断言 / 10 个套件)
+## 🧪 回归测试(无头,459 断言 / 11 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
-# 一次跑完全部 10 个套件
+# 一次跑完全部 11 个套件
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build --output-on-failure'
 ```
 
@@ -269,6 +269,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `line_fit` | 24 | 长度/角度算术、**角度 0~180 的约定**、两点重合不报错、没图照样能算 | OpenCV |
 | `measurement` | 59 | 圆度阈值真在滤方块、周长 0 不除零、**量的是垂直距离不是直线距离**、A/B 重合退化、**夹角退化为 0 而不是假角度** | OpenCV |
 | `run_policy` | 43 | **帧数封顶 / 抽帧限频 / 取消+禁重入**、日志行数封顶、封顶后重绘代价不暴涨 | Qt |
+| `template_match` | 28 | **三种匹配方法的相似度方向统一**、模板比原图大、纯色模板、非法 method、阈值真的在控 | OpenCV |
 | `detection_operators` | 42 | **HSV 数组残缺不越界**、**两个实例的 mask 不互相覆盖**、面积阈值用 `>=`、**阈值填反要说人话而不是静默全判废** | OpenCV |
 
 ### 默认流水线上的三个算子(为什么补这层测试)
@@ -300,6 +301,54 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
   并加了一条"让下游 `blob_count` 真的沿 A 的路径读一次":变异后读回 5000 而非
   10000,这才是真实危害发生的那一层。测症状不测后果,等于给自己留后门。
 
+### template_match:三种方法的"方向"不是一回事
+
+下拉框里三种方法,原始值的方向并不统一:
+
+| 方法 | 完美匹配时的值 | 方向 |
+|---|---|---|
+| `TM_CCOEFF_NORMED` | ≈ 1 | 越大越像 |
+| `TM_CCORR_NORMED` | ≈ 1 | 越大越像 |
+| `TM_SQDIFF_NORMED` | ≈ 0 | **越小越像** |
+
+代码对第三种取 `-minVal`(完美时正好是 `-0`),再和 `[0,1]` 区间的
+threshold(默认 0.9)比 —— `-0 >= 0.9` 恒为 false。于是**选 SQDIFF_NORMED
+就整条流水线恒判 NG**,而画布状态点是绿的、日志一切正常。
+产线上这就是"模板明明在图里,却一直判 NG"。
+
+现在统一归一成 `1 - minVal`,threshold 对三种方法是同一个含义 ——
+这也是"从同一个下拉框里选方法"的用户默认预期。
+
+另外两道闸:
+
+- **模板比原图大**。文档说 `cv::matchTemplate` 会抛 `cv::Exception`,
+  但**实测不是**:`CV_Assert` 在 Release 下被 NDEBUG 关掉了,它安静地返回
+  `score=0.040665`、位置 `(40,31)` —— 而原图只有 40×40,合法 x 上限是 10。
+  它拿着越界坐标照常返回一个结果。所以这道闸防的不是崩溃,
+  是"静默的越界结果"。**崩溃反而是好的失败方式,你会立刻知道。**
+- **纯色模板 + CCOEFF**。我原本以为会得到 NaN、于是 pass 恒假 ——
+  **实测也不是**:本机 OpenCV 4.x 返回的是 `score=1.000000`、`pass=true`,
+  也就是**恒判合格**,换任何图都"匹配成功"。这个方向比恒判不合格危险得多:
+  判不合格会有人去查参数,判合格没人查,板子再差也能流到下一道工序。
+  而且 OpenCV 在退化输入上返回什么依版本而异,所以修法不能是
+  "跑完检查一下返回值",必须**调用之前自己算一遍模板方差**。
+
+三条都属于"跑完了、没报错、状态点是绿的、只有结论是错的"。
+
+### 一个方法,分三次才写对
+
+写这个算子的测试时,我自己的第一版边界检查把上界写成了
+`TM_SQDIFF_NORMED`,结果 method=3/4/5 全被判非法 —— 11 条里挂了 11 条。
+
+原因是 OpenCV 这六个枚举**按家族顺序**排,不是按相似度排:
+
+```
+0 TM_SQDIFF   1 TM_SQDIFF_NORMED   2 TM_CCORR
+3 TM_CCORR_NORMED   4 TM_CCOEFF   5 TM_CCOEFF_NORMED
+```
+
+`TM_SQDIFF_NORMED` 是 **1**,不是 5。这是先撞红的测试第二次帮我
+挡住了一个我以为已经想清楚的地方。
 ### 跑批卡死的回归测试
 
 `run_policy` 测的是 2026-10-08 修的"点 Run 跑批容易卡死"。先说清楚

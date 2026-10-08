@@ -545,6 +545,52 @@ add_test(NAME detection_operators COMMAND w7_detect_test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # ============================================================
+# === template_match 回归测试 (headless, 自造带纹理的图和模板)
+#
+# 这个算子此前一个测试都没有,而它是判断类算子里最容易"安静地算错"的:
+# 三种匹配方法的**值方向不一样**,代码却当成一样处理。
+#
+#   TM_SQDIFF_NORMED 越小越像,代码取 -minVal 得到非正数,
+#   再和 [0,1] 区间的 threshold(默认 0.9)比 → 恒判 NG。
+#
+# 加上模板比原图大时 cv::matchTemplate 抛 cv::Exception 直接崩程序
+# (Run 引擎调用点没有 try/catch),以及纯色模板 + CCOEFF = NaN 恒判不通过。
+#
+# 三条都不报错、状态点都是绿的,只有结论是错的 —— 产线上要到漏检才发现。
+#
+# 测试要往 images/ 写临时图,工作目录必须是工程根。
+# ============================================================
+qt_add_executable(w7_tpl_test
+    tests/test_template_match.cpp
+    operators/param_form.cpp
+    operators/template_match.cpp
+)
+
+target_include_directories(w7_tpl_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w7_tpl_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+    ${OpenCV_LIBS}
+)
+
+if(MSVC)
+    target_compile_options(w7_tpl_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_tpl_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        D:/opencv-src/build/install/bin
+        $<TARGET_FILE_DIR:w7_tpl_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+add_test(NAME template_match COMMAND w7_tpl_test
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# ============================================================
 # 让测试失败时能看到是哪条断言挂了
 #
 # Qt 6 在 Windows 上默认把 qInfo/qDebug 送到 Windows 调试通道而不是 stderr,
@@ -557,5 +603,6 @@ add_test(NAME detection_operators COMMAND w7_detect_test
 set_tests_properties(
     undo_redo pcb_operators dl_postprocess image_sources
     step_result pin_and_recent line_fit measurement run_policy detection_operators
+    template_match
     PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1"
 )
