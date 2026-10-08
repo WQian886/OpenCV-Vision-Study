@@ -301,6 +301,23 @@ static void test_no_move_during_connection_drag() {
     //    凭空生成 MoveNodeCmd:用户按一次 Ctrl+Z 撤掉的是连线,
     //    第二次才撤出那个莫名其妙的"移动"。
     n->endConnectionDrag();
+
+    // ============================================================
+    // === 上一版修复漏掉的那半扇门 ===
+    //
+    // 旧代码在 endConnectionDrag() 里就把 ItemIsMovable 恢复了。
+    // 但那一刻 scene 还指着这个节点当 mouse grabber,补发的 release
+    // 也还没送达 —— 节点在这个窗口里"又是 grabber 又可移动"。
+    // 正常松手时物理按钮已抬起,scene 写不进位置(所以大多数时候看不出来);
+    // 按 Esc 取消或落点被拒时按钮还按着,就写进去了 → **偶发**乱跑。
+    //
+    // 所以:endConnectionDrag() 之后标志必须**仍然是关的**,
+    // 一直关到 release 真正送达。
+    // ============================================================
+    check(!n->flags().testFlag(QGraphicsItem::ItemIsMovable),
+          "endConnectionDrag() 之后 ItemIsMovable 仍然是关的"
+          "(release 还没送达,窗口不能提前打开)");
+
     QGraphicsSceneMouseEvent release(QEvent::GraphicsSceneMouseRelease);
     release.setScenePos(dragged);
     release.setButton(Qt::LeftButton);
@@ -311,6 +328,17 @@ static void test_no_move_during_connection_drag() {
           "拖线结束不产生 nodeMoved(否则撤销一次会冒出一次假移动)");
     check(n->flags().testFlag(QGraphicsItem::ItemIsMovable),
           "拖线结束后 ItemIsMovable 恢复(否则之后再也拖不动节点)");
+
+    // === 第二道保险:就算位置还是被改了,也要拉回来 ===
+    //
+    // 上一步把节点搬到了 (900,700) 来模拟"scene 写位置"。
+    // 真实环境里这条兜底应该永远不会触发(trigger 时会打 qWarning),
+    // 但它必须存在 —— 平台的时序差异我们控制不了,
+    // 兜底 + 警告比"默默跑偏"好得多。
+    check(n->pos() != dragged,
+          QString("兜底生效:release 时节点被拉回拖线起点(实际 pos=%1,%2 "
+                  "被拉走的应是 %3,%4)")
+            .arg(n->pos().x()).arg(n->pos().y()).arg(dragged.x()).arg(dragged.y()));
 
     // === 对照组:正常拖动节点【必须】仍然能产生 nodeMoved ===
     // 上面那条断言如果写得太宽(比如直接 return 掉整个 handler),

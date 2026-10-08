@@ -156,6 +156,20 @@ private:
     // 所以要记住"这次按下不是移动",release 时据此跳过。
     bool m_dragIsConnection = false;
 
+    // === 拖线开始时的位置,用来兜底把"跑偏"的节点拉回来 ===
+    //
+    // 上一版修复在 endConnectionDrag() 里就把 ItemIsMovable 恢复了,
+    // 但那一刻:exec() 刚返回、scene 还指着这个节点当 mouse grabber、
+    // 补发的 mouseReleaseEvent 还没送达。这个窗口里节点又是"可移动的",
+    // 于是 scene 又能写它的位置了 —— 表现为**偶发**的乱跑
+    // (取决于拖线怎么结束:正常松手时按钮已经抬起,写不进去;
+    //  按 Esc 取消、或落点被拒时按钮还按着,就能写进去)。
+    //
+    // 现在改成 release 真正送达时才恢复 flag,窗口彻底不存在。
+    // 这个成员是第二道保险:万一某个平台/路径上节点还是被挪动了,
+    // 至少能把它拉回原位,并打一条警告让我们知道发生过。
+    QPointF m_posBeforeConnectionDrag;
+
     QString m_inLabel;
     QString m_outLabel;
 

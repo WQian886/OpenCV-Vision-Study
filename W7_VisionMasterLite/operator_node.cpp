@@ -155,6 +155,18 @@ QVariant OperatorNode::itemChange(GraphicsItemChange change, const QVariant& val
 // === M7: 4 端口 — 找出离鼠标最近的端口(支持上下边的拖出) ===
 // ============================================================
 void OperatorNode::mousePressEvent(QGraphicsSceneMouseEvent* event) {
+    // ============================================================
+    // 兜底:上一次拖线的 release 没送达(某些平台/路径会发生),
+    // ItemIsMovable 会一直停在 false,表现是"这个节点突然拖不动了"。
+    // 新一次 press 一定是安全的补刀时机 —— 此刻没有嵌套事件循环,
+    // scene 也不会在我们检查之后改写位置。
+    // ============================================================
+    if (!m_dragIsConnection &&
+        !flags().testFlag(QGraphicsItem::ItemIsMovable)) {
+        qWarning() << "[NODE] ItemIsMovable stuck off, restoring on" << m_opName;
+        setFlag(QGraphicsItem::ItemIsMovable, true);
+    }
+
     QPointF scenePos = event->scenePos();
     // === M6: 记下拖动起点,松开时对比生成 MoveNodeCmd ===
     m_dragStartPos = pos();
@@ -250,40 +262,60 @@ void OperatorNode::mousePressEvent(QGraphicsSceneMouseEvent* event) {
 // ============================================================
 void OperatorNode::beginConnectionDrag() {
     m_dragIsConnection = true;
+    m_posBeforeConnectionDrag = pos();
     setFlag(QGraphicsItem::ItemIsMovable, false);
 }
 
 void OperatorNode::endConnectionDrag() {
-    // 顺序要紧:先恢复 flag,而且【不清 m_dragIsConnection】。
+    // ============================================================
+    // 这里【故意不恢复】ItemIsMovable —— 上一版就是在这里恢复的,那是"偶尔乱跑"的真凶。
     //
-    // ItemIsMovable 必须立刻恢复 —— 用户接下来还要正常拖节点,
-    // 恢复晚了那一下就拖不动了。
+    // 时间线(拖线按 Esc 取消时最明显):
     //
-    // 但 m_dragIsConnection 要**留着**,由随后那次 mouseReleaseEvent 清掉。
-    // 因为 drag->exec() 返回之后,scene 才补发 release;那一刻节点
-    // 已经被"跟着鼠标跑"那段挪过,位置和 m_dragStartPos 不同,
-    // 正是这个标志在挡着"误判成用户拖动"。
-    // 在这里就清掉的话,标志等于没设 —— 这个 bug 会原样复现。
-    // (写测试时正是先撞上了这个:断言红了才发现标志清早了。)
-    setFlag(QGraphicsItem::ItemIsMovable, true);
-}
+    //   t0  mousePressEvent:  node 成为 scene 的 mouse grabber
+    //   t1  beginConnectionDrag:  ItemIsMovable = false       ← 窗口打开
+    //   t2  drag->exec() 返回(松手 / 按 Esc / 落点被拒)
+    //   t3  endConnectionDrag():  旧代码在这里 ItemIsMovable = true  ← 窗口还没关
+    //   t4  mouseReleaseEvent 真正送达,mouse grabber 被清掉   ← 窗口才关
+    //
+    // t3~t4 之间:节点**既是 scene 的 grabber、又已经"可移动"**。
+    // 正常松手时物理按钮已经抬起,scene 写不进位置(所以大多数时候看不出来);
+    // 但按 Esc 取消、或落点被拒时**按钮还按着**,scene 就会照常写位置
+    // → 节点跟着鼠标跑一段。这就是"有时候会乱跑"。
+    //
+    // 改成 release 送达时才恢复 flag:那一刻 scene 也正好不再认为
+    // 按钮按着,窗口彻底不存在。
+    //
+    // 代价是"恢复晚了会不会导致节点拖不动"?不会 —— 拖节点必然是
+    // press → move → release,而上一次拖线的 release 一定在
+    // 下一次 press 之前送达。
+    // 万一真的丢了 release(某些平台/路径),mousePressEvent 开头
+    // 还有一道兜底会把 flag 补回来。
+    // ============================================================
+    }
 
 // === M6: 松开鼠标 → 若位置真的变了,通知外部生成 MoveNodeCmd ===
 void OperatorNode::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
     QGraphicsItem::mouseReleaseEvent(event);
 
-    // === 本次是拖线,不是拖节点 → 不生成 MoveNodeCmd ===
+    // === 本次是拖线,不是拖节点 ===
     //
-    // drag->exec() 里松开鼠标时,scene 会补发一次 mouseReleaseEvent 给我们。
-    // 那一刻节点可能已经被"跟着鼠标跑"那段逻辑挪过了,于是这里会凭
-    // "位置变了"判定成一次用户拖动,凭空塞一条 MoveNodeCmd 进命令栈 ——
-    // 用户按一次 Ctrl+Z 撤掉的是连线,第二次才撤出那个莫名其妙的"移动"。
-    //
-    // 只靠上面那个 ItemIsMovable 开关是不够的:那个开关保证节点不动,
-    // 但 Qt 补发 release 的时机不受我们控制。标志位才是"不生成移动命令"
-    // 这件事的最终保证 —— 两者各管一层,任何一层失效都不会误判。
+    // 这里既要"不生成 MoveNodeCmd",也要把 ItemIsMovable 恢复 ——
+    // 后者是窗口的关闭时刻,见 endConnectionDrag 里的时间线。
     if (m_dragIsConnection) {
         m_dragIsConnection = false;
+        setFlag(QGraphicsItem::ItemIsMovable, true);
+
+        // 第二道保险:万一节点还是被挪动过(平台差异 / 别的路径写进了位置),
+        // 至少把它拉回拖线开始的位置,并且**打一条警告** ——
+        // 这条警告是"乱跑真的发生过"的证据,不能默默吃掉。
+        if ((pos() - m_posBeforeConnectionDrag).manhattanLength() > 0.5) {
+            qWarning() << "[NODE] !! connection drag moved node"
+                       << m_opName << "by"
+                       << (pos() - m_posBeforeConnectionDrag)
+                       << "- restoring";
+            setPos(m_posBeforeConnectionDrag);
+        }
         return;
     }
 

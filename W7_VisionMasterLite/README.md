@@ -45,7 +45,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 11 个无头回归测试(459 断言)
+├── tests/                      # 11 个无头回归测试(461 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -250,7 +250,7 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,459 断言 / 11 个套件)
+## 🧪 回归测试(无头,461 断言 / 11 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
@@ -264,7 +264,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `pcb_operators` | 43 | **W6 那 8 张样本图**:baseline 零缺陷,7 张缺陷图各自命中自己那类、**没有判定依据时拒绝判定而不是报 PASS** | OpenCV |
 | `dl_postprocess` | 49 | letterbox 补边/缩放、NMS 阈值、YOLOv5-v8 布局解析、退化输入不越界 | OpenCV |
 | `image_sources` | 20 | 帧循环契约(按 frame_index 真的换帧/换张)、坏输入不崩 | OpenCV |
-| `step_result` | 35 | 状态点判定边界、每步缓存用 UUID 做 key、**boundingRect 圈住端口圆**、**拖线时节点不跟着跑** | Qt |
+| `step_result` | 37 | 状态点判定边界、每步缓存用 UUID 做 key、**boundingRect 圈住端口圆**、**拖线时节点不跟着跑**、**endConnectionDrag 之后移动锁还锁着**、**release 时把跑偏的节点拉回来** | Qt |
 | `pin_and_recent` | 44 | 该拦的拦/不该拦的放行、路径归一化、已删条目剔除 | QtCore |
 | `line_fit` | 24 | 长度/角度算术、**角度 0~180 的约定**、两点重合不报错、没图照样能算 | OpenCV |
 | `measurement` | 59 | 圆度阈值真在滤方块、周长 0 不除零、**量的是垂直距离不是直线距离**、A/B 重合退化、**夹角退化为 0 而不是假角度** | OpenCV |
@@ -402,8 +402,47 @@ threshold(默认 0.9)比 —— `-0 >= 0.9` 恒为 false。于是**选 SQDIFF_NO
 已经变了,正是这个标志在挡误判。提前清掉等于没设 —— 这个是写测试时
 先撞红的。
 
+#### 第二轮:还是偶发,窗口期比想象的长
+
+上面那版修完,大多数时候不跑了 —— 但用户反馈"元件**还是有时候**会乱跑"。
+
+"有时候"三个字就是线索:如果 `ItemIsMovable` 根本没生效,那应该是
+**每次**都跑。既然只偶发,说明标志位生效了、但**有半扇门开晚了**。
+
+把时序摊开看:
+
+| 时刻 | 发生了什么 |
+|---|---|
+| t0 | `mousePressEvent` — 节点成为 scene 的 **mouse grabber** |
+| t1 | `beginConnectionDrag()` — `ItemIsMovable = false` ← 窗口**打开** |
+| t2 | `drag->exec()` 返回 |
+| t3 | `endConnectionDrag()` — 旧代码在这里 `ItemIsMovable = true` ← 窗口**还没关** |
+| t4 | `mouseReleaseEvent` 真正送达,grabber 被清掉 ← 窗口**才关** |
+
+t3→t4 之间这个节点**同时**是"scene 正按着的那个 item"和"可移动的"。
+于是 scene 又能写它的位置了。
+
+为什么平时看不出来:正常松手时物理按钮**已经抬起**了,scene 想写也写不进去,
+位置没变;按 **Esc 取消**、或者落点被拒(类型不匹配)时按钮还按着,
+scene 就写进去了 —— 节点被拽飞。这跟用户"点错了就发现元件跑了"的
+手感完全对得上。
+
+修法:把 `ItemIsMovable` 的恢复**从 `endConnectionDrag()` 挪到 `mouseReleaseEvent()`**,
+窗口彻底不存在。再加两层兜底:
+
+- release 时比对拖线前的位置,真的被挪动了就 `setPos()` 拉回来,
+  并打一条 `[NODE] !! connection drag moved node` 警告 —— 这条日志是
+  "乱跑真的发生过"的证据,不能默默吃掉
+- `mousePressEvent` 开头检查标志位,如果卡在关闭状态(说明某条路径
+  吞掉了 release)就先修回来,否则节点再也拖不动
+
 > 这几条断言都做过**变异测试**:把 bug 版代码临时放回去,分别挂 11 条、7 条、2 条,
 > 确认它们真的抓得住 —— 只会跟着 bug 一起变的测试等于没写。
+> 第二轮又加了 2 条,变异验证:
+> - 把 `setFlag(ItemIsMovable, true)` **放回** `endConnectionDrag()`(也就是复现上一版的 bug)
+>   → 1 条红
+> - 把 release 里的位置兜底 `if (...)` 改成 `if (false && ...)` → 1 条红
+>
 > 另外还反向验证了一次:把 `mouseReleaseEvent` 整个短路,对照组断言
 > ("正常拖动节点仍要产生 nodeMoved")立刻变红,确保修复没有过头伤到移动功能。
 
