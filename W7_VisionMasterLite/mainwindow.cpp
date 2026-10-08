@@ -3,6 +3,7 @@
 #include "connection_line.h"
 #include "select_delete_plan.h"   // 批量删除的"计划"层(见头文件里的 use-after-free 说明)
 #include "operator_library_groups.h"   // 算子库分组:不变式是"没有算子会消失"
+#include "pipeline_serialize.h"   // 存盘/读盘(已搬出,无头测试直接用)
 
 #include <QDockWidget>
 #include <QToolBar>
@@ -29,6 +30,7 @@
 #include <QJsonDocument>
 #include <QDateTime>
 #include <QScopeGuard>
+#include <memory>
 #include <QQueue>
 #include <QHash>
 #include <QFile>
@@ -55,144 +57,6 @@
 #include "commands/edge_commands.h"
 
 namespace w7 {
-
-// ============================================================
-// P1: Save/Load JSON 流水线 helpers
-// JSON 格式:
-//   { version, name, image_path, nodes:[{op, display, category, x, y, params}], edges:[{from, to}] }
-//   节点用 op 名 + 出现顺序匹配 edges (FIFO)
-// ============================================================
-
-static QJsonDocument pipelineToJson(PipelineView* canvas, const QString& imagePath) {
-    QJsonObject root;
-    root["version"]    = "1.0";
-    root["name"]       = "untitled";
-    root["image_path"] = imagePath;
-
-    // 序列化所有节点
-    QJsonArray nodesJson;
-    for (auto* n : canvas->nodes()) {
-        QJsonObject nj;
-        nj["op"]       = n->opName();
-        nj["display"]  = n->displayName();
-        nj["category"] = n->category();
-        nj["x"]        = n->pos().x();
-        nj["y"]        = n->pos().y();
-        nj["params"]   = n->params();
-        nj["uuid"]     = n->uuid().toString(QUuid::WithoutBraces);  // === M6 ===
-        nodesJson.append(nj);
-    }
-    root["nodes"] = nodesJson;
-
-    // === M6: 边按 UUID 引用 ===
-    // 旧版按 op 名 + FIFO 匹配,两个同名 color_segment 会连错 ——
-    // UUID 是唯一身份,同名节点也能精确指认。
-    QJsonArray edgesJson;
-    for (auto* c : canvas->connections()) {
-        if (!c->fromNode() || !c->toNode()) continue;
-        QJsonObject ej;
-        ej["from"] = c->fromNode()->uuid().toString(QUuid::WithoutBraces);
-        ej["to"]   = c->toNode()->uuid().toString(QUuid::WithoutBraces);
-        edgesJson.append(ej);
-    }
-    root["edges"] = edgesJson;
-
-    return QJsonDocument(root);
-}
-
-static bool pipelineFromJson(PipelineView* canvas, const QJsonDocument& doc,
-                             std::function<void(const QString&)> logFn,
-                             std::function<OperatorBase*(const QString&)> factoryFn,
-                             QString& errOut) {
-    if (!doc.isObject()) { errOut = "JSON 根不是对象"; return false; }
-    QJsonObject root = doc.object();
-    if (!root.contains("nodes") || !root["nodes"].isArray()) {
-        errOut = "缺少 nodes 数组";
-        return false;
-    }
-
-    canvas->clearPipeline();
-
-    // === M6: 两种索引 ===
-    // uuidIndex: 新版文件按 UUID 精确指认(同名节点也不歧义)
-    // opIndex:   旧版文件(无 uuid 字段)按 op 名 FIFO 兜底
-    QHash<QUuid, OperatorNode*> uuidIndex;
-    QHash<QString, QList<OperatorNode*>> opIndex;
-
-    // 1. 按数组顺序重建节点
-    QJsonArray nodesJson = root["nodes"].toArray();
-    int created = 0, skipped = 0;
-    for (const auto& v : nodesJson) {
-        QJsonObject nj = v.toObject();
-        QString opName = nj["op"].toString();
-        OperatorBase* op = factoryFn(opName);
-        if (!op) {
-            logFn(QString("[Load] 跳过未知算子: %1").arg(opName));
-            ++skipped;
-            continue;
-        }
-        // 用 JSON 里的 display/category（没有则用算子默认）
-        QString display  = nj.value("display").toString(op->displayName());
-        QString category = nj.value("category").toString(op->category());
-        double x = nj.value("x").toDouble(100);
-        double y = nj.value("y").toDouble(200);
-        OperatorNode* node = canvas->addNode(opName, display, category, {x, y});
-        // 恢复参数
-        QJsonObject params = nj.value("params").toObject();
-        if (!params.isEmpty()) node->setParams(params);
-        // 恢复 UUID(旧文件没有则保留自动生成的)
-        const QString uuidStr = nj["uuid"].toString();
-        if (!uuidStr.isEmpty()) {
-            const QUuid id = QUuid::fromString(uuidStr);
-            if (!id.isNull()) {
-                node->setUuid(id);
-                uuidIndex.insert(id, node);
-            }
-        }
-        opIndex[opName].append(node);
-        delete op;  // factory new 出来的临时实例
-        ++created;
-    }
-
-    // 2. 重建连线:有 UUID 用 UUID,没有则退回 op 名 FIFO
-    QJsonArray edgesJson = root.value("edges").toArray();
-    int linked = 0, edgeSkip = 0;
-    for (const auto& v : edgesJson) {
-        QJsonObject ej = v.toObject();
-        QString fromKey = ej["from"].toString();
-        QString toKey   = ej["to"].toString();
-
-        const QUuid fromId = QUuid::fromString(fromKey);
-        const QUuid toId   = QUuid::fromString(toKey);
-        const bool useUuid = !fromId.isNull() && !toId.isNull();
-
-        OperatorNode* fromN = nullptr;
-        OperatorNode* toN   = nullptr;
-
-        if (useUuid) {
-            fromN = uuidIndex.value(fromId, nullptr);
-            toN   = uuidIndex.value(toId, nullptr);
-        } else {
-            // 旧格式:from/to 存的是 op 名
-            if (opIndex.contains(fromKey) && !opIndex[fromKey].isEmpty())
-                fromN = opIndex[fromKey].takeFirst();
-            if (opIndex.contains(toKey) && !opIndex[toKey].isEmpty())
-                toN = opIndex[toKey].takeFirst();
-        }
-
-        if (!fromN || !toN) {
-            logFn(QString("[Load] 边的端点缺失: %1 → %2").arg(fromKey, toKey));
-            ++edgeSkip;
-            continue;
-        }
-        canvas->addConnection(fromN, toN);
-        ++linked;
-    }
-
-    logFn(QString("[Load] 完成: 创建 %1 个节点(跳过 %2),连线 %3 条(跳过 %4)")
-        .arg(created).arg(skipped).arg(linked).arg(edgeSkip));
-    return true;
-}
 
 // ============================================================
 // 算子工厂:见 operators/operator_factory.cpp 的 w7::createOperatorByName
@@ -766,8 +630,12 @@ void MainWindow::loadProjectFrom(const QString& path) {
     QString loadErr;
     bool ok = pipelineFromJson(m_canvas, doc,
         [this](const QString& s){ appendLog(s); },
-        [](const QString& name) -> OperatorBase* {
-            return w7::createOperatorByName(name);
+        [](const QString& name) -> w7::OpDefaults {
+            // 这里 new 算子只为了问"认不认识这个名字"和它的显示名/分类,
+            // 读完就扔 —— 所以套 unique_ptr,漏 delete 的写法不可能发生。
+            std::unique_ptr<OperatorBase> op(w7::createOperatorByName(name));
+            if (!op) return {};
+            return {true, op->displayName(), op->category()};
         },
         loadErr);
     if (!ok) {

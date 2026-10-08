@@ -75,6 +75,8 @@ set(SOURCES
     pipeline_view.cpp
     operator_node.cpp
     connection_line.cpp
+    pipeline_serialize.cpp # 存盘/读盘:边要记两端方向,否则竖线存一次就躺了
+    pipeline_serialize.h
     connection_payload.h   # 头文件,列出来是为了 IDE 里能跳转 + 改完能触发重编
     select_delete_plan.h   # 批量删除的"计划"层:所有裸指针读取只发生在这一个函数里
     operator_library_groups.h  # 算子库分组:不变式是"没有算子会消失"
@@ -203,6 +205,8 @@ qt_add_executable(w7_undo_test
     pipeline_view.cpp
     operator_node.cpp
     connection_line.cpp
+    # 存盘/读盘要能无头跑,才能测"竖线存一次再打开还竖着"
+    pipeline_serialize.cpp
     commands/command.cpp
     commands/node_commands.cpp
     commands/edge_commands.cpp

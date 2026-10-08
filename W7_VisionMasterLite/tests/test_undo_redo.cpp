@@ -32,6 +32,7 @@
 #include "commands/node_commands.h"
 #include "commands/edge_commands.h"
 #include "select_delete_plan.h"   // 批量删除的计划层(纯函数,头文件内联)
+#include "pipeline_serialize.h"   // 存盘/读盘(存/读两端的端口方向)
 
 using namespace w7;
 
@@ -579,6 +580,304 @@ static void test_delete_plan_roundtrip() {
 }
 
 // ============================================================
+// 16-19. 存盘 / 读盘:连线的两端方向
+//
+// ------------------------------------------------------------
+// 这组用例锁的缺陷:
+// ============================================================
+//   v1.0 的存盘只记了"这条线连着谁和谁"(from / to 两个 UUID),
+//   **没记它是从哪个口拉出来的**。加载时一律按默认的
+//   右出 → 左进 重画。
+//
+//   所以:用户从上一个节点的**下边**拉出去、从下一个节点的**上边**接进来
+//   画的那条竖线,存一次、再打开,就变成一条横线了 ——
+//   而且不报错、不打日志,连图都照样显示。你只会觉得"这软件有点怪"。
+//
+// ------------------------------------------------------------
+// 为什么这类 bug 特别难靠肉眼发现:
+//   方向存错了之后,**线还在、节点还在、连线关系还在**,
+//   只有走向变了。不对照着截图一像素一像素比,根本看不出来。
+//   而"存盘 → 重开 → 变成另一个样子"是所有存盘 bug 里最常见的一类。
+// ============================================================
+
+// ------------------------------------------------------------
+// 一个假的算子工厂。
+// pipelineFromJson 不认识 OperatorBase(它只认名字和标签),
+// 所以这里自己编一张注册表 —— 也正因为不 include operator_base.h,
+// 这个测试目标才能保持"零 OpenCV"。
+// ------------------------------------------------------------
+static w7::OpDefaults fakeFactory(const QString& name) {
+    struct Row { const char* n; const char* d; const char* c; };
+    static const Row table[] = {
+        {"image_source_dir", "文件夹批量图像", "acquisition"},
+        {"color_segment",    "颜色分割",       "detection"},
+        {"blob_count",       "Blob 计数",      "detection"},
+        {"count_check",      "数量判定",       "detection"},
+    };
+    for (const auto& r : table)
+        if (name == QLatin1String(r.n))
+            return {true, QString::fromUtf8(r.d), QString::fromUtf8(r.c)};
+    return {};   // 不认识 → known=false → 该节点被跳过
+}
+
+static QStringList g_loadLog;   // 收集 pipelineFromJson 打的日志
+
+static bool fakeLoad(PipelineView* cv, const QJsonDocument& doc, QString& err) {
+    g_loadLog.clear();
+    return pipelineFromJson(cv, doc,
+        [](const QString& s){ g_loadLog.append(s); },
+        fakeFactory, err);
+}
+
+// 把 JSON 里的 from_side / to_side 抹掉 —— 模拟 v1.0 的旧文件。
+// 这既是"老文件兼容"用例的输入,也顺带当了对照组:
+// 老文件加载出来的线确实是默认方向,和修复前的行为一模一样。
+static QJsonDocument stripSides(const QJsonDocument& doc) {
+    QJsonObject root = doc.object();
+    QJsonArray edges;
+    for (const auto& v : root["edges"].toArray()) {
+        QJsonObject e = v.toObject();
+        e.remove("from_side");
+        e.remove("to_side");
+        edges.append(e);
+    }
+    root["edges"] = edges;
+    return QJsonDocument(root);
+}
+
+static QString sideName(w7::OperatorNode::PortSide s) {
+    switch (s) {
+        case w7::OperatorNode::PortSide::Left:   return "Left";
+        case w7::OperatorNode::PortSide::Right:  return "Right";
+        case w7::OperatorNode::PortSide::Top:    return "Top";
+        case w7::OperatorNode::PortSide::Bottom: return "Bottom";
+    }
+    return "?";
+}
+
+// ------------------------------------------------------------
+// 用例 16:竖线往返 —— 这就是 bug 的本体
+// ------------------------------------------------------------
+static void test_vertical_edge_survives_roundtrip() {
+    beginCase("16. 竖线(Bottom→Top)存一次再打开,还是竖的");
+    PipelineView cv;
+
+    auto* a = addPlain(&cv, "image_source_dir", {0, 0});
+    auto* b = addPlain(&cv, "color_segment",    {0, 200});   // 竖着摆
+    cv.addConnection(a, b,
+                     OperatorNode::PortSide::Bottom,   // 从 A 的**下边**拉出去
+                     OperatorNode::PortSide::Top);      // 接进 B 的**上边**
+
+    const QJsonDocument doc = pipelineToJson(&cv, "D:/imgs/pcb.png");
+
+    // 文件里确实写下了方向
+    const QJsonObject e0 = doc.object()["edges"].toArray().first().toObject();
+    check(e0.contains("from_side") && e0.contains("to_side"),
+          "边的 JSON 里带上了 from_side / to_side 两个字段");
+    checkEq(e0.value("from_side").toInt(-1), 3, "from_side 存的是 Bottom(=3)");
+    checkEq(e0.value("to_side").toInt(-1),   2, "to_side   存的是 Top(=2)");
+
+    // --- 重新加载到一个空画布 ---
+    PipelineView cv2;
+    QString err;
+    const bool ok = fakeLoad(&cv2, doc, err);
+    check(ok, "读盘成功");
+    checkEq(cv2.connections().size(), 1, "读回来还是 1 条线");
+
+    ConnectionLine* back = cv2.connections().isEmpty() ? nullptr
+                                                       : cv2.connections().first();
+    check(back != nullptr, "取到读回来的那条线");
+    if (back) {
+        check(back->fromSide() == OperatorNode::PortSide::Bottom &&
+              back->toSide()   == OperatorNode::PortSide::Top,
+              QString("方向保住了:实际是 %1→%2(期望 Bottom→Top)")
+                  .arg(sideName(back->fromSide()), sideName(back->toSide())));
+    }
+
+    // --- 对照组:同一个文件抹掉两个字段(= v1.0 旧文件)---
+    // 老文件加载出来的线一定是默认的 右出→左进,和修复前完全一致。
+    // 这条要是也过了,说明我的断言根本测不到东西(比如断言写反了)。
+    PipelineView cvOld;
+    QString errOld;
+    fakeLoad(&cvOld, stripSides(doc), errOld);
+    ConnectionLine* old = cvOld.connections().isEmpty() ? nullptr
+                                                        : cvOld.connections().first();
+    check(old != nullptr, "对照:旧文件也能加载");
+    check(old && old->fromSide() == OperatorNode::PortSide::Right &&
+               old->toSide()   == OperatorNode::PortSide::Left,
+          "对照:没有方向字段时退回 右出→左进 —— 前提属实(旧文件确实会躺成横线)");
+}
+
+// ------------------------------------------------------------
+// 用例 17:四个方向一个都不能串
+// ------------------------------------------------------------
+static void test_all_four_sides_roundtrip() {
+    beginCase("17. 四种方向分别往返,不能串");
+    struct Case { OperatorNode::PortSide from, to; };
+    const Case cases[] = {
+        {OperatorNode::PortSide::Right,  OperatorNode::PortSide::Left},
+        {OperatorNode::PortSide::Bottom, OperatorNode::PortSide::Top},
+        {OperatorNode::PortSide::Bottom, OperatorNode::PortSide::Left},
+        {OperatorNode::PortSide::Right,  OperatorNode::PortSide::Top},
+    };
+
+    for (const auto& c : cases) {
+        PipelineView cv;
+        auto* a = addPlain(&cv, "image_source_dir", {0, 0});
+        auto* b = addPlain(&cv, "color_segment",    {100, 100});
+        cv.addConnection(a, b, c.from, c.to);
+
+        PipelineView cv2;
+        QString err;
+        fakeLoad(&cv2, pipelineToJson(&cv, ""), err);
+
+        const QString want = QString("%1→%2").arg(sideName(c.from), sideName(c.to));
+        ConnectionLine* back = cv2.connections().isEmpty() ? nullptr
+                                                          : cv2.connections().first();
+        check(back && back->fromSide() == c.from && back->toSide() == c.to,
+              QString("%1 往返不变").arg(want));
+    }
+}
+
+// ------------------------------------------------------------
+// 用例 18:parseSide 的边界 —— 尤其是"缺字段"不能被当成 Left
+// ------------------------------------------------------------
+//
+// 这里埋着一个很容易写错的坑:
+//
+//     QJsonValue v;              // 字段不存在
+//     v.toInt();                 // → 0
+//     0 又是 Left 的合法编码     // → 结论:这是条 Left 线
+//
+// 也就是说,用 toInt() 判断"字段有没有"会把**所有缺字段的边**
+// 全部误判成 Left 线。而 v1.0 的默认是 Right —— 老文件会被悄悄改形状。
+// 所以必须先 isDouble()。这条断言就是钉这个坑的。
+static void test_parse_side_edges() {
+    beginCase("18. 方向字段的解析:缺失 / 越界 / 合法");
+
+    const OperatorNode::PortSide defR = OperatorNode::PortSide::Right;
+    const OperatorNode::PortSide defL = OperatorNode::PortSide::Left;
+
+    // --- 缺失 ---
+    const QJsonObject noField;
+    check(parseSide(noField.value("from_side"), defR) == defR,
+          "字段缺失 → 用 fallback(Right),不是被当成 0=Left");
+    check(!noField.value("from_side").isDouble(),
+          "对照:缺失字段 isDouble() 为 false(所以 toInt() 不能用来判存在)");
+
+    // --- 合法值 0..3 ---
+    check(parseSide(QJsonValue(0), defR) == OperatorNode::PortSide::Left,
+          "0 → Left(即使 fallback 是 Right,合法的 0 也必须被尊重)");
+    check(parseSide(QJsonValue(1), defL) == OperatorNode::PortSide::Right,
+          "1 → Right");
+    check(parseSide(QJsonValue(2), defL) == OperatorNode::PortSide::Top,
+          "2 → Top");
+    check(parseSide(QJsonValue(3), defL) == OperatorNode::PortSide::Bottom,
+          "3 → Bottom");
+
+    // --- 越界 / 类型不对:退回 fallback,但不能让整条边加载失败 ---
+    check(parseSide(QJsonValue(99),   defR) == defR, "99(越界) → fallback");
+    check(parseSide(QJsonValue(-1),   defL) == defL, "-1(越界) → fallback");
+    check(parseSide(QJsonValue("Top"), defR) == defR,
+          "写成字符串 → fallback(不崩就行)");
+
+    // --- 反向方向:老文件必须保持"右出→左进",不能变成 Left→Left ---
+    PipelineView cv;
+    auto* a = addPlain(&cv, "image_source_dir", {0, 0});
+    auto* b = addPlain(&cv, "color_segment",    {200, 0});
+    cv.addConnection(a, b);   // 用默认参数画一条横线
+
+    PipelineView cvOld;
+    QString err;
+    fakeLoad(&cvOld, stripSides(pipelineToJson(&cv, "")), err);
+    ConnectionLine* old = cvOld.connections().isEmpty() ? nullptr
+                                                        : cvOld.connections().first();
+    check(old && old->fromSide() == OperatorNode::PortSide::Right &&
+               old->toSide()   == OperatorNode::PortSide::Left,
+          "老文件的横线仍然是 右出→左进(没被误判成 Left→Left)");
+}
+
+// ------------------------------------------------------------
+// 用例 19:搬出 mainwindow 之后,读盘该做的事一样没少
+// ------------------------------------------------------------
+// 这次为了能无头测,把 pipelineToJson / pipelineFromJson 从 mainwindow.cpp
+// 搬到了独立文件。搬文件本身是有风险的 —— 顺手把"读盘没退化"
+// 一起钉住:老格式(按 op 名 FIFO 匹配)、未知算子跳过、参数/UUID/位置还原。
+// ------------------------------------------------------------
+static void test_load_still_full_featured() {
+    beginCase("19. 搬出 mainwindow 之后,读盘没退化");
+    PipelineView cv;
+    auto* a = addPlain(&cv, "image_source_dir", {11, 22});
+    auto* b = addPlain(&cv, "color_segment",    {333, 444});
+    a->setParams(QJsonObject{{"threshold", 42}});
+    const QUuid bu = b->uuid();
+    cv.addConnection(a, b, OperatorNode::PortSide::Right, OperatorNode::PortSide::Left);
+
+    const QJsonDocument doc = pipelineToJson(&cv, "D:/imgs/a.png");
+    check(doc.object().value("version").toString() == "1.1",
+          "格式版本标成 1.1(老文件读的时候没人查这个字段,只是留个记录)");
+    check(doc.object().value("image_path").toString() == "D:/imgs/a.png",
+          "image_path 存下来了");
+
+    // --- 正常路径 ---
+    PipelineView cv2;
+    QString err;
+    check(fakeLoad(&cv2, doc, err), "读盘成功: " + err);
+    checkEq(cv2.nodes().size(), 2, "2 个节点");
+    checkEq(cv2.connections().size(), 1, "1 条线");
+
+    OperatorNode* backB = cv2.findNodeByUuid(bu);
+    check(backB != nullptr, "按 UUID 找回原来的 B(同名节点也不会指错)");
+    if (backB) {
+        checkEq(int(backB->pos().x()), 333, "位置 x 还原");
+        checkEq(int(backB->pos().y()), 444, "位置 y 还原");
+    }
+    OperatorNode* backA = cv2.connections().isEmpty() ? nullptr
+                                                      : cv2.connections().first()->fromNode();
+    check(backA && backA->params().value("threshold").toInt() == 42,
+          "参数原样还原");
+
+    // --- 未知算子:跳过,不能整个读盘失败 ---
+    QJsonObject root = doc.object();
+    QJsonArray nodes = root["nodes"].toArray();
+    QJsonObject ghost = nodes.first().toObject();
+    ghost["op"] = "no_such_operator_xyz";
+    nodes.append(ghost);
+    root["nodes"] = nodes;
+
+    PipelineView cv3;
+    QString err3;
+    check(fakeLoad(&cv3, QJsonDocument(root), err3),
+          "含未知算子的文件仍能读(不是整个失败)");
+    checkEq(cv3.nodes().size(), 2, "未知算子被跳过,只留下 2 个真节点");
+    bool logged = false;
+    for (const QString& s : g_loadLog) if (s.contains("no_such_operator_xyz")) logged = true;
+    check(logged, "跳过的那个算子在日志里留了名字(不是静默丢弃)");
+
+    // --- v1.0 老格式:from/to 存的是 op 名,没有 uuid 字段 ---
+    QJsonObject legacy;
+    legacy["version"] = "1.0";
+    legacy["image_path"] = "";
+    legacy["nodes"] = QJsonArray{
+        QJsonObject{{"op","image_source_dir"},{"x",0},{"y",0}},
+        QJsonObject{{"op","color_segment"},{"x",200},{"y",0}},
+    };
+    legacy["edges"] = QJsonArray{
+        QJsonObject{{"from","image_source_dir"},{"to","color_segment"}},
+    };
+    PipelineView cv4;
+    QString err4;
+    check(fakeLoad(&cv4, QJsonDocument(legacy), err4),
+          "v1.0 老文件(按 op 名匹配)仍能读:" + err4);
+    checkEq(cv4.connections().size(), 1, "老文件的连线没丢");
+    ConnectionLine* l4 = cv4.connections().isEmpty() ? nullptr
+                                                     : cv4.connections().first();
+    check(l4 && l4->fromSide() == OperatorNode::PortSide::Right &&
+               l4->toSide()   == OperatorNode::PortSide::Left,
+          "老文件的连线是默认 右出→左进");
+}
+
+// ============================================================
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");   // headless
     // Windows 控制台默认 GBK,中文断言信息会乱码 —— 强制 UTF-8
@@ -602,6 +901,10 @@ int main(int argc, char* argv[]) {
     test_connection_payload_codec();
     test_delete_plan_classifies_edges();
     test_delete_plan_roundtrip();
+    test_vertical_edge_survives_roundtrip();
+    test_all_four_sides_roundtrip();
+    test_parse_side_edges();
+    test_load_still_full_featured();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;

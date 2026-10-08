@@ -45,7 +45,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 12 个无头回归测试(521 断言)
+├── tests/                      # 12 个无头回归测试(559 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -231,7 +231,9 @@ CMake 会真实探测并在 configure 时打印结果:
 ### 持久化
 - ✅ Save / Load JSON → `.sol.json`(节点 + 连线 + 参数 + UUID + 图像路径)
 - ✅ **节点 UUID**:`.sol.json` 按 UUID 引用边,同名节点也能精确指认
-- ✅ 旧格式兼容:无 `uuid` 字段的老文件退回"op 名 + FIFO"匹配
+- ✅ **连线两端的端口方向**:`from_side` / `to_side`,竖线存一次再打开还是竖的
+- ✅ 旧格式兼容:无 `uuid` 字段的老文件退回"op 名 + FIFO"匹配;
+  无 `from_side`/`to_side` 的 v1.0 文件退回"右出 → 左进"(日志里报一句)
 - ✅ Load 新工程自动清空撤销栈(旧 UUID 在新画布里已无意义)
 - ✅ 最近工程列表
 
@@ -250,17 +252,17 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,521 断言 / 12 个套件)
+## 🧪 回归测试(无头,559 断言 / 12 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
-# 一次跑完全部 11 个套件
+# 一次跑完全部 12 个套件
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build --output-on-failure'
 ```
 
 | 套件 | 断言 | 测什么 | 需要 |
 |---|---|---|---|
-| `undo_redo` | 95 | 增删改节点/连线的往返、参数保留、同名节点 UUID 精确指认、节点消失后命令静默 no-op、**连线 payload 编解码**、**批量删除的记账分类**、**撤销栈里不许有空命令** | Qt(不链 OpenCV) |
+| `undo_redo` | 133 | 增删改节点/连线的往返、参数保留、同名节点 UUID 精确指认、节点消失后命令静默 no-op、**连线 payload 编解码**、**批量删除的记账分类**、**撤销栈里不许有空命令**、**竖线存一次再打开还是竖的**、**老文件没有方向字段时退回默认** | Qt(不链 OpenCV) |
 | `pcb_operators` | 43 | **W6 那 8 张样本图**:baseline 零缺陷,7 张缺陷图各自命中自己那类、**没有判定依据时拒绝判定而不是报 PASS** | OpenCV |
 | `dl_postprocess` | 49 | letterbox 补边/缩放、NMS 阈值、YOLOv5-v8 布局解析、退化输入不越界 | OpenCV |
 | `image_sources` | 20 | 帧循环契约(按 frame_index 真的换帧/换张)、坏输入不崩 | OpenCV |
@@ -536,6 +538,85 @@ if (parent) { 建树项 }
 > 值得测的不是"dl_infer 出现了"（那是自证），而是
 > **"没有算子会消失"这个不变式对任何输入都成立** —— 包括传一个分组表里
 > 根本没有的分类进去。变异验证：把兜底改回静默丢弃 → **8 条红**。
+
+### 竖线存一次就躺下了(存盘只记了"谁连谁")
+
+画布支持 4 个端口(左 / 右 / 上 / 下),所以你能从上一个节点的**下边**拉出去、
+从下一个节点的**上边**接进来,画一条竖线。
+
+问题出在存盘。v1.0 的边只有两个字段:
+
+```json
+"edges": [ { "from": "…uuid…", "to": "…uuid…" } ]
+```
+
+**只记了谁连谁,没记它是从哪个口拉出来的。** 加载时一律按默认的
+`addConnection(from, to)` 重画 —— 而它的默认参数正是 `Right → Left`。
+
+结果:**竖线存一次、再打开,就变成横线了。** 不报错、不打日志,节点还在、
+连线关系还在,只有走向变了 —— 你只会觉得"这软件有点怪"。
+
+修法很小:边里多写两个字段,读的时候校验范围。
+
+```json
+"edges": [ { "from": "…", "to": "…", "from_side": 3, "to_side": 2 } ]
+```
+
+**兼容性天然成立,不用升版本号也不用迁移**:老文件没有这两个字段,
+读出来是 `Undefined`,走 fallback 退回 `Right/Left` —— 和 v1.0 行为完全一致。
+
+#### 这里埋着一个很容易写错的坑
+
+```cpp
+QJsonValue v = obj.value("from_side");   // 字段不存在 → Undefined
+v.toInt();                                 // → 0
+```
+
+而 `0` 恰好是 `Left` 的合法编码。**于是所有缺字段的边都会被误判成 Left 线** ——
+v1.0 的默认是 `Right`,老文件会被悄悄改成 `Left → Left`,比原来的 bug 更隐蔽。
+
+所以必须先 `isDouble()`:
+
+```cpp
+inline OperatorNode::PortSide parseSide(const QJsonValue& v, OperatorNode::PortSide fallback) {
+    if (!v.isDouble()) return fallback;      // ← 这一行就是"缺字段"的判据
+    ...
+}
+```
+
+> 变异验证 M14:把 `isDouble()` 那行注释掉 → **5 条红**,其中一条正是
+> "老文件的横线仍然是 右出→左进"。`M13`(存盘不写这两个字段)→ **7 条红**。
+
+#### 顺手做的另一件事:把存盘搬出 mainwindow
+
+`pipelineToJson` / `pipelineFromJson` 以前是 `mainwindow.cpp` 里的 `static` 函数,
+无头测试编不动(`mainwindow.h` 拖着整个 QtWidgets)。但它们**本来就设计成可测的** ——
+`logFn` 和 `factoryFn` 都是传进来的,不碰任何全局状态。搬出来只是让测试够得着。
+
+搬的过程中改了一处签名。原来工厂返回 `OperatorBase*`:
+
+```cpp
+std::function<OperatorBase*(const QString&)> factoryFn;
+```
+
+读一个文件要先 `new` 一个算子、读两个字符串、立刻 `delete`。而
+`operator_base.h` 里 `#include <opencv2/opencv.hpp>` —— 于是 `pipeline_serialize.cpp`
+也跟着依赖 OpenCV,`w7_undo_test` 就得链接 OpenCV,**建一次测试目标慢一大截**。
+
+改成返回一个 POD 就干净了:
+
+```cpp
+struct OpDefaults {
+    bool    known = false;   // 认不认识这个算子名
+    QString display;
+    QString category;
+};
+```
+
+存盘模块从此**不认识算子**,只认名字和标签。
+
+> 现有 12 个套件里,`w7_undo_test` 是唯一承诺"零 OpenCV、1 秒跑完"的那个,
+> 这个属性值得用一次签名改动保住。
 
 ### 三个测量算子的测试为什么长这样
 
