@@ -45,7 +45,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 11 个无头回归测试(461 断言)
+├── tests/                      # 11 个无头回归测试(484 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -250,7 +250,7 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,461 断言 / 11 个套件)
+## 🧪 回归测试(无头,484 断言 / 11 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
@@ -260,7 +260,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 
 | 套件 | 断言 | 测什么 | 需要 |
 |---|---|---|---|
-| `undo_redo` | 72 | 增删改节点/连线的往返、参数保留、同名节点 UUID 精确指认、节点消失后命令静默 no-op、**连线 payload 编解码** | Qt(不链 OpenCV) |
+| `undo_redo` | 95 | 增删改节点/连线的往返、参数保留、同名节点 UUID 精确指认、节点消失后命令静默 no-op、**连线 payload 编解码**、**批量删除的记账分类**、**撤销栈里不许有空命令** | Qt(不链 OpenCV) |
 | `pcb_operators` | 43 | **W6 那 8 张样本图**:baseline 零缺陷,7 张缺陷图各自命中自己那类、**没有判定依据时拒绝判定而不是报 PASS** | OpenCV |
 | `dl_postprocess` | 49 | letterbox 补边/缩放、NMS 阈值、YOLOv5-v8 布局解析、退化输入不越界 | OpenCV |
 | `image_sources` | 20 | 帧循环契约(按 frame_index 真的换帧/换张)、坏输入不崩 | OpenCV |
@@ -445,6 +445,67 @@ scene 就写进去了 —— 节点被拽飞。这跟用户"点错了就发现�
 >
 > 另外还反向验证了一次:把 `mouseReleaseEvent` 整个短路,对照组断言
 > ("正常拖动节点仍要产生 nodeMoved")立刻变红,确保修复没有过头伤到移动功能。
+
+### 两处 use-after-free（"选中节点按 Delete 会崩"）
+
+和上面那批 bug 完全相反：这两个**会崩**。崩反而是好事——你能立刻知道。
+
+**UAF-1：`deleteSelectedItems()`**
+
+```cpp
+for (auto* node : nodesToDelete) doDeleteNode(node);   // ← 节点和它的线在这里就没了
+for (auto* line : connsToDelete) {
+    if (line->fromNode() == n || line->toNode() == n)  // ← 读已释放的对象
+```
+
+`PipelineView::removeNode` 最后两行是 `qDeleteAll(linesToDelete); delete node;`。
+第一遍删完节点，第二遍遍历的 `line` 里有一部分**正是刚被释放的那些**。
+
+**UAF-2：`onNodeDeleteRequested()`**
+
+```cpp
+doDeleteNode(node);
+if (node) m_stepOutputs.remove(node->uuid());   // ← if 只挡 nullptr，挡不住"已释放"
+```
+
+修法都是同一个：**需要的信息在删除之前取出来**。UAF-2 取 UUID，UAF-1 把整个"算计划"
+抽成纯函数 `planSelectDelete()`，返回 UUID 列表，执行阶段一个裸指针都不碰。
+
+#### 先证明 bug 真的存在，再证明修好了
+
+"这看起来像 use-after-free"不是证据。写了个一次性探针：删完之后用同尺寸对象
+把那块堆内存占掉并填毒（模拟"被别人复用"，正是线上偶发崩溃的成因），然后按旧顺序走：
+
+```
+删完节点，ab 已释放。开始复用那块内存……
+现在读 line->fromNode()……
+  fromNode() = 0xdddddddddddddddd   attached = false
+  <段错误>            退出码 -1073741819 (0xC0000005)
+```
+
+三件事同时得到证实：读到的是已释放内存 → `attached` 判定失效 → 立刻崩。
+**探针验完就删**，不进仓库。
+
+> 教训：Release 下堆内存不填毒，所以这个 bug 平时**不崩**——
+> 被释放的连线对象里还留着旧指针值，读出来往往还是对的。
+> 等那块内存被复用才崩，现场也就没了。"偶尔才崩"和"从来没崩过"在这里是一回事。
+
+#### 顺带挖出来的第二个 bug：撤销栈里混进空命令
+
+原来还会给"已经被连带删除的线"再记一笔 `RemoveEdgeCmd`。那条命令执行时端点
+已经没了，是条**空命令**——用户按 Ctrl+Z 会**多按一次、什么都没发生**。
+
+我一开始以为后果是"撤销时线会重建两次"，**猜错了**：多余的 `RemoveEdgeCmd`
+在撤销栈里排在 `DeleteNodeCmd` 前面，回滚时端点还不存在，所以它是个 no-op，
+不会产生重复连线。真正能被观测到的后果只有命令条数——所以补的是
+
+```cpp
+checkEq(h.undoDepth(), 3, "撤销栈恰好 3 条命令(多一条说明有空命令混进来)");
+```
+
+> 又一次：**注释和直觉会骗人，断言不会。**
+> 如果我当时只写"撤销后连线数 == 2"，这条断言在 bug 版代码上照样是绿的，
+> 修复就等于没被验证。
 
 ### 三个测量算子的测试为什么长这样
 

@@ -31,6 +31,7 @@
 #include "connection_payload.h"   // 纯逻辑编解码,零 QtWidgets 依赖
 #include "commands/node_commands.h"
 #include "commands/edge_commands.h"
+#include "select_delete_plan.h"   // 批量删除的计划层(纯函数,头文件内联)
 
 using namespace w7;
 
@@ -441,6 +442,143 @@ static void test_connection_payload_codec() {
 }
 
 // ============================================================
+// 14. 批量删除的"计划"层
+//
+// ------------------------------------------------------------
+// 这组用例锁的是 MainWindow::deleteSelectedItems 里的两个真实缺陷:
+// ============================================================
+// (UAF) 先删节点、再遍历连线读 line->fromNode()
+//      removeNode 会把待删节点和它的连线一起 delete,第二遍遍历
+//      读的是已释放的对象。Release 下堆内存不填毒,常常还留着旧
+//      指针值 → 平时不崩;等那块内存被复用就段错误,现场消失。
+//
+// (重复记账) 沾了待删节点的线被 RemoveEdgeCmd 又记一笔,
+//      而 DeleteNodeCmd 里已经记过 —— 撤销时线会重建两次。
+//
+// ------------------------------------------------------------
+// 这两个都发生在 MainWindow 里,而 MainWindow 要真窗口 + 全套算子,
+// 无头测试编不动。所以把"算计划"这一步抽成纯函数
+// (select_delete_plan.h),这里直接测它;
+// 再照抄一遍 MainWindow 的执行顺序做端到端往返 ——
+// 执行阶段只吃 QUuid,全程不碰裸指针,这条性质由 review 保证,
+// 由下面的往返用例保证结果正确。
+// ============================================================
+
+// 照抄 MainWindow::deleteSelectedItems 的"执行阶段"。
+// 参数是 plan 里那份 UUID 列表,不是指针 —— 这是刻意的。
+static void applyPlan(PipelineView* cv, History* h,
+                      const w7::SelectDeletePlan& plan) {
+    for (const QUuid& id : plan.nodes) {
+        if (OperatorNode* n = cv->findNodeByUuid(id))
+            h->exec(new DeleteNodeCmd(cv, n));
+    }
+    for (const auto& e : plan.edges)
+        h->exec(new RemoveEdgeCmd(cv, e.from, e.to));
+}
+
+static void test_delete_plan_classifies_edges() {
+    beginCase("14. 批量删除:哪些线单独记账、哪些随节点连带删");
+    PipelineView cv;
+
+    auto* a = addPlain(&cv, "image_source_dir", {0, 0});
+    auto* b = addPlain(&cv, "color_segment",  {200, 0});
+    auto* c = addPlain(&cv, "blob_count",     {400, 0});
+    auto* d = addPlain(&cv, "count_check",    {400, 200});
+    auto* ab = cv.addConnection(a, b);   // 沾 A 和 B
+    auto* cd = cv.addConnection(c, d);   // 完全独立
+
+    // --- 只选节点 A、B ---
+    {
+        const auto p = w7::planSelectDelete({a, b}, {}, cv.connections());
+        checkEq(p.nodes.size(), 2, "两个待删节点都进了计划");
+        checkEq(p.absorbedEdges, 1, "A→B 这条线算连带删除");
+        checkEq(p.edges.size(), 0, "连带删的线不该再单独记一笔 RemoveEdgeCmd");
+        checkEq(p.totalEdges(), 1, "日志口径:一共少 1 条线");
+    }
+
+    // --- 只选那条独立线 ---
+    {
+        const auto p = w7::planSelectDelete({}, {cd}, cv.connections());
+        checkEq(p.nodes.size(), 0, "没选节点");
+        checkEq(p.edges.size(), 1, "独立线要单独记一笔");
+        checkEq(p.absorbedEdges, 0, "没有被连带删除的线");
+        check(p.edges.first().from == c->uuid() && p.edges.first().to == d->uuid(),
+              "独立线的端点 UUID 正确");
+    }
+
+    // --- 节点 + 独立线混选 ---
+    {
+        const auto p = w7::planSelectDelete({a}, {cd}, cv.connections());
+        checkEq(p.nodes.size(), 1, "节点进了计划");
+        checkEq(p.edges.size(), 1, "独立线也进了计划");
+        checkEq(p.totalEdges(), 2, "A→B 连带 + C→D 单独 = 2 条");
+    }
+
+    // --- 关键:把"会被连带删除的线"也一起选中 ---
+    // 用户框选时很容易连带框到那条线。它已经记在 DeleteNodeCmd 里了,
+    // 再记一笔 RemoveEdgeCmd 的话,撤销会重建出两条一样的线。
+    {
+        const auto p = w7::planSelectDelete({a, b}, {ab}, cv.connections());
+        checkEq(p.edges.size(), 0,
+                "已随节点连带删除的线,即使被选中也不再单独记账(否则撤销会重建出重复连线)");
+    }
+
+    // --- 空输入 / 空指针 ---
+    {
+        const auto p = w7::planSelectDelete({}, {}, {});
+        check(p.isEmpty(), "空输入 → 空计划");
+    }
+    {
+        const auto p = w7::planSelectDelete({nullptr}, {nullptr}, {nullptr});
+        check(p.isEmpty(), "nullptr 输入不崩且视为空");
+    }
+}
+
+// 端到端:执行计划 → 撤销到底 → 必须精确还原
+// 这是"重复记账"缺陷唯一能被观测到的后果,所以必须真的跑一遍。
+static void test_delete_plan_roundtrip() {
+    beginCase("15. 批量删除:撤销到底精确还原(重复连线的后果)");
+    PipelineView cv;
+    History h;
+
+    auto* a = addPlain(&cv, "image_source_dir", {0, 0});
+    auto* b = addPlain(&cv, "color_segment",  {200, 0});
+    auto* c = addPlain(&cv, "blob_count",     {400, 0});
+    auto* d = addPlain(&cv, "count_check",    {400, 200});
+    auto* ab = cv.addConnection(a, b);
+    auto* cd = cv.addConnection(c, d);
+
+    // 框选 A、B,连带框到 A→B 那条线
+    const auto plan = w7::planSelectDelete({a, b}, {ab, cd}, cv.connections());
+    applyPlan(&cv, &h, plan);
+
+    checkEq(cv.nodes().size(), 2, "删完剩 C、D");
+    checkEq(cv.connections().size(), 0, "两条线都没了");
+
+    // 命令条数也要对:2 个 DeleteNodeCmd + 1 个独立线的 RemoveEdgeCmd。
+    // 沾待删节点的 A→B 不该再压一条 RemoveEdgeCmd ——
+    // 它执行时端点已经没了,是一条**空命令**:用户按 Ctrl+Z 时
+    // 会多按一次、什么都没发生。这种"撤销栈里混进空命令"很难被
+    // 察觉,因为前几次撤销看起来都正常。
+    checkEq(h.undoDepth(), 3,
+            "撤销栈恰好 3 条命令(多一条说明有空命令混进来,用户会多按一次 Ctrl+Z)");
+
+    while (h.undoDepth() > 0) h.undo();
+
+    checkEq(cv.nodes().size(), 4, "撤销到底:4 个节点全回来");
+    checkEq(cv.connections().size(), 2,
+            "撤销到底:恰好 2 条线(多了就说明同一条线被记了两笔账)");
+
+    // 对照组:用 UUID 逐条核对,不是只数个数 ——
+    // "3 条线里有 2 条重复"和"2 条线"个数一样,前者不会挂在上面那条。
+    const QUuid au = a->uuid(), bu = b->uuid(), cu = c->uuid(), du = d->uuid();
+    check(cv.findNodeByUuid(au) != nullptr, "对照:A 回来了");
+    check(cv.findNodeByUuid(cu) != nullptr, "对照:C 回来了");
+    check(cv.findConnection(au, bu) != nullptr, "对照:A→B 回来了");
+    check(cv.findConnection(cu, du) != nullptr, "对照:C→D 回来了");
+}
+
+// ============================================================
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");   // headless
     // Windows 控制台默认 GBK,中文断言信息会乱码 —— 强制 UTF-8
@@ -462,6 +600,8 @@ int main(int argc, char* argv[]) {
     test_same_name_edges_by_uuid();
     test_no_dangling_after_clear();
     test_connection_payload_codec();
+    test_delete_plan_classifies_edges();
+    test_delete_plan_roundtrip();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;

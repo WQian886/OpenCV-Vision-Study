@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 #include "operator_node.h"
 #include "connection_line.h"
+#include "select_delete_plan.h"   // 批量删除的"计划"层(见头文件里的 use-after-free 说明)
 
 #include <QDockWidget>
 #include <QToolBar>
@@ -1545,12 +1546,24 @@ void MainWindow::onNodeMoved(w7::OperatorNode* node, const QPointF& oldPos,
 // → 右键删完立刻 Run 会段错误)。这里统一走 PipelineView::removeNode,
 // 它已经实现了正确的顺序:收集关联线 → 从容器和 scene 移除 → 统一 delete。
 void MainWindow::onNodeDeleteRequested(w7::OperatorNode* node) {
+    // === UUID 必须在删除【之前】取 ===
+    // doDeleteNode 走 DeleteNodeCmd → PipelineView::removeNode,
+    // 里面最后一行就是 delete node。node 从这一刻起是悬垂指针,
+    // 后面再读 node->uuid() 是 use-after-free。
+    //
+    // 原来的写法是 `if (node) m_stepOutputs.remove(node->uuid());` ——
+    // if 只挡住了 nullptr,挡不住"已释放"。这条路径是右键删节点,
+    // 是最常走的一条删除入口。
+    if (!node) return;
+    const QUuid id = node->uuid();   // ← 先取值
+
     // === M6: 走 Command 栈,这样右键删也能 Ctrl+Z 撤销 ===
-    doDeleteNode(node);
+    doDeleteNode(node);              // ← node 在这里没了
+
     // === 每步结果查看:顺手把这一步的缓存摘掉 ===
     // 不摘也不会有人点到(uuid 唯一,菜单走的是活节点),
     // 但留着就是个永远查不到的条目,工程反复删了几十次会攒不少。
-    if (node) m_stepOutputs.remove(node->uuid());
+    m_stepOutputs.remove(id);
 }
 
 // ============================================================
@@ -1575,29 +1588,47 @@ void MainWindow::deleteSelectedItems() {
     }
 
     // === 修复 1: 收集 + 统一删除(避免循环里 delete 触发回调) ===
-    QSet<OperatorNode*>   nodesToDelete;
-    QSet<ConnectionLine*> connsToDelete;
+    QList<OperatorNode*>   nodesToDelete;
+    QList<ConnectionLine*> connsToDelete;
 
     // 第一遍:分类 selected
     for (auto* item : selected) {
         if (auto* line = dynamic_cast<ConnectionLine*>(item)) {
-            connsToDelete.insert(line);
+            connsToDelete.append(line);
         } else if (auto* node = dynamic_cast<OperatorNode*>(item)) {
-            nodesToDelete.insert(node);
+            nodesToDelete.append(node);
         }
     }
 
     // 第二遍:把"涉及待删节点"的连线也加入
+    // (它们最终由 removeNode 连带删除,不走单独的 RemoveEdgeCmd)
     for (auto* line : m_canvas->connections()) {
+        if (!line) continue;
         if (nodesToDelete.contains(line->fromNode()) ||
             nodesToDelete.contains(line->toNode())) {
-            connsToDelete.insert(line);
+            if (!connsToDelete.contains(line)) connsToDelete.append(line);
         }
     }
 
-    int delNodes = nodesToDelete.size();
-    int delConns = connsToDelete.size();
-    if (delNodes == 0 && delConns == 0) {
+    // ============================================================
+    // === 关键:计划必须在任何 delete 之前算完 ===
+    //
+    // doDeleteNode → PipelineView::removeNode,最后一行是 `delete node`,
+    // 它的所有连线在同一次调用里被 qDeleteAll 掉。
+    //
+    // 原来的代码是"先删节点,再遍历连线",第二遍读 line->fromNode()
+    // 读的是**已经释放的对象** —— 货真价实的 use-after-free。
+    // 平时不崩只是因为 Release 下堆内存不填毒,还留着旧指针值;
+    // 等那块内存被复用,现场就没了。
+    //
+    // planSelectDelete 里把指针全读成 QUuid,执行阶段一个裸指针都不碰。
+    // ============================================================
+    const w7::SelectDeletePlan plan =
+        w7::planSelectDelete(nodesToDelete, connsToDelete, m_canvas->connections());
+
+    const int delNodes = plan.nodes.size();
+    const int delConns = plan.totalEdges();
+    if (plan.isEmpty()) {
         appendLog(tr("[Delete] 未选中任何有效项"));
         return;
     }
@@ -1605,22 +1636,14 @@ void MainWindow::deleteSelectedItems() {
     // === M6: 走 Command 栈,Delete 键删除也能 Ctrl+Z 撤销 ===
     // 顺序:先删节点(DeleteNodeCmd 自己会连带删线并记录,供 undo 重建),
     // 再删"没沾任何待删节点"的独立连线。
-    for (auto* node : nodesToDelete) {
-        doDeleteNode(node);
+    // 按 UUID 回查节点,而不是直接用遍历时拿到的裸指针 ——
+    // 前一个节点被删时不会影响后一个的查找,而裸指针列表
+    // 里混着已经失效的地址。
+    for (const QUuid& id : plan.nodes) {
+        if (OperatorNode* n = m_canvas->findNodeByUuid(id)) doDeleteNode(n);
     }
-    for (auto* line : connsToDelete) {
-        bool attachedToDeletedNode = false;
-        for (auto* n : nodesToDelete) {
-            if (line->fromNode() == n || line->toNode() == n) {
-                attachedToDeletedNode = true;
-                break;
-            }
-        }
-        if (attachedToDeletedNode) continue;   // 已随节点一起删,不再单独记一笔
-        if (!line->fromNode() || !line->toNode()) continue;
-        execCommand(new w7::RemoveEdgeCmd(m_canvas,
-                                          line->fromNode()->uuid(),
-                                          line->toNode()->uuid()));
+    for (const auto& e : plan.edges) {
+        execCommand(new w7::RemoveEdgeCmd(m_canvas, e.from, e.to));
     }
     appendLog(tr("[Delete] 删除 %1 个节点,%2 条连线").arg(delNodes).arg(delConns));
 }

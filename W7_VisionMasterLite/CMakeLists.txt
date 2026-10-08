@@ -76,6 +76,7 @@ set(SOURCES
     operator_node.cpp
     connection_line.cpp
     connection_payload.h   # 头文件,列出来是为了 IDE 里能跳转 + 改完能触发重编
+    select_delete_plan.h   # 批量删除的"计划"层:所有裸指针读取只发生在这一个函数里
     run_policy.h           # Run 帧循环的三条"不许 runaway"规则,无头测试要 include
     commands/command.cpp
     commands/node_commands.cpp
