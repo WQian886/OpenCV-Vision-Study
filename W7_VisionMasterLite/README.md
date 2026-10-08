@@ -45,7 +45,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 11 个无头回归测试(484 断言)
+├── tests/                      # 12 个无头回归测试(521 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -250,7 +250,7 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,484 断言 / 11 个套件)
+## 🧪 回归测试(无头,521 断言 / 12 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
@@ -271,6 +271,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `run_policy` | 43 | **帧数封顶 / 抽帧限频 / 取消+禁重入**、日志行数封顶、封顶后重绘代价不暴涨 | Qt |
 | `template_match` | 28 | **三种匹配方法的相似度方向统一**、模板比原图大、纯色模板、非法 method、阈值真的在控 | OpenCV |
 | `detection_operators` | 42 | **HSV 数组残缺不越界**、**两个实例的 mask 不互相覆盖**、面积阈值用 `>=`、**阈值填反要说人话而不是静默全判废** | OpenCV |
+| `operator_library` | 37 | **没有算子会从算子库里消失**、旧实现确实丢了 `dl_infer`、没见过的分类也现建分组、分组不重不乱序 | QtCore |
 
 ### 默认流水线上的三个算子(为什么补这层测试)
 
@@ -506,6 +507,35 @@ checkEq(h.undoDepth(), 3, "撤销栈恰好 3 条命令(多一条说明有空命�
 > 又一次：**注释和直觉会骗人，断言不会。**
 > 如果我当时只写"撤销后连线数 == 2"，这条断言在 bug 版代码上照样是绿的，
 > 修复就等于没被验证。
+
+### 算子库那个不存在的 DL 分支
+
+补一行 `else if (dl)` 就能让 `dl_infer` 出现在算子库里。**但那样是错的**——
+它只压住这一次的症状，形态没变。
+
+原来的建树代码是硬编码的一串判断：
+
+```cpp
+if      (op.category == "acquisition")    parent = acquisition;
+else if (op.category == "positioning")    parent = positioning;
+...                                        // 一共 5 个分支
+if (parent) { 建树项 }
+```
+
+注册表里写了 `category = "dl"`。**6 个分类只认 5 个** → `parent` 停在
+`nullptr` → `if (parent)` 不成立 → 算子**凭空消失**，左边算子库里根本看不到，
+**连日志都不打一句**。
+
+这个形态的特点是：**新增一个分类不会报错、不会崩**，只会让那一类算子无声无息
+地不见了。用户看到的是"怎么没有 DL 推理"，不会想到是建树的 if 少了一个分支。
+
+所以改成 [operator_library_groups.h](W7_VisionMasterLite/operator_library_groups.h)
+里的做法：给定分类，要么落进已知分组，**要么现建一个分组**。无论传进来什么，
+没有算子会不见；现建出来的 key 回报给调用方，日志里留一句。
+
+> 值得测的不是"dl_infer 出现了"（那是自证），而是
+> **"没有算子会消失"这个不变式对任何输入都成立** —— 包括传一个分组表里
+> 根本没有的分类进去。变异验证：把兜底改回静默丢弃 → **8 条红**。
 
 ### 三个测量算子的测试为什么长这样
 

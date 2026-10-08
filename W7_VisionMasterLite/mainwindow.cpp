@@ -2,6 +2,7 @@
 #include "operator_node.h"
 #include "connection_line.h"
 #include "select_delete_plan.h"   // 批量删除的"计划"层(见头文件里的 use-after-free 说明)
+#include "operator_library_groups.h"   // 算子库分组:不变式是"没有算子会消失"
 
 #include <QDockWidget>
 #include <QToolBar>
@@ -395,24 +396,51 @@ void MainWindow::setupOperatorLibrary() {
     m_opLib->setDragDropMode(QAbstractItemView::DragOnly);
     m_opLib->setSelectionMode(QAbstractItemView::SingleSelection);
 
-    // 按类别分组
-    QTreeWidgetItem* acquisition    = new QTreeWidgetItem(m_opLib, {tr("采集 Acquisition")});
-    QTreeWidgetItem* positioning    = new QTreeWidgetItem(m_opLib, {tr("定位 Positioning")});
-    QTreeWidgetItem* measurement    = new QTreeWidgetItem(m_opLib, {tr("测量 Measurement")});
-    QTreeWidgetItem* identification = new QTreeWidgetItem(m_opLib, {tr("识别 Identification")});
-    QTreeWidgetItem* detection      = new QTreeWidgetItem(m_opLib, {tr("检测 Detection")});
+    // ============================================================
+    // 按类别分组 —— 分组逻辑在 operator_library_groups.h,
+    // 那里的不变式是"**没有算子会消失**"。
+    //
+    // 以前这里是硬编码 5 个 if/else,而 registerOperators() 里写了
+    // category = "dl"。6 个分类只认 5 个 → parent 停在 nullptr
+    // → `if (parent)` 不成立 → dl_infer 凭空消失,连日志都不打。
+    //
+    // 只补一个 `else if (dl)` 能压住这一次的症状,但形态没变:
+    // **下一个新分类还会再犯同样的静默丢失。** 所以改成兜底建组。
+    // ============================================================
+    QList<OperatorInfoLite> lite;
+    lite.reserve(m_operatorInfo.size());
+    for (const auto& op : m_operatorInfo)
+        lite.append({op.name, op.display, op.category});
 
-    for (const auto& op : m_operatorInfo) {
-        QTreeWidgetItem* parent = nullptr;
-        if      (op.category == "acquisition")    parent = acquisition;
-        else if (op.category == "positioning")    parent = positioning;
-        else if (op.category == "measurement")    parent = measurement;
-        else if (op.category == "identification") parent = identification;
-        else if (op.category == "detection")      parent = detection;
-        if (parent) {
-            auto* item = new QTreeWidgetItem(parent, {op.display});
-            item->setData(0, Qt::UserRole, op.name);
-            item->setToolTip(0, op.description);
+    QList<QPair<QString, QString>> knownGroups = {
+        {"acquisition",    tr("采集 Acquisition")},
+        {"positioning",    tr("定位 Positioning")},
+        {"measurement",    tr("测量 Measurement")},
+        {"identification", tr("识别 Identification")},
+        {"detection",      tr("检测 Detection")},
+        {"dl",             tr("深度学习 Deep Learning")},
+    };
+
+    QStringList unknownCats;
+    const auto groups = buildOperatorLibraryGroups(lite, knownGroups, &unknownCats);
+    for (const auto& cat : unknownCats) {
+        appendLog(tr("[算子库] 分类 '%1' 不在已知分组里,已现建一个 —— "
+                     "以后在 knownGroups 里给它配个显示名").arg(cat));
+    }
+
+    // 每个算子的显示名/描述还要按名字对回去 —— 建组只关心分类归属
+    QHash<QString, const OperatorInfo*> byName;
+    for (const auto& op : m_operatorInfo) byName.insert(op.name, &op);
+
+    for (const auto& g : groups) {
+        if (g.operators.isEmpty()) continue;
+        auto* groupItem = new QTreeWidgetItem(m_opLib, {g.title});
+        for (const QString& opName : g.operators) {
+            const OperatorInfo* op = byName.value(opName, nullptr);
+            if (!op) continue;
+            auto* item = new QTreeWidgetItem(groupItem, {op->display});
+            item->setData(0, Qt::UserRole, op->name);
+            item->setToolTip(0, op->description);
         }
     }
     m_opLib->expandAll();

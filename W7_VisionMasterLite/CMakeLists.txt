@@ -77,6 +77,7 @@ set(SOURCES
     connection_line.cpp
     connection_payload.h   # 头文件,列出来是为了 IDE 里能跳转 + 改完能触发重编
     select_delete_plan.h   # 批量删除的"计划"层:所有裸指针读取只发生在这一个函数里
+    operator_library_groups.h  # 算子库分组:不变式是"没有算子会消失"
     run_policy.h           # Run 帧循环的三条"不许 runaway"规则,无头测试要 include
     commands/command.cpp
     commands/node_commands.cpp
@@ -592,6 +593,34 @@ add_test(NAME template_match COMMAND w7_tpl_test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # ============================================================
+# === 算子库分组 回归测试 (headless, 纯 QtCore)
+#
+# 以前分组是硬编码的 5 个 if/else,而注册表里写了 category = "dl"。
+# 6 个分类只认 5 个 → 树节点指针停在 nullptr → `if (parent)` 不成立
+# → dl_infer 凭空消失,连日志都不打。
+#
+# 值得测的不是"dl_infer 出现了"(那是自证),而是
+# **"没有算子会消失"这个不变式对任何输入都成立** ——
+# 包括传一个分组表里根本没有的分类进去。
+#
+# 纯函数 + 只依赖 QtCore,所以这个目标只要 Qt6::Core,
+# 而且连 QApplication 都不用,起得比别套件还快。
+# ============================================================
+qt_add_executable(w7_lib_test
+    tests/test_operator_library.cpp
+)
+
+target_include_directories(w7_lib_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(w7_lib_test PRIVATE Qt6::Core)
+
+if(MSVC)
+    target_compile_options(w7_lib_test PRIVATE /utf-8)
+endif()
+
+add_test(NAME operator_library COMMAND w7_lib_test)
+
+# ============================================================
 # 让测试失败时能看到是哪条断言挂了
 #
 # Qt 6 在 Windows 上默认把 qInfo/qDebug 送到 Windows 调试通道而不是 stderr,
@@ -604,6 +633,6 @@ add_test(NAME template_match COMMAND w7_tpl_test
 set_tests_properties(
     undo_redo pcb_operators dl_postprocess image_sources
     step_result pin_and_recent line_fit measurement run_policy detection_operators
-    template_match
+    template_match operator_library
     PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1"
 )
