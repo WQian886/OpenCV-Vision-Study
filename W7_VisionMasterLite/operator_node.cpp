@@ -26,8 +26,26 @@ OperatorNode::OperatorNode(const QString& opName, const QString& displayName,
     setFlag(QGraphicsItem::ItemSendsScenePositionChanges, true);
 }
 
-QRectF OperatorNode::boundingRect() const {
+// 节点本体矩形 —— 方框、文字都用它
+QRectF OperatorNode::bodyRect() const {
     return QRectF(-W/2.0, -H/2.0, W, H);
+}
+
+// ============================================================
+// boundingRect 必须包住所有真正画出去的像素
+//
+// 4 个端口圆画在四条边的**中心**(半径 PORT_HALF),再加一圈白色描边,
+// 全部落在本体矩形**外面**:左端口圆心在 x=-W/2.0,最外缘到 -W/2.0-9。
+// Qt 移动 item 时只按 boundingRect 擦除,超出范围的像素它根本不知道存在
+// → 节点每拖动一次,4 个端口圆和描边就原地留下一圈残影。
+//
+// 之前只写 -W/2..W/2 是不够的:prepareGeometryChange() 通知 Qt 擦的是
+// "旧 boundingRect",而旧 boundingRect 里压根没包含端口圆。
+// ============================================================
+QRectF OperatorNode::boundingRect() const {
+    // 8(圆半径) + 1(白描边半宽) + 1(抗锯齿/边框描边余量)
+    const qreal margin = PORT_HALF + 2.0;
+    return bodyRect().adjusted(-margin, -margin, margin, margin);
 }
 
 // ============================================================
@@ -97,30 +115,21 @@ QPointF OperatorNode::inputPortScenePos() const {
 }
 
 // ============================================================
-// 节点位置变化时通知监听者(连线跟随)+ 限制在画布内
-// === perf fix v3: prepareGeometryChange 只对自己(合法) + surgical 更新连线 ===
+// 节点位置变化时通知监听者(连线跟随)
 //
-// 三个根因:
-//   1) 没调 prepareGeometryChange → 节点旧位置的像素不被 Qt 清掉 → 残影
-//   2) 之前用 ItemPositionChange + scene()->update() 全场景刷新 → 60fps 卡顿
-//   3) ConnectionLine::shape() 每次 paint 都 QPainterPathStroker::createStroke → 热点
+// === 移动不需要(也不该)调 prepareGeometryChange() ===
+// prepareGeometryChange 是给"几何变了"(改了 boundingRect/shape)用的。
+// 纯移动由 QGraphicsItemPrivate::setPosHelper 自己处理:
+// 它用**旧矩阵**算出旧 boundingRect、擦掉旧区域、按新位置重插 BSP 索引。
+// 所以旧像素本来就会被擦掉 —— 之前那次残影的真凶是 boundingRect() 本身
+// 圈不住端口圆(见本文件顶部),不是缺这句。
 //
-// 新实现:
-//   - ItemPositionChange (move 前): 节点自己 prepareGeometryChange() 通知 Qt 清旧区域
-//   - ItemPositionHasChanged (move 后): surgical update 让相连连线画新位置
-//   - ConnectionLine shape 缓存 + boundingRect 扩张见 connection_line.cpp
+// 而且在 ItemPositionChange 里补这一句,等于鼠标每移动一个像素
+// 就让 Qt 多做一次完整的索引重插 —— 实测这正是拖动卡顿的大头。
 //
-// 注: 不能对别的 QGraphicsItem 调 prepareGeometryChange()(它是 protected),
-//     连线的"旧位置清不掉"问题在 connection_line.cpp 内部用 boundingRect
-//     与 lastBoundingRect 取并集解决 —— 让 Qt 一次清掉旧+新两块。
+// 剩下的活:通知相连的连线把旧区域也擦掉,见 connection_line.cpp。
 // ============================================================
 QVariant OperatorNode::itemChange(GraphicsItemChange change, const QVariant& value) {
-    if (change == ItemPositionChange) {
-        // === perf v2: 必须先通知 Qt 清旧 bounding rect ===
-        // 没这一句,节点旧位置的像素不会被擦除,后面只画新位置 → 残影
-        // 这是 protected,只对自己(this)合法 —— 这是 QGraphicsItem 的约定
-        prepareGeometryChange();
-    }
     if (change == ItemPositionHasChanged) {
         // move 完了 → 手术刀式只重画与本节点相连的连线
         if (scene()) {
@@ -128,7 +137,9 @@ QVariant OperatorNode::itemChange(GraphicsItemChange change, const QVariant& val
             for (QGraphicsItem* gi : all) {
                 if (auto* line = dynamic_cast<ConnectionLine*>(gi)) {
                     if (line->fromNode() == this || line->toNode() == this) {
-                        line->update();
+                        // 必须走 onNodesMoved 而不是裸 update():
+                        // update() 只擦"新" boundingRect,曲线原来那一段留在屏幕上。
+                        line->onNodesMoved();
                     }
                 }
             }
@@ -184,11 +195,18 @@ void OperatorNode::mousePressEvent(QGraphicsSceneMouseEvent* event) {
              << "dist=" << bestDist;
 
     if (bestDist <= PORT_HALF * 2.0 && sideIsOutput(bestSide)) {
-        // === M7: payload 编码 "opName|side",side 是 0..3 ===
-        // 之前的 payload 只有 opName — 升级后 PipelineView 必须解析 |side
+        // === payload 编码 "uuid|side" ===
+        //
+        // 之前带的是 opName,落点时按算子名去画布里找第一个匹配的。
+        // 算子名【不唯一】—— 画布里可以有两个 color_segment,从第二个拖出去
+        // 会接到第一个身上。更糟的是 addConnection 开头会删掉"同 from→to 对"
+        // 的旧线,于是第一个节点原有的连线被顶掉,看上去就像节点在乱跳。
+        // UUID 才是稳定身份(节点删了重建也还是同一个)。
         QDrag* drag = new QDrag(this);
         QMimeData* mime = new QMimeData;
-        const QString payload = QString("%1|%2").arg(m_opName).arg(static_cast<int>(bestSide));
+        const QString payload = QString("%1|%2")
+            .arg(m_uuid.toString(QUuid::WithoutBraces))
+            .arg(static_cast<int>(bestSide));
         mime->setData("application/x-vm-connection",
                       payload.toUtf8());
         drag->setMimeData(mime);
@@ -232,7 +250,7 @@ void OperatorNode::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
 
     p->setBrush(QBrush(fillColor));
     p->setPen(QPen(borderColor, isSelected() ? 3 : 2));
-    p->drawRoundedRect(boundingRect(), 6, 6);
+    p->drawRoundedRect(bodyRect(), 6, 6);
 
     // 中文显示名
     p->setPen(QColor(30, 30, 30));

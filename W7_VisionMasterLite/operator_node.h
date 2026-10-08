@@ -28,6 +28,9 @@ public:
     QRectF boundingRect() const override;
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option,
                QWidget* widget = nullptr) override;
+    // 节点本体矩形(方框本体)。boundingRect() 比它大一圈 ——
+    // 画框和文字都按 bodyRect 算,只有 boundingRect 负责"擦除范围"。
+    QRectF bodyRect() const;
 
     QString opName() const { return m_opName; }
     QString displayName() const { return m_displayName; }

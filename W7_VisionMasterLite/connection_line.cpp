@@ -54,11 +54,8 @@ ConnectionLine::EndpointKey ConnectionLine::currentKey() const {
     return k;
 }
 
-// === perf v5: 回退 m_cachedBoundingRect.united(m_lastBoundingRect) ===
-//   实测发现这个 union 在画布初始化 + SmartViewportUpdate 一起会触发
-//   无限重画循环 → 打开就卡死。
-//   改回纯 m_cachedBoundingRect。连线残影接受"partial now-
-//   compensate"(节点本身的 prepareGeometryChange + 拖动结束后重画)。
+// boundingRect 只描述"当前"曲线的范围,是纯函数,不做任何状态推进。
+// 旧范围的擦除由 onNodesMoved() 负责 —— 详见那里的注释(v5 的教训)。
 QRectF ConnectionLine::boundingRect() const {
     if (!m_from || !m_to) return QRectF();
     const EndpointKey k = currentKey();
@@ -104,11 +101,25 @@ QPainterPath ConnectionLine::shape() const {
     return m_cachedShapePath;
 }
 
-// === perf fix v2: 节点移动后 Qt 会调 invalidate / repaint,
-//   这时把缓存标脏,下一次 shape() 调用重算 ===
+// === 端点动了 → 原来那条曲线占的像素必须一起失效 ===
+//
+// update() 只擦"当前" boundingRect,也就是新曲线覆盖的那块。
+// 节点被拖走时曲线原来那一段不会自动消失,会原样留在屏幕上 = 残影。
+// 这里额外把"上次真正画过的区域"也 update 一遍,那一块就会被背景重绘。
+//
+// 为什么不把 union 塞回 boundingRect()(v5 回退掉的做法):
+//   boundingRect() 会被 Qt 在初始化、自适应视口、命中测试时反复调用,
+//   在里面做带副作用的 union 会和 viewport 更新互相触发 → 无限重画 → 卡死。
+//   放在"节点位置真的变了"这个事件里做,调用点唯一,不存在这种风险。
 void ConnectionLine::onNodesMoved() {
-    m_shapeCacheValid = false;
-    if (m_from || m_to) update();
+    m_shapeCacheValid = false;      // 端点变了,shape/boundingRect 的缓存全部作废
+    if (!m_from || !m_to || !scene()) return;
+    // m_lastBoundingRect 记的是上次 paint 时的区域,此刻还是"旧曲线"的范围。
+    // 非 static 的 update(rect) 用 item 坐标 —— 本 item 没有 transform 也没挪过位置,
+    // item 坐标 == scene 坐标,直接传即可。
+    if (!m_lastBoundingRect.isNull())
+        update(m_lastBoundingRect);
+    update();                        // 新曲线照常重画
 }
 
 void ConnectionLine::paint(QPainter* p, const QStyleOptionGraphicsItem* option, QWidget*) {
@@ -136,9 +147,10 @@ void ConnectionLine::paint(QPainter* p, const QStyleOptionGraphicsItem* option, 
     p->setBrush(Qt::NoBrush);
     p->drawPath(path);
 
-    // === perf v3: paint 完把这次的 boundingRect 记下来,下次 boundingRect() 会和它取并集 ===
-    //   实现"自动 union 旧位置"防止连线残影(无法外部调 prepareGeometryChange 时)
-    m_lastBoundingRect = m_cachedBoundingRect;
+    // 记下"这一次真正画过"的区域。onNodesMoved() 靠它把旧区域一起擦掉。
+    // 这里重新取一次 boundingRect() 而不是复用 m_cachedBoundingRect:
+    // 前者保证拿到当前端点下的范围,后者可能已经被别的调用改写。
+    m_lastBoundingRect = boundingRect();
 
     // 箭头 — 朝向 end 的切线方向
     QPointF tangent(end.x() - ctrl2.x(), end.y() - ctrl2.y());

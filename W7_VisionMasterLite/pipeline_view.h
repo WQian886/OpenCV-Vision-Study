@@ -12,6 +12,7 @@
 #include <QList>
 #include <QUuid>
 #include <QPointF>
+#include <QPixmap>
 #include "operators/pin_types.h"
 #include "operator_node.h"   // === M7: 拿 PortSide 枚举 ===
 
@@ -94,6 +95,16 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
 
 private:
+    // === 点阵网格瓦片 ===
+    // 原来 drawBackground 每次都按 40px 逐格 drawLine 画点阵:
+    // 要重画多大区域,就画多少格。而拖动节点时连线会把"跨半个画布"的
+    // 矩形标脏,于是每帧要把几百条带抗锯齿的 DotLine 虚线重描一遍
+    // → 拖一下就卡成幻灯片(节点跟不住鼠标,看着像在乱跑)。
+    // 改成画一次 40x40 的小块贴图,之后 drawTiledPixmap 一次搞定,
+    // 开销与区域大小无关。
+    QPixmap gridTile();
+    QPixmap m_gridTile;
+
     QList<OperatorNode*>   m_nodes;
     QList<ConnectionLine*> m_connections;
     QHash<QString, OpMeta> m_registry;

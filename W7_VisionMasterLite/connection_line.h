@@ -57,8 +57,11 @@ private:
     mutable bool        m_shapeCacheValid = false;
     mutable QPainterPath m_cachedShapePath;
     mutable QRectF      m_cachedBoundingRect;
-    // === perf v3: 上次 paint 时的 boundingRect,用于自动 union 旧位置防止残影
-    //   (Qt 不允许外部对它调 prepareGeometryChange())
+    // === 上次 paint 时的 boundingRect ===
+    // 端点一动,onNodesMoved() 用它把"旧曲线"的像素也标脏重绘 ——
+    // 光靠 update() 只会擦新范围,旧那段会留在屏幕上(残影)。
+    // 注意:不要把这个 union 塞进 boundingRect(),Qt 在初始化/自适应视口时会
+    //       反复调它,带副作用会撞成无限重画循环(v5 踩过)。
     mutable QRectF      m_lastBoundingRect;
     // 端点变化侦测:用 4 个 double 描述两个 scene 坐标 + side 索引
     struct EndpointKey {

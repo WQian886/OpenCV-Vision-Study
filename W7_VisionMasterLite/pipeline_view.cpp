@@ -10,6 +10,7 @@
 #include <QDragMoveEvent>
 #include <QDragLeaveEvent>
 #include <QDropEvent>
+#include <QApplication>
 #include <algorithm>
 
 namespace w7 {
@@ -195,30 +196,22 @@ void PipelineView::dropEvent(QDropEvent* event) {
     if (event->mimeData()->hasFormat(MIME_CONNECTION)) {
         QByteArray payload = event->mimeData()->data(MIME_CONNECTION);
         const QString payloadStr = QString::fromUtf8(payload);
-        // === M7: payload 格式 "opName|side",side ∈ {0,1,2,3} ===
-        // 旧格式(只有 opName)在 M7 之前存的工程里可能存在,
-        // 向后兼容:拆不出 | 就当 1(Right 输出端)。
-        QString fromOpName;
+        // === payload 格式 "uuid|side",side ∈ {0,1,2,3} ===
+        // 必须用 UUID 定位源节点:算子名不唯一(画布里可以有两个 color_segment),
+        // 按名字找会接错节点 —— 表现为"连线时那个节点自己跳走"。
         OperatorNode::PortSide fromSide = OperatorNode::PortSide::Right;
         const int sepIdx = payloadStr.lastIndexOf('|');
-        if (sepIdx >= 0) {
-            fromOpName = payloadStr.left(sepIdx);
-            bool ok = false;
-            const int sideInt = payloadStr.mid(sepIdx + 1).toInt(&ok);
-            if (ok && sideInt >= 0 && sideInt <= 3) {
-                fromSide = static_cast<OperatorNode::PortSide>(sideInt);
-            }
-        } else {
-            fromOpName = payloadStr;
+        if (sepIdx < 0) { event->ignore(); return; }
+        const QUuid fromId = QUuid::fromString(payloadStr.left(sepIdx));
+        bool sideOk = false;
+        const int sideInt = payloadStr.mid(sepIdx + 1).toInt(&sideOk);
+        if (sideOk && sideInt >= 0 && sideInt <= 3) {
+            fromSide = static_cast<OperatorNode::PortSide>(sideInt);
         }
         QPointF scenePos = mapToScene(event->position().toPoint());
 
-        // 找源节点
-        OperatorNode* fromNode = nullptr;
-        for (auto* n : m_nodes) {
-            if (n->opName() == fromOpName) { fromNode = n; break; }
-        }
-        if (!fromNode) { event->ignore(); return; }
+        OperatorNode* fromNode = findNodeByUuid(fromId);
+        if (!fromNode) { event->ignore(); return; }   // 源节点已被删(理论上不会)
 
         // === M7: 找最近的输入端口(Left 或 Top 都查),同时返回 toSide ===
         OperatorNode* targetNode = nullptr;
@@ -278,18 +271,38 @@ void PipelineView::dropEvent(QDropEvent* event) {
     event->ignore();
 }
 
+// ============================================================
+// 点阵网格瓦片 —— 只画一次,之后整块平铺
+//
+// 40 = 点阵虚线周期(4px)的整数倍,所以平铺出来的点是无缝的,
+// 跟原来"整条线画 DotLine"的效果一致。
+// ============================================================
+QPixmap PipelineView::gridTile() {
+    if (!m_gridTile.isNull()) return m_gridTile;
+
+    constexpr int kGrid = 40;
+    // 高 DPI 屏上按设备像素画,再缩回逻辑坐标,不然网格会糊
+    const qreal dpr = qApp ? qApp->devicePixelRatio() : qreal(1);
+    m_gridTile = QPixmap(int(kGrid * dpr), int(kGrid * dpr));
+    m_gridTile.setDevicePixelRatio(dpr);
+    m_gridTile.fill(Qt::transparent);
+
+    QPainter tp(&m_gridTile);
+    tp.scale(dpr, dpr);
+    tp.setRenderHint(QPainter::Antialiasing, true);
+    tp.setPen(QPen(QColor(230, 230, 230), 1, Qt::DotLine));
+    // 一格里画一竖一横,交叉处自然形成一个点
+    tp.drawLine(QPointF(0.5, 0.0), QPointF(0.5, kGrid));
+    tp.drawLine(QPointF(0.0, 0.5), QPointF(kGrid, 0.5));
+    tp.end();
+    return m_gridTile;
+}
+
 void PipelineView::drawBackground(QPainter* p, const QRectF& rect) {
-    QGraphicsView::drawBackground(p, rect);
-    p->setPen(QPen(QColor(230, 230, 230), 1, Qt::DotLine));
-    const int gridSize = 40;
-    qreal left   = rect.left();
-    qreal top    = rect.top();
-    qreal right  = rect.right();
-    qreal bottom = rect.bottom();
-    for (qreal x = std::floor(left / gridSize) * gridSize; x < right; x += gridSize)
-        p->drawLine(QPointF(x, top), QPointF(x, bottom));
-    for (qreal y = std::floor(top / gridSize) * gridSize; y < bottom; y += gridSize)
-        p->drawLine(QPointF(left, y), QPointF(right, y));
+    QGraphicsView::drawBackground(p, rect);   // 先铺底色
+    // 网格一次贴完 —— 开销只跟"贴几次"有关,跟 rect 有多大无关。
+    // 锚到 (0,0) 的整数倍,保证平移缩放时网格不跟着跑。
+    p->drawTiledPixmap(rect, gridTile(), QPointF(0, 0));
 }
 
 void PipelineView::wheelEvent(QWheelEvent* event) {
