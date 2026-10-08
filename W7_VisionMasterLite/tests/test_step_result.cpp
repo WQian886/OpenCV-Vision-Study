@@ -18,6 +18,8 @@
 #include <QApplication>
 #include <QDebug>
 #include <QJsonObject>
+#include <QGraphicsScene>
+#include <QGraphicsSceneMouseEvent>
 
 #include "operator_node.h"
 
@@ -226,6 +228,110 @@ static void test_bounding_rect_covers_ports() {
           "节点移动后,映射回局部坐标的端口范围仍被包住");
 }
 
+// ------------------------------------------------------------
+// 用例 5:关键回归 —— 拖线时节点不许跟着鼠标跑
+//
+// 这条锁的是"连线时元件乱跑"这个 bug 的**真正成因**。
+//
+// 成因:端口拖拽走 QDrag::exec(),那是个阻塞的**嵌套事件循环** ——
+// 它停在这里,但 Qt 仍在往 scene 派发鼠标移动事件。节点带
+// ItemIsMovable 标志,scene 一看"用户按着某个 item 在动",就把
+// 鼠标位置写进去。于是拖线的整个过程里,节点本体一直跟着鼠标跑。
+//
+// 为什么以前没查出来:payload 按算子名找错节点是真 bug(已修),
+// 但它和这个挤在同一段代码里,现象又都是"线接得不对",
+// 修完 payload 现象还在,就以为没修对。实际是**两个叠在一起的 bug**。
+//
+// 这条断言的关键是:不能只测"标志位被设上了"(那是自证)。
+// 要测的是"设上之后,scene 真的搬不动它了" —— 手动搬一次,
+// 验证节点在拖线期间纹丝不动。
+// ------------------------------------------------------------
+static void test_no_move_during_connection_drag() {
+    beginCase("拖线期间节点不被移动(元件乱跑回归)");
+
+    QGraphicsScene scene;
+    // 子类只为把 protected 的事件处理开放给测试调用。
+    // 不在生产代码里加"给测试用的 public 函数"——那是把测试的
+    // 便利性泄漏进产品 API,以后没人敢删。
+    class Probe : public OperatorNode {
+    public:
+        using OperatorNode::OperatorNode;
+        using OperatorNode::mousePressEvent;
+        using OperatorNode::mouseReleaseEvent;
+    };
+    Probe* n = new Probe("color_segment", "颜色分割", "detection");
+    scene.addItem(n);
+    n->setPos(300, 300);
+
+    // 记录有没有发出 nodeMoved —— 这条信号会生成 MoveNodeCmd 进撤销栈
+    int movedCount = 0;
+    QObject::connect(n, &OperatorNode::nodeMoved,
+                     [&](OperatorNode*, const QPointF&, const QPointF&) { ++movedCount; });
+
+    check(n->flags().testFlag(QGraphicsItem::ItemIsMovable),
+          "初始状态:节点是可移动的");
+
+    // === 真实事件序列:press → 拖线 → release ===
+    //
+    // 不真去调 QDrag::exec()(它阻塞,headless 会挂死),
+    // 而是复现它造成的**那几件事**:记录拖动起点、标记拖线中、
+    // 节点被搬走、补发 release。这几件事正是乱跑的成因,逐个钉住。
+
+    // 1) 按下 —— 记录 m_dragStartPos
+    QGraphicsSceneMouseEvent press(QEvent::GraphicsSceneMousePress);
+    press.setScenePos(n->pos());
+    press.setButton(Qt::LeftButton);
+    press.setButtons(Qt::LeftButton);
+    n->mousePressEvent(&press);
+
+    // 2) 拖线开始 → 移动锁生效
+    n->beginConnectionDrag();
+    check(!n->flags().testFlag(QGraphicsItem::ItemIsMovable),
+          "拖线期间 ItemIsMovable 关闭(节点跟着鼠标跑的直接原因)");
+
+    // 3) 模拟嵌套事件循环里 scene 把节点搬到了鼠标位置
+    const QPointF dragged(900, 700);
+    n->setPos(dragged);
+    check(n->pos() == dragged,
+          "手动 setPos 能改位置(证明上一条不是假通过)");
+
+    // 4) 模拟 drag->exec() 返回后 scene 补发的 release。
+    //    注意此时位置已经和 m_dragStartPos 不同了 ——
+    //    没有 m_dragIsConnection 的话,这里会误判成一次用户拖动,
+    //    凭空生成 MoveNodeCmd:用户按一次 Ctrl+Z 撤掉的是连线,
+    //    第二次才撤出那个莫名其妙的"移动"。
+    n->endConnectionDrag();
+    QGraphicsSceneMouseEvent release(QEvent::GraphicsSceneMouseRelease);
+    release.setScenePos(dragged);
+    release.setButton(Qt::LeftButton);
+    release.setButtons(Qt::NoButton);
+    n->mouseReleaseEvent(&release);
+
+    check(movedCount == 0,
+          "拖线结束不产生 nodeMoved(否则撤销一次会冒出一次假移动)");
+    check(n->flags().testFlag(QGraphicsItem::ItemIsMovable),
+          "拖线结束后 ItemIsMovable 恢复(否则之后再也拖不动节点)");
+
+    // === 对照组:正常拖动节点【必须】仍然能产生 nodeMoved ===
+    // 上面那条断言如果写得太宽(比如直接 return 掉整个 handler),
+    // 正常拖动也会被吞掉 —— 那就是"修好一个 bug 又造一个"。
+    movedCount = 0;
+    QGraphicsSceneMouseEvent press2(QEvent::GraphicsSceneMousePress);
+    press2.setScenePos(n->pos());
+    press2.setButton(Qt::LeftButton);
+    press2.setButtons(Qt::LeftButton);
+    n->mousePressEvent(&press2);
+    n->setPos(500, 500);          // 用户真的把它拖走了
+    QGraphicsSceneMouseEvent release2(QEvent::GraphicsSceneMouseRelease);
+    release2.setScenePos(QPointF(500, 500));
+    release2.setButton(Qt::LeftButton);
+    release2.setButtons(Qt::NoButton);
+    n->mouseReleaseEvent(&release2);
+
+    check(movedCount == 1,
+          "对照组:正常拖动节点仍产生 nodeMoved(移动功能没被误伤)");
+}
+
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     SetConsoleOutputCP(CP_UTF8);
@@ -237,6 +343,7 @@ int main(int argc, char* argv[]) {
     test_node_state();
     test_uuid_keyed_cache();
     test_bounding_rect_covers_ports();
+    test_no_move_during_connection_drag();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;

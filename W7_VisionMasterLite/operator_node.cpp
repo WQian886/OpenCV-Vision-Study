@@ -210,7 +210,28 @@ void OperatorNode::mousePressEvent(QGraphicsSceneMouseEvent* event) {
                           .toUtf8());
         drag->setMimeData(mime);
 
+        // ============================================================
+        // === 拖线期间必须禁掉"节点移动" ===
+        //
+        // drag->exec() 是个**嵌套事件循环**:它阻塞在这里,但 Qt 仍在
+        // 继续给 scene 派发鼠标移动事件。节点带 ItemIsMovable 标志,
+        // scene 一看"用户按着某个 item 在动",就把鼠标位置写进那个 item。
+        // 于是**节点跟着鼠标跑** —— 这就是"连线时元件乱跑"这个 bug。
+        //
+        // 之前没发现,是因为它跟"payload 按名字找错节点"缠在一起:
+        // 两个 bug 都在同一段代码上,现象又都是"线接得不对",
+        // 修好 payload 后现象还在,就以为没修对。
+        // 实际上 payload 已经修对了(它确实是个真 bug,只是不是这一个)。
+        //
+        // 顺带一提:节点一边跑一边连线,onNodesMoved() 在嵌套循环里
+        // 被反复调用、m_lastBoundingRect 每帧都变,画出来是一条抖动的乱线。
+        // ============================================================
+        beginConnectionDrag();
+
         Qt::DropAction action = drag->exec(Qt::CopyAction);
+
+        endConnectionDrag();
+
         event->accept();
         qDebug() << "[NODE] mousePress drag returned, action=" << action;
         return;
@@ -221,9 +242,50 @@ void OperatorNode::mousePressEvent(QGraphicsSceneMouseEvent* event) {
     qDebug() << "[NODE] mousePress default done, isSelected=" << isSelected();
 }
 
+// ============================================================
+// 端口拖拽的移动锁
+//
+// 见 mousePressEvent 里的说明:drag->exec() 是嵌套事件循环,
+// 期间 scene 会把鼠标位置写进"被按住的 item",节点就跟着跑了。
+// ============================================================
+void OperatorNode::beginConnectionDrag() {
+    m_dragIsConnection = true;
+    setFlag(QGraphicsItem::ItemIsMovable, false);
+}
+
+void OperatorNode::endConnectionDrag() {
+    // 顺序要紧:先恢复 flag,而且【不清 m_dragIsConnection】。
+    //
+    // ItemIsMovable 必须立刻恢复 —— 用户接下来还要正常拖节点,
+    // 恢复晚了那一下就拖不动了。
+    //
+    // 但 m_dragIsConnection 要**留着**,由随后那次 mouseReleaseEvent 清掉。
+    // 因为 drag->exec() 返回之后,scene 才补发 release;那一刻节点
+    // 已经被"跟着鼠标跑"那段挪过,位置和 m_dragStartPos 不同,
+    // 正是这个标志在挡着"误判成用户拖动"。
+    // 在这里就清掉的话,标志等于没设 —— 这个 bug 会原样复现。
+    // (写测试时正是先撞上了这个:断言红了才发现标志清早了。)
+    setFlag(QGraphicsItem::ItemIsMovable, true);
+}
+
 // === M6: 松开鼠标 → 若位置真的变了,通知外部生成 MoveNodeCmd ===
 void OperatorNode::mouseReleaseEvent(QGraphicsSceneMouseEvent* event) {
     QGraphicsItem::mouseReleaseEvent(event);
+
+    // === 本次是拖线,不是拖节点 → 不生成 MoveNodeCmd ===
+    //
+    // drag->exec() 里松开鼠标时,scene 会补发一次 mouseReleaseEvent 给我们。
+    // 那一刻节点可能已经被"跟着鼠标跑"那段逻辑挪过了,于是这里会凭
+    // "位置变了"判定成一次用户拖动,凭空塞一条 MoveNodeCmd 进命令栈 ——
+    // 用户按一次 Ctrl+Z 撤掉的是连线,第二次才撤出那个莫名其妙的"移动"。
+    //
+    // 只靠上面那个 ItemIsMovable 开关是不够的:那个开关保证节点不动,
+    // 但 Qt 补发 release 的时机不受我们控制。标志位才是"不生成移动命令"
+    // 这件事的最终保证 —— 两者各管一层,任何一层失效都不会误判。
+    if (m_dragIsConnection) {
+        m_dragIsConnection = false;
+        return;
+    }
 
     const QPointF newPos = pos();
     if ((newPos - m_dragStartPos).manhattanLength() > 0.5) {

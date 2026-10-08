@@ -45,7 +45,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 8 个无头回归测试(329 断言)
+├── tests/                      # 8 个无头回归测试(335 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -250,7 +250,7 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,329 断言 / 8 个套件)
+## 🧪 回归测试(无头,335 断言 / 8 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
@@ -264,7 +264,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `pcb_operators` | 32 | **W6 那 8 张样本图**:baseline 零缺陷,7 张缺陷图各自命中自己那类 | OpenCV |
 | `dl_postprocess` | 49 | letterbox 补边/缩放、NMS 阈值、YOLOv5-v8 布局解析、退化输入不越界 | OpenCV |
 | `image_sources` | 20 | 帧循环契约(按 frame_index 真的换帧/换张)、坏输入不崩 | OpenCV |
-| `step_result` | 29 | 状态点判定边界、每步缓存用 UUID 做 key、**boundingRect 圈住端口圆** | Qt |
+| `step_result` | 35 | 状态点判定边界、每步缓存用 UUID 做 key、**boundingRect 圈住端口圆** | Qt |
 | `pin_and_recent` | 44 | 该拦的拦/不该拦的放行、路径归一化、已删条目剔除 | QtCore |
 | `line_fit` | 24 | 长度/角度算术、**角度 0~180 的约定**、两点重合不报错、没图照样能算 | OpenCV |
 | `measurement` | 59 | 圆度阈值真在滤方块、周长 0 不除零、**量的是垂直距离不是直线距离**、A/B 重合退化、**夹角退化为 0 而不是假角度** | OpenCV |
@@ -280,11 +280,36 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
   就在原地留一份 —— 这就是残影的成因。以前 `boundingRect` 只写了本体矩形,
   而端口圆画在本体**外面**
 - 连线 payload 必须是 `uuid|side`,不能是 `算子名|side`。算子名不唯一,
-  画布里放两个 `color_segment` 时两个 payload 完全一样,落点必然接错;
-  GUI 上的表现还特别误导 —— 看着像"被连的节点自己跳走",真凶隔了三层
+  画布里放两个 `color_segment` 时两个 payload 完全一样,落点必然接错
 
-> 这两条断言做过**变异测试**:把 bug 版代码临时放回去,两条测试分别挂 11 条和 7 条,
+### "连线时元件乱跑"——两个 bug 叠在一起
+
+这个现象最费劲:payload 改成 UUID 之后**现象还在**,一度以为没修对。
+实际上 payload 那个 bug 是真的、也确实修好了,只是**不是这一个**。
+
+真凶在 `mousePressEvent` 里:端口拖拽走 `QDrag::exec()`,那是个
+**嵌套事件循环** —— 它阻塞在那里,但 Qt 仍在往 scene 派发鼠标移动事件。
+节点带 `ItemIsMovable` 标志,scene 一看"用户按着某个 item 在动",
+就把鼠标位置写进去。于是**整个拖线过程里节点本体一直跟着鼠标跑**,
+节点一边跑一边连线,`onNodesMoved()` 在嵌套循环里被反复调用,
+画出来还是一条抖动的乱线。
+
+两个 bug 挤在同一段代码、现象又都是"线接得不对",所以修好一个还剩一个。
+
+修法分两层,缺一不可:
+
+- 拖线期间关掉 `ItemIsMovable` —— 治"节点跟着跑"
+- 松手时按标志位跳过,不生成 `MoveNodeCmd` —— 治"撤销一次冒出一次假移动"
+
+第二层还有个坑:**标志位不能在 `endConnectionDrag()` 里就清掉**。
+`drag->exec()` 返回后 scene 才补发 `mouseReleaseEvent`,那一刻位置
+已经变了,正是这个标志在挡误判。提前清掉等于没设 —— 这个是写测试时
+先撞红的。
+
+> 这几条断言都做过**变异测试**:把 bug 版代码临时放回去,分别挂 11 条、7 条、2 条,
 > 确认它们真的抓得住 —— 只会跟着 bug 一起变的测试等于没写。
+> 另外还反向验证了一次:把 `mouseReleaseEvent` 整个短路,对照组断言
+> ("正常拖动节点仍要产生 nodeMoved")立刻变红,确保修复没有过头伤到移动功能。
 
 ### 三个测量算子的测试为什么长这样
 

@@ -67,6 +67,15 @@ public:
     void setParams(const QJsonObject& p) { m_params = p; }
     QJsonObject params() const { return m_params; }
 
+    // === 端口拖拽期间:锁住"节点移动" ===
+    //
+    // 这两个函数存在的唯一理由是**可测**:真正的拖线走 QDrag::exec(),
+    // 那是个阻塞的嵌套事件循环,headless 测试调它会直接挂死。
+    // 把"锁定/解锁"这两步抽出来后,测试就能直接验它们,
+    // 而这两步正是"连线时元件乱跑"的全部成因。
+    void beginConnectionDrag();
+    void endConnectionDrag();
+
     // === S2: itemChange + 节点移动通知 ===
     QVariant itemChange(GraphicsItemChange change, const QVariant& value) override;
 
@@ -133,6 +142,19 @@ private:
     // === M6: 拖动起点(松开时用来生成 MoveNodeCmd) ===
     QPointF m_dragStartPos;
     bool    m_dragMoved = false;
+
+    // === 本次按下是"拖线"而不是"拖节点" ===
+    //
+    // 端口拖拽走的是 QDrag::exec(),它是个嵌套事件循环,期间 Qt 继续
+    // 给 scene 派发鼠标移动事件。如果不显式关掉 ItemIsMovable,
+    // scene 会以为用户正按着这个节点在拖,于是节点跟着鼠标跑 ——
+    // 这就是"连线时元件乱跑"。
+    //
+    // 光关 flag 还不够:鼠标在 drag->exec() 里松开时,scene 仍会补发
+    // 一次 mouseReleaseEvent,那时位置已经变了,于是凭空生成一条
+    // MoveNodeCmd(撤销一次就冒出一次莫名其妙的"移动节点")。
+    // 所以要记住"这次按下不是移动",release 时据此跳过。
+    bool m_dragIsConnection = false;
 
     QString m_inLabel;
     QString m_outLabel;
