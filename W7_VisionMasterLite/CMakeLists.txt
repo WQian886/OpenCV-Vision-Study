@@ -502,6 +502,49 @@ endif()
 add_test(NAME run_policy COMMAND w7_run_test)
 
 # ============================================================
+# === 检测类算子 回归测试 (color_segment / blob_count / count_check)
+#
+# 这三个是**启动时那条默认流水线**上的算子,而前 9 个套件一个都没测过它们。
+# 两个共性决定了这层最难靠手点发现:
+#   1) 参数从 JSON 来、形状不保证(旧工程/手改文件)→ run() 里越界
+#   2) 中间结果靠落盘文件名传递 → 文件名不唯一就互相覆盖,
+#      下游读到别人的结果,不崩不报错,数就是错的
+#
+# 测试要往 images/ 写临时图,工作目录必须是工程根。
+# ============================================================
+qt_add_executable(w7_detect_test
+    tests/test_detection_operators.cpp
+    operators/param_form.cpp
+    operators/color_segment.cpp
+    operators/blob_count.cpp
+    operators/count_check.cpp
+)
+
+target_include_directories(w7_detect_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w7_detect_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+    ${OpenCV_LIBS}
+)
+
+if(MSVC)
+    target_compile_options(w7_detect_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_detect_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        D:/opencv-src/build/install/bin
+        $<TARGET_FILE_DIR:w7_detect_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+add_test(NAME detection_operators COMMAND w7_detect_test
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# ============================================================
 # 让测试失败时能看到是哪条断言挂了
 #
 # Qt 6 在 Windows 上默认把 qInfo/qDebug 送到 Windows 调试通道而不是 stderr,
@@ -513,6 +556,6 @@ add_test(NAME run_policy COMMAND w7_run_test)
 # ============================================================
 set_tests_properties(
     undo_redo pcb_operators dl_postprocess image_sources
-    step_result pin_and_recent line_fit measurement run_policy
+    step_result pin_and_recent line_fit measurement run_policy detection_operators
     PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1"
 )

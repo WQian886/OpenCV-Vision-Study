@@ -1064,6 +1064,12 @@ void MainWindow::onRunClicked() {
         }
         // 帧索引:源算子据此取第几帧/第几张图,下游算子忽略这个键
         inputs["frame_index"] = frame;
+        // 节点身份:算子据此生成**实例唯一**的中间文件名。
+        // Run 引擎只传字符串路径,所以算子之间靠"写文件 → 下游 imread"
+        // 传数据;文件名写死的话,一条流水线里两个同类型算子会互相覆盖,
+        // 下游读到的是别人的结果 —— 不崩不报错,数就是错的。
+        // (color_segment 的 mask 就是这么错的。)
+        inputs["node_uuid"] = n->uuid().toString(QUuid::WithoutBraces);
 
         OperatorBase* op = w7::createOperatorByName(n->opName());
         if (!op) {

@@ -45,7 +45,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 9 个无头回归测试(378 断言)
+├── tests/                      # 10 个无头回归测试(420 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -250,11 +250,11 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,378 断言 / 9 个套件)
+## 🧪 回归测试(无头,420 断言 / 10 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
-# 一次跑完全部 9 个套件
+# 一次跑完全部 10 个套件
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build --output-on-failure'
 ```
 
@@ -269,6 +269,36 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `line_fit` | 24 | 长度/角度算术、**角度 0~180 的约定**、两点重合不报错、没图照样能算 | OpenCV |
 | `measurement` | 59 | 圆度阈值真在滤方块、周长 0 不除零、**量的是垂直距离不是直线距离**、A/B 重合退化、**夹角退化为 0 而不是假角度** | OpenCV |
 | `run_policy` | 43 | **帧数封顶 / 抽帧限频 / 取消+禁重入**、日志行数封顶、封顶后重绘代价不暴涨 | Qt |
+| `detection_operators` | 42 | **HSV 数组残缺不越界**、**两个实例的 mask 不互相覆盖**、面积阈值用 `>=`、**阈值填反要说人话而不是静默全判废** | OpenCV |
+
+### 默认流水线上的三个算子(为什么补这层测试)
+
+前 9 个套件有个共同的盲区:它们测画布、测撤销、测几何、测图像源,
+**恰好绕开了启动时你看到的那条默认流水线**
+(`image_source_dir → color_segment → blob_count → count_check`)。
+这条链上的三个算子一个都没测过,而它们有两个性质让 bug 特别难靠手点发现:
+
+1. **参数从 JSON 来,形状不保证。** 工程文件手可编辑、也可能是旧版本存的。
+   原来的 `run()` 直接 `lo[0].toInt()`,拿到短数组就是越界 ——
+   实测直接 `0xC0000005` 崩掉。同一个类的表单里却写着 `if (lo.size() >= 3)`,
+   说明作者知道数组可能短,只是漏了 `run()` 这一处。
+2. **中间结果靠落盘文件名传递。** 文件名写死成
+   `images/w7_color_segment_mask.png` 时,一条流水线放两个颜色分割
+   (抓红 + 抓蓝,很常见)第二个就覆盖第一个,下游 `blob_count` 读到的是
+   **第二个算子的 mask**。
+
+第二条比崩溃严重得多,因为它**每一步都"成功"了**:不崩、不报错、画布上
+状态点是绿的,只有数出来的数是错的。产线上这种错要到漏检/误检才发现。
+
+修法是让 Run 引擎把 `inputs["node_uuid"]` 注入下去(见 `MainWindow::onRunClicked`),
+文件名变成 `w7_seg_<uuid前8位>_f<帧号>.png`。
+
+- 变异验证:去掉数组校验挂 6 条、去 UUID 文件名挂 3 条、
+  去掉 min>max 检查挂 2 条
+- 第二条的第一版测试只验"两个节点路径不同",而两张图的 mask 内容恰好一样 ——
+  覆盖了也测不出来。改成两张图分割出**不同像素数**(全红 10000 / 半蓝 5000),
+  并加了一条"让下游 `blob_count` 真的沿 A 的路径读一次":变异后读回 5000 而非
+  10000,这才是真实危害发生的那一层。测症状不测后果,等于给自己留后门。
 
 ### 跑批卡死的回归测试
 
