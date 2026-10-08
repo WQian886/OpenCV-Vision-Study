@@ -18,6 +18,7 @@
 #include "pipeline_view.h"
 #include "commands/command.h"
 #include "recent_files.h"
+#include "run_policy.h"
 
 class QTextEdit;
 class QPlainTextEdit;
@@ -159,7 +160,10 @@ private:
     PipelineView*    m_canvas    = nullptr;
     QTreeWidget*     m_opLib     = nullptr;
     QStackedWidget*  m_paramPanel= nullptr;
-    QTextEdit*       m_logView   = nullptr;
+    // 日志用 QPlainTextEdit 而不是 QTextEdit:Run 批量时每写一行都会
+    // 被 processEvents 逼出一次整篇重绘,实测两者差 2 倍(785 vs 1545 us/行)。
+    // 理由和实测数据见 setupResultPanel() 里的注释。
+    QPlainTextEdit*  m_logView   = nullptr;
     QLabel*          m_resultImg = nullptr;
     QLabel*          m_resultTitle = nullptr;   // === 每步结果查看:当前显示的是哪一步 ===
     QPlainTextEdit*  m_stepDetail  = nullptr;   // === 每步结果查看:该步全部输出字段 ===
@@ -204,6 +208,21 @@ private:
     // === M6 撤销/重做栈 ===
     QStack<Command*> m_undoStack;   // 已执行,等待 undo
     QStack<Command*> m_redoStack;   // 已 undo,等待 redo
+
+    // ============================================================
+    // === Run 期间的状态 ===
+    //
+    // 用 enum 而不是两个 bool,理由见 run_policy.h:
+    // 两个 bool 迟早会出现"正在跑但又被要求停止"这种自相矛盾状态。
+    //
+    // 它挡的是两类真会卡死的场景:
+    //   1) 重入:帧循环里调 processEvents(),用户再点一次 Run,
+    //      第二次点击被派发进来 -> 整个 onRunClicked 重入一层。
+    //   2) 悬垂:帧循环持有拓扑序里的裸指针,用户跑批时按 Ctrl+Z
+    //      把节点删了,下一轮继续拿已释放的指针调 setStepStatus()。
+    // ============================================================
+    w7::RunState m_runState = w7::RunState::Idle;
+    QPushButton* m_stopBtn = nullptr;   // 跑批时才可用
 };
 
 } // namespace w7

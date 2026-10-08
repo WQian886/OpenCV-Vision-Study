@@ -76,6 +76,7 @@ set(SOURCES
     operator_node.cpp
     connection_line.cpp
     connection_payload.h   # 头文件,列出来是为了 IDE 里能跳转 + 改完能触发重编
+    run_policy.h           # Run 帧循环的三条"不许 runaway"规则,无头测试要 include
     commands/command.cpp
     commands/node_commands.cpp
     commands/edge_commands.cpp
@@ -109,6 +110,7 @@ set(HEADERS
     operator_node.h
     connection_line.h
     connection_payload.h
+    run_policy.h
     commands/command.h
     commands/node_commands.h
     commands/edge_commands.h
@@ -470,6 +472,36 @@ add_test(NAME measurement COMMAND w7_measure_test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # ============================================================
+# === Run 帧循环策略 回归测试 (headless, 纯逻辑 + 一个真日志控件)
+#
+# 2026-10-08"跑批卡死"的修复配套。这三条规则(帧数封顶 / UI 抽帧限频 /
+# 可取消+禁重入)的特点是**都不崩** —— 不封顶照样跑完,只是要等;
+# 不限频照样出结果,只是界面卡。所以"跑一遍看有没有报错"永远发现不了,
+# 必须把规则本身拆成纯函数钉住。
+#
+# 用例 5/6 会真的构造一个 QPlainTextEdit 写几千行,验证我依赖的
+# "setMaximumBlockCount 真的能把文档卡住"这个假设 —— 不验它,
+# 整个修复就建在一个没验证过的前提上。
+#
+# 注意这个目标必须排在下面 set_tests_properties 之前:
+# 那里的 ENVIRONMENT 要按名字引用 run_policy,add_test 还没执行时
+# 引用一个不存在的测试名,CMake 直接报 "Configuring incomplete"。
+# ============================================================
+qt_add_executable(w7_run_test
+    tests/test_run_policy.cpp
+)
+
+target_include_directories(w7_run_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_link_libraries(w7_run_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+
+if(MSVC)
+    target_compile_options(w7_run_test PRIVATE /utf-8)
+endif()
+
+add_test(NAME run_policy COMMAND w7_run_test)
+
+# ============================================================
 # 让测试失败时能看到是哪条断言挂了
 #
 # Qt 6 在 Windows 上默认把 qInfo/qDebug 送到 Windows 调试通道而不是 stderr,
@@ -481,6 +513,6 @@ add_test(NAME measurement COMMAND w7_measure_test
 # ============================================================
 set_tests_properties(
     undo_redo pcb_operators dl_postprocess image_sources
-    step_result pin_and_recent line_fit measurement
+    step_result pin_and_recent line_fit measurement run_policy
     PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1"
 )

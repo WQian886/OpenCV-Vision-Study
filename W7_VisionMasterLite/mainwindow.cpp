@@ -282,9 +282,16 @@ void MainWindow::setupToolbar() {
     tb->setMovable(true);
 
     QPushButton* runBtn = new QPushButton(tr("▶ Run"), this);
+    // === Stop ===
+    // 跑批之前只有上限没有退路,和没有上限没本质区别:
+    // 2000 帧跑完要很久,用户总得能喊停。
+    // 平时置灰,只在 Run 期间可用 —— 免得空按钮让人以为坏了。
+    m_stopBtn = new QPushButton(tr("■ Stop"), this);
+    m_stopBtn->setEnabled(false);
     QPushButton* loadBtn = new QPushButton(tr("Load"), this);
     QPushButton* saveBtn = new QPushButton(tr("Save"), this);
     tb->addWidget(runBtn);
+    tb->addWidget(m_stopBtn);
     tb->addWidget(loadBtn);
     tb->addWidget(saveBtn);
 
@@ -323,6 +330,12 @@ void MainWindow::setupToolbar() {
     tb->addAction(m_redoAction);
 
     connect(runBtn,  &QPushButton::clicked, this, &MainWindow::onRunClicked);
+    connect(m_stopBtn, &QPushButton::clicked, this, [this] {
+        // 不在跑时点了(理论上按钮是灰的,但快捷键/程序化调用拦不住)
+        if (!w7::requestCancel(&m_runState)) return;
+        appendLog(tr("[Run] 收到停止请求,当前这一帧跑完就收工"));
+        m_stopBtn->setEnabled(false);
+    });
     connect(loadBtn, &QPushButton::clicked, this, &MainWindow::onLoadProject);
     connect(saveBtn, &QPushButton::clicked, this, &MainWindow::onSaveProject);
     connect(m_undoAction, &QAction::triggered, this, &MainWindow::execUndo);
@@ -462,8 +475,20 @@ void MainWindow::setupResultPanel() {
     layout->addWidget(m_stepDetail);
 
     // 日志
-    m_logView = new QTextEdit;
-    m_logView->setReadOnly(true);
+    //
+    // 用 QPlainTextEdit 而不是 QTextEdit,这不是随手选的:
+    // Run 的帧循环会写"帧数 x 节点数"行日志,而每写一行,
+    // processEvents() 就把整个日志文档重排版+重画一次。
+    // 实测(2026-10-08,2000x220 字符行,offscreen):
+    //     QTextEdit      append 90 us/行,append+重绘 1545 us/行
+    //     QPlainTextEdit append 90 us/行,append+重绘  785 us/行
+    // 重绘才是大头(是 append 的十几倍),QPlainTextEdit 便宜一半。
+    // QTextEdit 是富文本控件,为一个只读日志付出富文本的排版代价不值。
+    //
+    // 只读 + 封顶都收在 configureLogView() 里,好让无头测试能验到
+    // **同一段代码** —— 理由见 run_policy.h 里那个函数的注释。
+    m_logView = new QPlainTextEdit;
+    w7::configureLogView(m_logView);
     m_logView->setStyleSheet("background:#1e1e1e; color:#ddd; font-family:Consolas,monospace;");
     layout->addWidget(m_logView, 1);
 
@@ -868,6 +893,43 @@ static QList<OperatorNode*> topoSort(PipelineView* canvas, bool* hasCycle) {
 
 
 void MainWindow::onRunClicked() {
+    // === 重入防护(第一道) ===
+    // 这一句必须在最前面,连参数校验都不能做:Run 里的 processEvents()
+    // 会把用户的第二次点击派发进来,重入一层就等于两个帧循环叠着跑,
+    // 共享同一个画布和日志。实测这类叠跑的表现就是"窗口不动、没有弹窗"。
+    if (!w7::beginRun(&m_runState)) {
+        appendLog(tr("[Run] 已经在跑了,忽略这次点击(或点 Stop 中止)"));
+        return;
+    }
+    // 从这里到函数结束都必须把状态还原,否则一次早退就把程序
+    // 永久锁在"正在跑"状态,之后再也点不动 Run。
+    // 所以用一个 RAII 守卫,而不是在每个 return 前手写一遍 ——
+    // 手写的话以后再加一个 early return 就漏一处,而漏了的表现是
+    // "程序莫名其妙再也不响应 Run",极难查。
+    //
+    // 守卫要管三样:运行标志、Stop 按钮、Undo/Redo 的启用态。
+    // 少管一样就等于留一个"下次 Run 点不动/按钮一直是灰的"的坑。
+    struct RunGuard {
+        MainWindow* w;
+        bool undoWas, redoWas;
+        explicit RunGuard(MainWindow* win)
+            : w(win),
+              undoWas(win->m_undoAction->isEnabled()),
+              redoWas(win->m_redoAction->isEnabled()) {
+            w->m_stopBtn->setEnabled(true);
+            // 跑批期间禁掉 Undo/Redo:拓扑序里是节点裸指针,
+            // 中途 Ctrl+Z 删掉节点,循环下一轮就会拿已释放的内存去写。
+            w->m_undoAction->setEnabled(false);
+            w->m_redoAction->setEnabled(false);
+        }
+        ~RunGuard() {
+            w7::endRun(&w->m_runState);
+            w->m_stopBtn->setEnabled(false);
+            w->m_undoAction->setEnabled(undoWas);
+            w->m_redoAction->setEnabled(redoWas);
+        }
+    } runGuard(this);
+
     QString fallbackPath = m_imagePathEdit->text();
     if (fallbackPath.isEmpty()) {
         QMessageBox::warning(this, tr("提示"), tr("请先在工具栏输入图像路径或拖入 image_source 节点"));
@@ -886,13 +948,23 @@ void MainWindow::onRunClicked() {
 
     // 拓扑排序
     bool hasCycle = false;
-    QList<OperatorNode*> order = topoSort(m_canvas, &hasCycle);
+    const QList<OperatorNode*> rawOrder = topoSort(m_canvas, &hasCycle);
     if (hasCycle) {
         appendLog(tr("[Run] ❌ 检测到环路!无法执行（%1 个节点未参与拓扑序）")
-            .arg(m_canvas->nodes().size() - order.size()));
+            .arg(m_canvas->nodes().size() - rawOrder.size()));
         statusBar()->showMessage(tr("❌ 环路"), 5000);
         return;
     }
+    // 立刻把裸指针换成 QPointer。
+    // 帧循环是长循环,而 Run 期间虽然禁了 Undo/Redo,画布本身还是活的
+    // (右键删除、拖节点、Load 工程都还能改场景)。QPointer 会在对象
+    // 被销毁时自动置空,于是"节点中途没了"从 use-after-free(堆损坏 →
+    // 随机卡死)变成一次干净的跳过。
+    // 换成 QPointer 之后每轮开头那次 null 检查就是必需的了,别当冗余删掉。
+    QList<QPointer<OperatorNode>> order;
+    order.reserve(rawOrder.size());
+    for (OperatorNode* n : rawOrder) order.append(QPointer<OperatorNode>(n));
+
     appendLog(tr("[Run] 拓扑序: %1 个节点,按图执行")
         .arg(order.size()));
 
@@ -903,27 +975,77 @@ void MainWindow::onRunClicked() {
     // 所以循环上界是动态的,不是先算好再跑。
     // 引擎通过 inputs["frame_index"] 告诉源"这轮要第几帧"。
     QHash<OperatorNode*, QJsonObject> nodeOutputs;   // 每个节点的输出缓存(本帧内传递用)
-    OperatorNode* finalNode = nullptr;
+    QPointer<OperatorNode> finalNode;               // 同样不用裸指针,理由见上面 order 那段
     QJsonObject finalResult;                        // 保留最后一帧的结果供显示
     int totalFrames = 1;
     int passCount = 0, failCount = 0, frameDone = 0;
+    bool cancelled = false;
+
+    // 距上次抽帧的时长,用来给 processEvents 限频。
+    // 这个计时器是这次卡死修复的核心之一 —— 以前每个节点无条件
+    // processEvents 一次,而 processEvents 会把挂起的重绘真的画出去,
+    // 于是"每写一行日志就重排版+重画整个不断变大的日志文档"。
+    // 实测单行代价 1545 us(QTextEdit),日志行数 = 帧数 x 节点数,
+    // 且单行代价随行数上涨 —— 2000 张 x 8 节点就是几万次整篇重绘,
+    // 表现就是"跑着跑着卡死",而且全程不弹任何框。
+    QElapsedTimer uiPumpTimer;
+    uiPumpTimer.start();
+    // 起始值取**负**的间隔,表示"上一次抽帧发生在无限久以前",
+    // 于是第 0 帧的第一次检查就会抽帧,用户马上看到节点被点亮。
+    //
+    // 这里原来写成 +kUiPumpIntervalMs,想着是"预热成够久了",
+    // 但下一次算的是 nowMs - lastPumpMs = 2 - 100 = -98 < 100,
+    // 于是第 0 帧**不会**抽帧 —— 注释和算式是反的。
+    // 是 run_policy 的测试用例 2 抓出来的:那条断言要求第 0 帧就该抽。
+    qint64 lastPumpMs = -kUiPumpIntervalMs;
 
     // === 清掉上一次的每步缓存和状态点 ===
     // 不清的话:用户改了参数没重跑,右键看到的是旧结果,
     // 还会以为"我明明调了阈值怎么没用" —— 比看不到更误导。
     clearStepCache();
-    for (OperatorNode* n : order) n->setStepStatus(OperatorNode::StepStatus::None);
+    for (const auto& n : order) {
+        if (n) n->setStepStatus(OperatorNode::StepStatus::None);
+    }
 
     for (int frame = 0; frame < totalFrames; ++frame) {
+        // === 取消检查 ===
+        // 放在帧边界而不是节点边界:Stop 的语义是"跑完这一帧就收工",
+        // 在节点中间硬停会让这一帧的输出半新半旧,汇总数字反而对不上。
+        if (m_runState == w7::RunState::Cancelling) {
+            cancelled = true;
+            appendLog(tr("[Run] 🛑 已中止,完成 %1 帧").arg(frameDone));
+            break;
+        }
+
         nodeOutputs.clear();
         finalNode = nullptr;
         QJsonObject frameResult;
-        appendLog(tr("──────── 第 %1 帧 ────────").arg(frame + 1));
+        appendLog(tr("──────── 第 %1/%2 帧 ────────")
+                  .arg(frame + 1).arg(qMax(totalFrames, frame + 1)));
 
         for (int step = 0; step < order.size(); ++step) {
-        OperatorNode* n = order[step];
+        // 节点可能已经不在了(跑批期间右键删了/拖了/Load 了)。
+        // QPointer 在这里自动变 null,跳过就行 —— 换成裸指针就是
+        // 往已释放内存上写,堆一坏,表现是随机的卡死或闪退。
+        if (!order[step]) {
+            appendLog(tr("  ⚠️ 第 %1 步的节点在运行中被删除,跳过").arg(step + 1));
+            continue;
+        }
+        OperatorNode* n = order[step].data();
         m_canvas->highlightNode(n->opName(), true);
-        QApplication::processEvents();
+
+        // === UI 抽帧限频 ===
+        // 按时间限频,不是每节点都刷。再快也最多 10 次/秒。
+        // 副作用是好的:一帧之内的多次日志写入会合并成一次重绘,
+        // 而不是每个节点重画一遍整个日志。
+        const qint64 nowMs = uiPumpTimer.elapsed();
+        if (w7::shouldPumpUi(nowMs - lastPumpMs)) {
+            lastPumpMs = nowMs;
+            // 让用户看得见在动 —— "看不出在动"和"卡死了"在体感上是一回事。
+            statusBar()->showMessage(tr("运行中… 第 %1/%2 帧")
+                .arg(frame + 1).arg(qMax(totalFrames, frame + 1)));
+            QApplication::processEvents();
+        }
 
         // === 构造 inputs:优先合并所有前驱节点 outputs(后写覆盖) ===
         // === B 方案:不再硬塞 image_path;若上游没产 image_path 才 fallback 工具栏 ===
@@ -1007,14 +1129,30 @@ void MainWindow::onRunClicked() {
 
         finalResult = frameResult;   // 留给后面的结果图显示
 
-        // 首帧跑完才知道一共有多少帧 —— 循环上界因此是动态的
+        // 首帧跑完才知道一共有多少帧 —— 循环上界因此是动态的。
+        //
+        // clampFrameCount 是这次卡死修复的入口闸门:
+        // 以前这里直接把源报的 frame_count 当循环上界,而文件夹源报的
+        // 是目录里的文件数。指向一个大目录就是几万轮同步跑,而且日志
+        // 行数 = 帧数 x 节点数,每行都要重画一次日志 ——
+        // 这条链就是用户报的"跑着跑着卡死"。
+        //
+        // 截断了必须在日志里说清楚,不然用户会以为全跑完了。
         if (frame == 0) {
             for (auto it = nodeOutputs.constBegin(); it != nodeOutputs.constEnd(); ++it) {
                 if (it.value().contains("frame_count")) {
-                    totalFrames = qMax(1, it.value().value("frame_count").toInt(1));
+                    const int reported = it.value().value("frame_count").toInt(1);
+                    bool truncated = false;
+                    totalFrames = w7::clampFrameCount(reported, &truncated);
+                    if (truncated) {
+                        appendLog(tr("⚠️ 一共有 %1 帧,超过单次上限 %2 帧,只跑前 %2 帧")
+                            .arg(reported).arg(w7::kMaxRunFrames));
+                        appendLog(tr("   要跑全部就分批,或者把上限调高(kMaxRunFrames)"));
+                    }
                     break;
                 }
             }
+            statusBar()->showMessage(tr("共 %1 帧").arg(totalFrames), 3000);
         }
     }   // ← 帧循环结束
 
@@ -1024,11 +1162,21 @@ void MainWindow::onRunClicked() {
     // === 多帧汇总 ===
     // 只看最后一帧的 PASS/FAIL 是不够的:抽检 30 帧里 1 帧有问题,
     // 末帧正常的话单看末帧就是漏检。产线的判废看的是整体,不是抽一张。
+    //
+    // 中止的批次**不能**报"全批 OK":用户 Stop 掉一个 2000 帧的批次,
+    // 恰好前 3 帧都 PASS,报"全批 3 帧判 OK"看起来像整批合格,
+    // 而剩下 1997 帧根本没跑 —— 这是个会误导判废的假结论。
+    // 所以中止时明说"跑了一部分,结论不完整"。
     if (totalFrames > 1) {
         appendLog("----------------------------------------");
         appendLog(tr("📊 批量汇总: 共 %1 帧 — PASS %2 / FAIL %3")
             .arg(frameDone).arg(passCount).arg(failCount));
-        if (failCount > 0) {
+        if (cancelled) {
+            appendLog(tr("🛑 本批被手动中止:只跑完 %1/%2 帧,**这不是整批结论**")
+                .arg(frameDone).arg(totalFrames));
+            statusBar()->showMessage(tr("🛑 已中止(%1/%2 帧)")
+                .arg(frameDone).arg(totalFrames), 5000);
+        } else if (failCount > 0) {
             appendLog(tr("⚠️ 有 %1 帧判废,整批判 NG").arg(failCount));
             statusBar()->showMessage(tr("❌ 批量 FAIL (%1/%2 帧)")
                 .arg(failCount).arg(frameDone), 5000);
@@ -1231,7 +1379,7 @@ QJsonObject MainWindow::runOperatorByName(const QString&, const QJsonObject&, co
 
 void MainWindow::appendLog(const QString& msg) {
     QString ts = QDateTime::currentDateTime().toString("HH:mm:ss");
-    m_logView->append(QString("[%1] %2").arg(ts, msg));
+    m_logView->appendPlainText(QString("[%1] %2").arg(ts, msg));
 }
 
 // ============================================================
@@ -1240,6 +1388,17 @@ void MainWindow::appendLog(const QString& msg) {
 
 void MainWindow::execCommand(Command* cmd) {
     if (!cmd) return;
+    // === 第二道重入/悬垂防护 ===
+    // 禁用 Undo/Redo 按钮只挡住了快捷键那一路。画布本身在 Run 期间
+    // 仍然是活的:右键删节点、拖节点、拉连线都会走到这里。
+    // 帧循环正拿着这些节点的指针在跑,中途删掉就是 use-after-free,
+    // 堆一坏的表现是"随机卡死/必须杀进程",而且和触发它的操作对不上号,
+    // 极难查。所以在真正改场景之前就统一拦掉。
+    if (w7::isRunning(m_runState)) {
+        appendLog(tr("[Cmd] 正在运行中,已忽略这次改动(先点 Stop)"));
+        delete cmd;
+        return;
+    }
     cmd->exec();                                  // 执行
     m_undoStack.push(cmd);                        // 压入 undoStack
     m_redoStack.clear();                          // 新操作清空 redoStack

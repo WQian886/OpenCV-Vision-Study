@@ -45,7 +45,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 8 个无头回归测试(335 断言)
+├── tests/                      # 9 个无头回归测试(378 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -250,11 +250,11 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,335 断言 / 8 个套件)
+## 🧪 回归测试(无头,378 断言 / 9 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
-# 一次跑完全部 8 个套件
+# 一次跑完全部 9 个套件
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build --output-on-failure'
 ```
 
@@ -264,10 +264,27 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `pcb_operators` | 32 | **W6 那 8 张样本图**:baseline 零缺陷,7 张缺陷图各自命中自己那类 | OpenCV |
 | `dl_postprocess` | 49 | letterbox 补边/缩放、NMS 阈值、YOLOv5-v8 布局解析、退化输入不越界 | OpenCV |
 | `image_sources` | 20 | 帧循环契约(按 frame_index 真的换帧/换张)、坏输入不崩 | OpenCV |
-| `step_result` | 35 | 状态点判定边界、每步缓存用 UUID 做 key、**boundingRect 圈住端口圆** | Qt |
+| `step_result` | 35 | 状态点判定边界、每步缓存用 UUID 做 key、**boundingRect 圈住端口圆**、**拖线时节点不跟着跑** | Qt |
 | `pin_and_recent` | 44 | 该拦的拦/不该拦的放行、路径归一化、已删条目剔除 | QtCore |
 | `line_fit` | 24 | 长度/角度算术、**角度 0~180 的约定**、两点重合不报错、没图照样能算 | OpenCV |
 | `measurement` | 59 | 圆度阈值真在滤方块、周长 0 不除零、**量的是垂直距离不是直线距离**、A/B 重合退化、**夹角退化为 0 而不是假角度** | OpenCV |
+| `run_policy` | 43 | **帧数封顶 / 抽帧限频 / 取消+禁重入**、日志行数封顶、封顶后重绘代价不暴涨 | Qt |
+
+### 跑批卡死的回归测试
+
+`run_policy` 测的是 2026-10-08 修的"点 Run 跑批容易卡死"。先说清楚
+**测的不是渲染快不快** —— 实测画布逻辑 3 µs/步、渲染 1 ms/帧 @40 节点,
+画布无辜。测的是三条"都不崩"的规则:
+
+- **不崩**是这个项目最难抓的一类缺陷。帧数不封顶照样能跑完,只是要等;
+  抽帧不限频照样出结果,只是界面卡。所以"跑一遍看有没有报错"永远
+  发现不了,只能把规则拆成纯函数(`run_policy.h`)钉住。
+- 六个变异验证(逐个把 bug 放回去)全部被抓:去封顶 3 条红、去限频 4 条、
+  去重入防护 2 条、Idle 也接受取消 3 条、去日志封顶 4 条、`endRun` 不复位 2 条。
+- `test_log_document_is_bounded` 特意调的是 `configureLogView()` ——
+  和主窗口**同一个函数**。第一版测试自己 new 了个控件再设上限,那只证明
+  了"封顶机制管用",没证明"主窗口调了它",把 mainwindow 里那行删掉照样全绿。
+  测平行宇宙等于没测。
 
 ### 画布渲染 bug 的回归测试
 
