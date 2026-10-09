@@ -2,20 +2,43 @@
 #include <QSpinBox>
 #include <QComboBox>
 #include <QJsonArray>
+#include <QStringList>
 #include <opencv2/opencv.hpp>
+#include <algorithm>
+#include <cmath>
 
 namespace w7 {
 
 // ============================================================
 // 板型真值(同步自 W6 main.cpp 的 SITES 数组)
 // 只在 known_site 模式用。auto_contour 模式不依赖它。
+//
+// === 表里的数字是什么意思 ===
+// 数字还是从 1000x700 那张图上量的,但**含义变了**:
+// 它们是"这块板在整张图里占多大比例、中心在图上什么位置"的参考值。
+// run() 里统一乘上 (imgW/1000, imgH/700),所以换分辨率、换工位相机时
+// ROI 会跟着缩放,而不是死死钉在那几个像素上。
+//
+// 改之前是什么样(实测,不是推演):
+//   图缩到 500x350 -> R2 的 ROI(90,456,120,48)整个掉到板外,
+//   元件被 continue 跳过 -> 6 个元件只剩 2 个 -> 判定照样输出 PASS。
+//   一条日志都没有。这是"什么都没检查却报合格",比判错更危险。
+//
+// ⚠ 归一化只解决"分辨率变了",不解决"板型变了"。
+//    换一块布局不同的板子,这组比例照样是错的 —— 那是另一件事。
 // ============================================================
 namespace {
+// 标定时的参考分辨率
+constexpr int kRefW   = 1000;
+constexpr int kRefH   =  700;
+// 参考分辨率下 ROI 四周多留的余量(像素)
+constexpr int kRefBuf =   10;
+
 struct SiteDef {
     const char* label;
     const char* kind;
-    int cx, cy;
-    int bodyW, bodyH;
+    int refCx, refCy;         // 参考分辨率下的中心点
+    int refBodyW, refBodyH;   // 参考分辨率下的本体尺寸
 };
 
 const SiteDef SITES[6] = {
@@ -125,12 +148,32 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
         }
     } else {
         // --- 真值模式:按 SITES 构造 ROI(W6 已验证路径) ---
+        //
+        // 站点几何按图像尺寸等比缩放(见上面"表里的数字是什么意思")。
+        // 余量取**较小**的那个缩放比:ROI 撑大只会稀释下游的比例阈值,
+        // 留窄一点最多是贴边,不会把元件切掉 —— 宁可保守。
+        const double sx = static_cast<double>(img.cols) / kRefW;
+        const double sy = static_cast<double>(img.rows) / kRefH;
+        const int buf = std::max(1, static_cast<int>(
+            std::lround(kRefBuf * std::min(sx, sy))));
+
+        // 站点被丢掉的要记账。以前是"越界就 continue",于是
+        // 上游少给几个元件,下游照样报 PASS,没人知道少算了。
+        QStringList skipped;
+
         for (const auto& s : SITES) {
+            const int cx = static_cast<int>(std::lround(s.refCx * sx));
+            const int cy = static_cast<int>(std::lround(s.refCy * sy));
+            const int bw = static_cast<int>(std::lround(s.refBodyW * sx));
+            const int bh = static_cast<int>(std::lround(s.refBodyH * sy));
+            cv::Rect roi(cx - bw / 2 - buf, cy - bh / 2 - buf,
+                         bw + 2 * buf, bh + 2 * buf);
             // ROI 与图像边界求交,换分辨率也不会越界
-            cv::Rect roi(s.cx - s.bodyW / 2 - 10, s.cy - s.bodyH / 2 - 10,
-                         s.bodyW + 20, s.bodyH + 20);
             roi &= cv::Rect(0, 0, img.cols, img.rows);
-            if (roi.width <= 0 || roi.height <= 0) continue;
+            if (roi.width <= 0 || roi.height <= 0) {
+                skipped << QString::fromUtf8(s.label);
+                continue;
+            }
 
             QJsonObject cj;
             cj["label"] = QString::fromUtf8(s.label);
@@ -150,6 +193,15 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
                         cv::Point(roi.x, std::max(12, roi.y - 4)),
                         cv::FONT_HERSHEY_SIMPLEX, 0.5,
                         cv::Scalar(0, 220, 0), 1);
+        }
+
+        if (!skipped.isEmpty()) {
+            output["warning"] = QString(
+                "板型真值里的 %1 个站点(%2)在这张 %3x%4 的图上算不出有效 ROI,"
+                "已经跳过 —— 下游只能判定剩下的 %5 个元件,"
+                "不要把这次的结论当成整板都查过了。")
+                .arg(skipped.size()).arg(skipped.join(","))
+                .arg(img.cols).arg(img.rows).arg(compsJson.size());
         }
     }
 

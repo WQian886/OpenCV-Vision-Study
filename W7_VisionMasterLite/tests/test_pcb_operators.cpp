@@ -175,8 +175,12 @@ static void test_missing_input_error() {
 
 // ------------------------------------------------------------
 // 用例 5:阈值可调 —— 这正是搬成算子的意义
-// 把 dark_thresh 调到 0,missing 判定必须失效;baseline 依然零缺陷。
+// 把 dark_min_pct 调到 0,missing 判定必须失效;baseline 依然零缺陷。
 // 说明阈值真的在控制逻辑,不是摆设。
+//
+// (这里跟着阈值单位一起改过:原来是像素数 dark_thresh=0 / =100000,
+//  现在是百分比 dark_min_pct=0 / =100。名字和量纲都变了 ——
+//  沿用旧名字的话,老存档里的 50 会被读成 50%。)
 // ------------------------------------------------------------
 static void test_threshold_actually_controls() {
     beginCase("阈值真的在控制判定(不是摆设)");
@@ -186,21 +190,21 @@ static void test_threshold_actually_controls() {
 
     PcbDefectJudge judge;
     QJsonObject loose = judge.defaultParams();
-    loose["dark_thresh"] = 0;          // 放宽:任何图都不再判缺件
+    loose["dark_min_pct"] = 0;         // 放宽:任何图都不再判缺件
     QJsonObject lOut = judge.run(loose, iOut);
     QJsonArray lDefects = lOut.value("defects").toArray();
     bool stillMissing = false;
     for (const auto& d : lDefects)
         if (d.toObject().value("type").toString() == "missing") stillMissing = true;
-    check(!stillMissing, "dark_thresh=0 时不再判缺件");
+    check(!stillMissing, "dark_min_pct=0 时不再判缺件");
 
     QJsonObject tight = judge.defaultParams();
-    tight["dark_thresh"] = 100000;     // 收紧:正常板子也会被判缺件
+    tight["dark_min_pct"] = 100;       // 收紧:正常板子也会被判缺件
     QJsonObject tOut = judge.run(tight,
         inspect.run(inspect.defaultParams(),
                     QJsonObject{{"image_path", "images/baseline.png"}}));
     check(tOut.value("result").toString() == "FAIL",
-          "dark_thresh=100000 时 baseline 也 FAIL(证明阈值生效)");
+          "dark_min_pct=100 时 baseline 也 FAIL(证明阈值生效)");
 }
 
 // ------------------------------------------------------------
@@ -338,17 +342,33 @@ static void test_judge_refuses_uninspectable_components() {
     }
 }
 // ------------------------------------------------------------
-static void test_known_cross_talk() {
-    beginCase("已知串扰:short.png 的短路桥会顺带触发 wrong");
+// 短路圆环和邻位元件的串扰
+// ------------------------------------------------------------
+// 以前这条钉的是"串扰**存在**":short.png 的短路桥伸进 R3 的 ROI,
+// 把 R3 的浅黄像素抬到 261px,而当时阈值是 200px —— 于是顺带报了个
+// `wrong`。那个 wrong 是假的:R3 本身没问题,是邻居的桥伸过来的。
+//
+// 阈值改成占 ROI 面积的百分比之后,实测:
+//   串扰抬起来的浅黄 = 4.53% ROI
+//   R3 真的错件时    = 44.8% ROI   (wrong.png)
+// 默认值取 12% —— 两边都留着余量,串扰不再触发,真错件照样抓得到。
+// 所以这里的预期从"报出 wrong"翻转成"**不**报 wrong"。
+//
+// 仍然保留结构性的那一半:wrong 必须挂在 R3 身上。
+// 用 wrong.png 来验 —— 那张图 R3 是真的错了。
+// 万一以后是别的元件串了,光看"类型还在"会误以为没事。
+static void test_short_crosstalk_and_wrong_owner() {
+    beginCase("short.png 的串扰不再误报 wrong");
     RunResult r = runPipeline("short.png");
 
     check(r.defectTypes.contains("short"), "仍然报出 short");
-    check(r.defectTypes.contains("wrong"),
-          "仍然报出 wrong(短路桥伸进了 R3 的 ROI)");
+    check(!r.defectTypes.contains("wrong"),
+          QString("串扰不再触发假 wrong(实际命中:%1)")
+              .arg(r.defectTypes.values().join(",")));
 
-    // 确认这个 wrong 确实挂在 R3 上 —— 万一以后是别的元件串了,
-    // 光看"类型还在"会误以为没事
-    const QJsonArray defects = r.judgeOut.value("defects").toArray();
+    RunResult w = runPipeline("wrong.png");
+    check(w.defectTypes.contains("wrong"), "wrong.png 仍报出 wrong");
+    const QJsonArray defects = w.judgeOut.value("defects").toArray();
     QString wrongOwner;
     for (const auto& d : defects) {
         QJsonObject o = d.toObject();
@@ -356,7 +376,7 @@ static void test_known_cross_talk() {
             wrongOwner = o.value("component").toString();
     }
     check(wrongOwner == "R3",
-          QString("串扰挂在 R3 上(实际 '%1')").arg(wrongOwner));
+          QString("wrong 挂在 R3 上(实际 '%1')").arg(wrongOwner));
 }
 
 int main(int argc, char* argv[]) {
@@ -374,7 +394,7 @@ int main(int argc, char* argv[]) {
     test_threshold_actually_controls();
     test_auto_contour_mode();
     test_judge_refuses_uninspectable_components();
-    test_known_cross_talk();
+    test_short_crosstalk_and_wrong_owner();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;
