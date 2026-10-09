@@ -89,4 +89,22 @@ inline bool readHsvTriple(const QJsonValue& v, const QString& key,
     return true;
 }
 
+// 读一个标量阈值(H 下界、S 下界、倍数系数这类)。
+//
+// 单独写一个而不是硬套 readHsvTriple:那套守卫是按"数组里可能塞进
+// 字符串"设计的,而标量这边真正要挡的是**另一种**坑 ——
+// toInt() 对字符串和对未定义值都返回 0,而 0 在多数阈值里是合法值
+// (mask_v_mul=0 会让掩膜变全开,比报错更难查)。
+//
+// 同样遵守上面那条规矩:形状不对就报错,**不补默认值**。
+inline bool readHsvScalar(const QJsonValue& v, const QString& key,
+                          double* out, QString* err) {
+    if (!v.isDouble()) {
+        *err = QString("%1 不是数字(实际是%2)").arg(key, jsonTypeName(v.type()));
+        return false;
+    }
+    *out = v.toDouble();
+    return true;
+}
+
 } // namespace w7

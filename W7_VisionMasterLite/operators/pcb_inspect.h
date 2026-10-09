@@ -32,6 +32,7 @@
 #include "param_form.h"
 
 class QSpinBox;
+class QDoubleSpinBox;
 class QComboBox;
 
 namespace w7 {
@@ -67,11 +68,14 @@ private:
     QComboBox* m_mode    = nullptr;
     QSpinBox* m_hLow     = nullptr;
     QSpinBox* m_sLow     = nullptr;
-    QSpinBox* m_vLow     = nullptr;
     QSpinBox* m_hHigh    = nullptr;
-    QSpinBox* m_sHigh    = nullptr;
-    QSpinBox* m_vHigh    = nullptr;
-    QSpinBox* m_minArea  = nullptr;
+    // V 下界是"板面基色 x 多少倍",不是绝对 V,所以用小数框。
+    // 原来这里还有 m_vLow / m_sHigh / m_vHigh 三个绝对值框 —— S 上限恒为 255
+    // (inRange 的高端),V 上限也恒为 255,两个框从来调不出任何东西,
+    // 一并去掉。V 下界改成倍数是实测逼出来的:绝对 V>=80 在亮度 0.4 倍时
+    // 把金层切掉(实测 R1 的 gold_px 168 -> 144),相对式 0.4~1.6 全档平。
+    QDoubleSpinBox* m_vMul      = nullptr;
+    QDoubleSpinBox* m_minAreaPct = nullptr;
 };
 
 } // namespace w7

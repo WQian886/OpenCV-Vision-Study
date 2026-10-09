@@ -226,5 +226,67 @@ inline uchar maskVLower(const cv::Vec3b& base, double mul = kMaskVMul) {
     return static_cast<uchar>(std::min(255.0, std::max(0.0, v)));
 }
 
+// ---------- HSV 掩膜本体 ----------
+//
+// 抽出来的原因不是"好看",是**实测出来两份已经漂开了**:
+//   pcb_inspect   H[85,115] S>=80 V>=80   (绝对,2026-10-09 之前一直如此)
+//   pcb_defect_judge H[85,115] S>=80 V>=0.8*板面V
+// 上一轮只把判定那一份改成相对式,定位那一份没动。两份 H/S 相同、
+// 只有 V 下界不同,而唯一能暴露这个差异的字段 gold_px **全仓库没人读** ——
+// 于是 56/56 端到端测试照样全绿,漂开这件事没有任何测试能看见。
+//
+// 这就是"抄副本"最贵的一种:第四份抄出来了,而这次连测试都是绿的。
+//
+// 所以 H/S 区间和"怎么用板面算 V 下界"都收在这里,
+// 两个算子只调这一个函数。H/S 保持可配(pcb_inspect 原来就是参数,
+// 界面上的六个框还得留),但**默认值来自这份常量**,不是各处自己写一遍。
+struct HsvBand {
+    int hLo, hHi;
+    int sLo;
+    double vMul;
+};
+
+// 金层。实测 H 85-115:合成器的 GOLD 实际落在这段(W6 笔记记的坑 ——
+// 用 W2 的常规金色范围会抓到 IC 的深蓝本体而不是金层)。
+inline HsvBand goldBand(double vMul = kMaskVMul) { return {85, 115, 80, vMul}; }
+
+// 蓝紫短路圆环。与金层的区别只在 H 段,不另写一份 inRange。
+inline HsvBand blueBand(double vMul = kMaskVMul) { return {100, 135, 80, vMul}; }
+
+// 按色带生成掩膜。V 下界锚在板面基色上,理由见上面 maskVLower 那段。
+//
+// hsv 必须是 BGR2HSV 之后的图。这里不自己调 cvtColor ——
+// 两个算子本来就都要转一次(judge 还要蓝环那一道),转换留在调用方,
+// 别在这儿再转一遍变成第三份开销。
+inline cv::Mat bandMask(const cv::Mat& hsv, const cv::Vec3b& base,
+                        const HsvBand& band) {
+    cv::Mat m;
+    cv::inRange(hsv,
+                cv::Scalar(band.hLo, band.sLo, maskVLower(base, band.vMul)),
+                cv::Scalar(band.hHi, 255, 255),
+                m);
+    return m;
+}
+
+// 开运算去噪点。两个算子的金层掩膜都要,原来各写一遍
+// getStructuringElement + morphologyEx。核尺寸跟着图缩放 ——
+// 原来写死 3x3,在 2x 图上等于噪点比原来大一倍,0.5x 上又比原来小一倍。
+inline cv::Mat opened(const cv::Mat& mask, double scale = 1.0) {
+    int n = std::max(1, static_cast<int>(std::lround(3.0 * scale)));
+    if (n % 2 == 0) ++n;               // 必须是奇数,才有中心
+    cv::Mat k = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(n, n));
+    cv::Mat out;
+    cv::morphologyEx(mask, out, cv::MORPH_OPEN, k);
+    return out;
+}
+
+// 核尺寸该按多大 —— 相对图像短边的经验比例,不是像素数。
+// 实测:baseline 1000x700 上 3x3 正好;换分辨率时固定 3x3 会让
+// 噪点过滤的相对强度跟着变(0.5x 变强、2x 变弱)。
+inline double kernelScale(const cv::Mat& img, int refW = 1000, int refH = 700) {
+    return std::min(static_cast<double>(img.cols) / refW,
+                    static_cast<double>(img.rows) / refH);
+}
+
 } // namespace pcbcolor
 } // namespace w7

@@ -417,7 +417,7 @@ static void test_short_crosstalk_and_wrong_owner() {
 }
 
 // ------------------------------------------------------------
-// 用例 9:HSV 阈值给成怪形状时报错,不崩
+// 用例 9:阈值给成怪形状时报错,不崩
 //
 // 成因是抄副本:QJsonArray::operator[] **不检查越界**。
 // 以前 pcb_inspect.cpp 的 run() 写的是裸的 `lo[0].toInt(85)`,
@@ -428,28 +428,41 @@ static void test_short_crosstalk_and_wrong_owner() {
 //   ① 崩 -> 变成一条明确的 error
 //   ② 报错时**不产出任何元件** —— 不能给下游一个"0 个元件"的列表,
 //      那和"什么都没检查却报 PASS"是同一类安静的错误。
+//
+// ⚠ 2026-10-09 参数形状变了(hsv_low/hsv_high 两个数组 -> 四个标量),
+//    所以这一版的用例也跟着换。**换掉不等于可以不测** ——
+//    守卫还在,只是挡的东西从"数组太短"变成"标量类型不对 + 取值越界"。
+//    变异验证 M11/M12 就是改坏这两道新守卫。
 // ------------------------------------------------------------
 static void test_hsv_param_guarded() {
-    beginCase("金层 HSV 参数形状不对时报错,不崩");
+    beginCase("金层阈值形状不对时报错,不崩");
 
     PcbInspect inspect;
     const QJsonObject in{{"image_path", "images/baseline.png"}};
 
     struct Case {
         const char* what;
-        QJsonValue low;
+        const char* key;
+        QJsonValue bad;
         const char* expect;         // 报错里应该点名的字段
     };
     const Case cases[] = {
-        {"空数组",       QJsonArray{},                 "hsv_low"},
-        {"只有两个元素", QJsonArray{85, 80},           "hsv_low"},
-        {"第一个是字符串", QJsonArray{"85", 80, 80},   "hsv_low"},
-        {"根本不是数组",  QJsonValue(85),              "hsv_low"},
+        {"H 下界是数组",     "hsv_h_low",  QJsonArray{85},       "hsv_h_low"},
+        {"H 下界是字符串",   "hsv_h_low",  QJsonValue("85"),     "hsv_h_low"},
+        {"S 下界不是数字",   "hsv_s_low",  QJsonValue("80"),     "hsv_s_low"},
+        {"H 上界缺失",       "hsv_h_high", QJsonValue(),         "hsv_h_high"},
+        {"V 倍数是字符串",   "mask_v_mul", QJsonValue("0.8"),    "mask_v_mul"},
+        // 取值越界:类型对但数不对。以前没有这一层,现在有。
+        {"H 下界超过 179",   "hsv_h_low",  QJsonValue(300.0),    "H 区间不合法"},
+        {"H 下界不小于上界", "hsv_h_low",  QJsonValue(120.0),    "H 区间不合法"},
+        {"S 下界越界",       "hsv_s_low",  QJsonValue(999.0),    "S 下界"},
+        {"V 倍数为负",       "mask_v_mul", QJsonValue(-1.0),     "倍数"},
+        {"V 倍数过大",       "mask_v_mul", QJsonValue(10.0),     "倍数"},
     };
 
     for (const auto& c : cases) {
         QJsonObject p = inspect.defaultParams();
-        p["hsv_low"] = c.low;
+        p[c.key] = c.bad;
         QJsonObject out = inspect.run(p, in);
 
         check(out.contains("error"),
@@ -463,14 +476,20 @@ static void test_hsv_param_guarded() {
                   .arg(c.what).arg(out.value("count").toInt()));
     }
 
-    // hsv_high 同样要查,别只测一半
+    // 老存档:以前是 hsv_low/hsv_high 两个数组。现在**故意不读它们** ——
+    // 沿用旧名字的话,里面的 80 会被当成 80 倍板面色,金层恒空。
+    // 宁可退回默认让人看出"没生效",也不能让用户以为自己的数在起作用。
     {
         QJsonObject p = inspect.defaultParams();
-        p["hsv_high"] = QJsonArray{};
+        p["hsv_low"]  = QJsonArray{85, 80, 80};
+        p["hsv_high"] = QJsonArray{115, 255, 255};
         QJsonObject out = inspect.run(p, in);
-        check(out.value("error").toString().contains("hsv_high"),
-              QString("hsv_high 空数组 -> 报错点名 hsv_high(实际 \"%1\")")
-                  .arg(out.value("error").toString()));
+        check(!out.contains("error"),
+              QString("老存档的 hsv_low/hsv_high 被忽略而不是报错"
+                      "(实际 error=\"%1\")").arg(out.value("error").toString()));
+        check(out.value("count").toInt() == 6,
+              QString("忽略旧参数后仍定位到 6 个元件(实际 %1)")
+                  .arg(out.value("count").toInt()));
     }
 
     // 对照组:没有这条,"永远报错"也能让上面全绿 —— 而那等于把定位废了
@@ -861,6 +880,221 @@ static void test_color_threshold_sensitivity() {
     }
 }
 
+// gold_pct 在 1.0x 上的基准值。声明放在用例前面:它要跨多个 case 比对,
+// 而每处重新算一遍等于把这个量抄第二份。
+static QString refGoldPct;
+
+// ------------------------------------------------------------
+// 用例 14:两个算子的金层掩膜必须是同一份
+//
+// 这条是 2026-10-09 实测出来的抄副本第四例,而且是**最隐蔽的一例**:
+// 上一轮把判定的金层 V 下界改成相对式(0.8 x 板面V),定位那边还写着
+// 绝对 V>=80。两份 H/S 完全相同、只有 V 下界不同。
+//
+// 为什么所有测试都是绿的:
+//   · 唯一能看见差异的字段是 gold_px,而它**全仓库没有任何消费者**
+//   · 端到端 56 格(8 张 x 7 档亮度)照跑照绿
+//   · 亮度测试量的是 0.40~1.60,只在 k=0.4 才切掉 24 个像素,
+//     而 k=0.4 那格的判定结论没变
+//
+// 所以"两份定义漂开了"这件事,没有任何一条已有测试能发现。
+// 唯一能发现的是**直接断言两个算子用同一份定义**。
+// ------------------------------------------------------------
+static void test_gold_mask_shared_between_operators() {
+    beginCase("定位与判定的金层掩膜是同一份定义");
+    QDir().mkpath("build/_gm");
+
+    // ① 共用实现本身:两个算子调的是同一个函数,不是各自拼 Scalar。
+    //    变异验证 M13 把 judge 的 bandMask 换成手写 inRange -> 这里红。
+    PcbInspect inspect;
+    const QJsonObject io = inspect.run(inspect.defaultParams(),
+                                       QJsonObject{{"image_path", "images/baseline.png"}});
+    const QJsonArray cs = io.value("components").toArray();
+    check(cs.size() == 6, QString("定位到 6 个元件(实际 %1)").arg(cs.size()));
+
+    // gold_pct 存在,且**量纲是占 ROI 面积的百分比**。
+    //
+    // ⚠ 变异验证 M17 连着栽了两次,两次都是**我把尺子拿错了**:
+    //
+    //   第一版:只检查"字段存在且在 0~100 之间"。裸像素数也落在那个范围里,
+    //           于是全绿。
+    //   第二版:加了一条"p/100*ROI面积 <= ROI面积"。可 M17 的真实变异是
+    //           把 `100.0 *` 去掉,/ roiArea 那半截还在下一行,
+    //           于是它产出的是**分数**(0~1),不是像素数 —— 而分数当然
+    //           也过 0~100,也过面积上限。**我按错误的假设写检查,
+    //           等于没检查。**
+    //
+    // 正确的做法:别拿算子自己的输出去验证算子自己的输出。
+    // 这里**独立重算**一遍 —— 测试自己调 pcbcolor::estimateBoardBase +
+    // bandMask,拿自己算出的金像素数除以 ROI 面积,再和算子报的 gold_pct 比。
+    // 基准来自另一条计算路径,单位错、系数错、面积错,三样都会红。
+    {
+        cv::Mat img = cv::imread("images/baseline.png", cv::IMREAD_COLOR);
+        const cv::Vec3b base = pcbcolor::estimateBoardBase(img);
+        cv::Mat hsv;
+        cv::cvtColor(img, hsv, cv::COLOR_BGR2HSV);
+        const cv::Mat gold = pcbcolor::opened(
+            pcbcolor::bandMask(hsv, base, pcbcolor::goldBand()),
+            pcbcolor::kernelScale(img));
+
+        bool ok = true;
+        QStringList got;
+        for (const auto& v : cs) {
+            const QJsonObject c = v.toObject();
+            if (!c.contains("gold_pct")) { ok = false; got << "缺字段"; break; }
+            const cv::Rect roi(c.value("x").toInt(), c.value("y").toInt(),
+                               c.value("w").toInt(), c.value("h").toInt());
+            const double area = double(roi.width) * double(roi.height);
+            if (area <= 0) { ok = false; got << "ROI 面积 0"; break; }
+            const double want = 100.0 * cv::countNonZero(gold(roi)) / area;
+            const double gotv = c.value("gold_pct").toDouble(-1);
+            const double diff = std::fabs(gotv - want);
+            got << QString("%1 算子%2/独立算%3")
+                       .arg(c.value("label").toString())
+                       .arg(gotv, 0, 'f', 4).arg(want, 0, 'f', 4);
+            // 1e-6 的容差只够吸收浮点末位差,容不下任何单位错误。
+            if (diff > 1e-6) { ok = false; }
+        }
+        check(ok,
+              QString("gold_pct 的量纲是占 ROI 面积的百分比(独立重算比对:%1)")
+                  .arg(got.join(" ")));
+    }
+
+    // ② 跨亮度:同一张图改亮度,gold_pct 必须不动。
+    //    实测依据:绝对 V>=80 在 k=0.4 时 R1 的 gold_px 168 -> 144,
+    //    相对式在 0.4~1.6 全档稳在 168。这条钉的就是"别退回绝对"。
+    //
+    // 基准取**未改动的原图**(上面那次 inspect.run 已经量过了),
+    // 不能在循环里等 k=1.0 那一档再赋值 —— 循环顺序一变,
+    // 前面的档就会拿去比一个空串,然后无论实现对不对都红。
+    {
+        QStringList base;
+        for (const auto& v : cs)
+            base << QString::fromUtf8("%1").arg(
+                v.toObject().value("gold_pct").toDouble(), 0, 'f', 4);
+        refGoldPct = base.join(" ");
+    }
+    for (double k : {0.4, 0.8, 1.4, 1.6}) {
+        const QString dst = QString("build/_gm/baseline_k%1.png").arg(k, 0, 'f', 2);
+        cv::Mat img = cv::imread("images/baseline.png", cv::IMREAD_COLOR);
+        cv::Mat s;
+        img.convertTo(s, -1, k, 0.0);      // 只改亮度,尺寸不变
+        cv::imwrite(dst.toStdString(), s);
+
+        const QJsonObject o2 = PcbInspect().run(PcbInspect().defaultParams(),
+                                                QJsonObject{{"image_path", dst}});
+        const QJsonArray c2 = o2.value("components").toArray();
+        QStringList sig;
+        for (const auto& v : c2)
+            sig << QString::fromUtf8("%1").arg(v.toObject().value("gold_pct").toDouble(), 0, 'f', 4);
+        const QString now = sig.join(" ");
+        check(now == refGoldPct,
+              QString("亮度 %1x 的 gold_pct 不变(实际 %2 != %3)")
+                  .arg(k, 4, 'f', 1).arg(now, refGoldPct));
+    }
+
+    // ③ 极暗曝光下 gold_pct 仍然不变 —— 这条才是钉住"板面基色逐图估计"的。
+    //
+    // ⚠ 变异验证 M14(把 estimateBoardBase 换成写死的 cv::Vec3b(50,90,40))
+    //   第一版是全绿的。第一版我写的是"把图换个板色,gold_pct 必须变" ——
+    //   实测**没变**(2.9167 49.5602 ... 一模一样)。原因量出来了:
+    //   那个换色把板面从 (50,90,40) 变成 (80,45,52),V 下界只从 72 挪到 64;
+    //   而金层像素的 V 在 180~255,72→64 这个位移**跨不过任何一个像素**。
+    //   换句话说:我挑的刺激够不到那道门。判据没写错,是尺子不够长。
+    //
+    // 为什么 0.4~1.6 那一档也抓不到 M14:写死的 50/90/40 给出 V_lo=72,
+    // 而真实基色在 k 档给出 0.8*90*k。k=0.4 时两者都是 72(50/90/40 里
+    // G=90,0.8*90=72;写死也是 72)—— 正好撞平,所以看起来"碰巧对"。
+    // k 再往下,写死的 72 就开始高于真实基色给出的下界,金层被切掉。
+    //
+    // 实测:k=0.25 时金层 V 落到 45~64,真实 V_lo = 0.8*90*0.25 = 18
+    // (全留);写死常量仍是 72(全被切掉 -> gold_pct 全 0)。
+    // 判据是 0.25 档 gold_pct 必须和原图逐位相同。
+    {
+        const double k = 0.25;
+        const QString dst = QString("build/_gm/baseline_k%1.png").arg(k, 0, 'f', 2);
+        cv::Mat img = cv::imread("images/baseline.png", cv::IMREAD_COLOR);
+        cv::Mat s;
+        img.convertTo(s, -1, k, 0.0);
+        cv::imwrite(dst.toStdString(), s);
+
+        const QJsonObject o2 = PcbInspect().run(PcbInspect().defaultParams(),
+                                                QJsonObject{{"image_path", dst}});
+        QStringList sig;
+        const QJsonArray c2 = o2.value("components").toArray();
+        for (const auto& v : c2)
+            sig << QString::fromUtf8("%1").arg(
+                v.toObject().value("gold_pct").toDouble(), 0, 'f', 4);
+        check(sig.join(" ") == refGoldPct,
+              QString("0.25x 极暗曝光下 gold_pct 仍与原图逐位相同 —— "
+                      "证明 V 下界是跟着这张图的板面基色走的,不是写死的 72"
+                      "(实际 %1 != %2)").arg(sig.join(" "), refGoldPct));
+    }
+}
+
+// ------------------------------------------------------------
+// 用例 15:min_area / mergeDist 不得退回绝对像素
+// 实测(只改分辨率):绝对 80px 下 auto_contour 元件数
+//   0.5x->6  0.75x->9  1.0x->14  1.25x->18  1.5x->18  2.0x->18
+// 同一块板在不同分辨率上被切成 6 个或 18 个元件。
+// 改成占全图 0.05% 后:6 / 7 / 10 / 10 / 10 / 10。
+// ------------------------------------------------------------
+static void test_auto_contour_scale_stable() {
+    beginCase("auto_contour 换分辨率时元件数趋于稳定");
+
+    PcbInspect inspect;
+    QJsonObject p = inspect.defaultParams();
+    p["mode"] = "auto_contour";
+
+    const double scales[] = {0.5, 1.0, 1.5, 2.0};
+    QVector<int> counts;
+    for (double s : scales) {
+        const QString dst = QString("build/_gm/ac_x%1.png").arg(s, 0, 'f', 2);
+        cv::Mat img = cv::imread("images/baseline.png", cv::IMREAD_COLOR);
+        cv::Mat r;
+        cv::resize(img, r, cv::Size(), s, s,
+                   s < 1.0 ? cv::INTER_AREA : cv::INTER_LINEAR);
+        cv::imwrite(dst.toStdString(), r);
+        counts << inspect.run(p, QJsonObject{{"image_path", dst}}).value("count").toInt();
+    }
+    const int n05 = counts.at(0), n10 = counts.at(1),
+              n15 = counts.at(2), n20 = counts.at(3);
+
+    // 把实测值打出来 —— 这几个数本身就是结论的一部分,
+    // 而且下面每条断言红了的时候,得靠它才看得见差在哪。
+    qInfo().noquote() << "    auto_contour 元件数 0.5x/1.0x/1.5x/2.0x ="
+                      << n05 << n10 << n15 << n20;
+
+    // ⚠ 变异验证教训(三条,前两条都是我自己踩的):
+    //
+    // ① 第一版写的是"2.0x 不超过 0.5x 的两倍"。M16(mergeDist 退回 90.0f)
+    //   和 M18(核写死 3x3)**都活下来了** —— 基准跟着分子一起漂,
+    //   比值不变。这叫"拿会动的尺子量东西"。
+    // ② 第二版改成"1.5x 与 2.0x 必须相等",这次是**没量就写**:实测是
+    //   10 vs 11,不相等,于是这条自己先红了。探针那张表的档位是
+    //   0.4/0.8/1.4/1.6,和这里的 0.5/1.0/1.5/2.0 不是同一组数。
+    // ③ 第三版钉死上限 12 —— M16/M18 还是活着,因为它们各自只动**一档**
+    //   (M16 把 0.5x 从 7 变成 6,M18 把 2.0x 从 11 变成 10),
+    //   而"不超过 12"对 6 和 10 一视同仁地放行。
+    //
+    // 量完三个变异各自的实际输出(探针 mutcount,同一张 baseline.png):
+    //     基线(相对式)        7  10  10  11
+    //     M16 mergeDist=90.0f  6  10  10  11   <- 0.5x 过度聚类,糊成 6 团
+    //     M18 核写死 3x3       7  10  10  10   <- 2.0x 噪声没滤干净,多切一块
+    //     M19 mergeDist x3     3   4   4   4   <- 聚类过头,整板糊成几团
+    //   绝对 min_area=80px(旧版)             6/9/14/18/18/18,放大端爬到 18
+    //
+    // 三种坏法的形状完全不同,所以这里逐档钉死。认为:这类"黄金值断言"
+    // 换图就会红 —— 但它红的时候是**真的**变了,而且上面三条注释
+    // 记着每个数对应哪个失效模式,不至于变成一堆看不懂的红灯。
+    const int want05 = 7, want10 = 10, want15 = 10, want20 = 11;
+    check(n05 == want05 && n10 == want10 && n15 == want15 && n20 == want20,
+          QString("auto_contour 逐档元件数钉死 7/10/10/11(实测 %1/%2/%3/%4)。"
+                  "0.5x 掉到 6 = mergeDist 退回绝对 90(过度聚类);"
+                  "2.0x 掉到 10 = 开运算核写死 3x3;整体塌到 4 附近 = 聚类过头")
+              .arg(n05).arg(n10).arg(n15).arg(n20));
+}
+
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");   // headless
     // Windows 控制台默认 GBK,中文断言信息会乱码。强制 UTF-8
@@ -882,6 +1116,8 @@ int main(int argc, char* argv[]) {
     test_brightness_invariance_end_to_end();
     test_overexposed_refuses_to_judge();
     test_color_threshold_sensitivity();
+    test_gold_mask_shared_between_operators();
+    test_auto_contour_scale_stable();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;

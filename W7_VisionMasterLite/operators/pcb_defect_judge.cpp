@@ -300,12 +300,12 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     // H 和 S 本来就与整体亮度无关(OpenCV 从 max/min 算),只有 V 会缩放,
     // 所以 V 下界锚在板面基色上。实测金层在 U1 ROI 占 12.96%、
     // 25 档亮度一格不差(见 operators/pcb_color_ref.h 的说明)。
-    cv::Mat hsv, goldMask;
+    cv::Mat hsv;
     cv::cvtColor(img, hsv, cv::COLOR_BGR2HSV);
-    cv::inRange(hsv, cv::Scalar(85, 80, pcbcolor::maskVLower(boardBase, maskVMul)),
-                    cv::Scalar(115, 255, 255), goldMask);
-    cv::Mat k = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
-    cv::morphologyEx(goldMask, goldMask, cv::MORPH_OPEN, k);
+    // 色带和开运算都走 pcb_color_ref.h 的共用实现,不再各写一份 inRange。
+    cv::Mat goldMask = pcbcolor::opened(
+        pcbcolor::bandMask(hsv, boardBase, pcbcolor::goldBand(maskVMul)),
+        pcbcolor::kernelScale(img));
 
     QJsonArray defects;
     cv::Mat marked = img.clone();
@@ -482,9 +482,13 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
         const double imgArea = static_cast<double>(img.cols) * img.rows;
         const double diag = std::sqrt(static_cast<double>(img.cols) * img.cols
                                     + static_cast<double>(img.rows) * img.rows);
-        cv::Mat blueMask;
-        cv::inRange(hsv, cv::Scalar(100, 80, pcbcolor::maskVLower(boardBase)),
-                          cv::Scalar(135, 255, 255), blueMask);
+        cv::Mat blueMask = pcbcolor::bandMask(hsv, boardBase,
+                                              pcbcolor::blueBand(maskVMul));
+        // maskVMul 必须传进来。以前这里写的是 maskVLower(boardBase) —— 走了
+        // 头文件里的默认值,而金层那一处传的是参数。于是调 mask_v_mul 时
+        // 金层跟着变、这张掩膜不变:同一个参数两处不同步,而且**不报错**,
+        // 只是这个旋钮有一半失灵。改成参数的时候漏掉一处,正是这个项目
+        // 已经吃过三次亏的那一类(抄副本只改了一份)。
         cv::Mat labels, stats, centroids;
         int n = cv::connectedComponentsWithStats(blueMask, labels, stats, centroids);
         int bestIdx = -1, bestArea = 0;
