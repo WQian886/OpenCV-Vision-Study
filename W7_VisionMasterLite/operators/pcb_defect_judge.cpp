@@ -1,5 +1,7 @@
 #include "pcb_defect_judge.h"
+#include "pcb_color_ref.h"
 #include <QDoubleSpinBox>
+#include <QLabel>
 #include <QJsonArray>
 #include <opencv2/opencv.hpp>
 #include <algorithm>
@@ -28,6 +30,23 @@ bool isJudgeableLabel(const QString& label) {
         if (label == QString::fromUtf8(l)) return true;
     }
     return false;
+}
+
+// 把一个逐像素判据铺成 0/255 mask。
+//
+// 四条颜色规则(暗/错色/白/质心)都要"逐像素分类再统计占比",
+// 各自写一遍双层循环就是第四次抄副本 —— 这个项目里抄副本的账已经
+// 记了三笔(EXPECTS[6]、lo[0] 越界守卫、守卫本身),判据本身也统一
+// 住在 pcb_color_ref.h,这里只负责把谓词铺开。
+template <typename Pred>
+cv::Mat maskBy(const cv::Mat& roi, Pred pred) {
+    cv::Mat m(roi.rows, roi.cols, CV_8U, cv::Scalar(0));
+    for (int y = 0; y < roi.rows; ++y) {
+        const cv::Vec3b* src = roi.ptr<cv::Vec3b>(y);
+        uchar* dst = m.ptr<uchar>(y);
+        for (int x = 0; x < roi.cols; ++x) dst[x] = pred(src[x]) ? 255 : 0;
+    }
+    return m;
 }
 
 } // namespace
@@ -101,6 +120,23 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     p["shift_x_pct"]     = 8.0;
     // R2 质心纵向偏移容差,占 ROI 高:缺陷图实测 18.8%,取 10(约 1.9 倍余量)。
     p["shift_y_pct"]     = 10.0;
+
+    // --- 颜色判据的倍数 ---
+    //
+    // 这五个系数不是"占某个基准的百分比",而是"占板面基色的多少倍"。
+    // 之前它们是 pcb_color_ref.h 里的 constexpr,同一个算子里
+    // 其它阈值全可调、偏偏这几个写死 —— 调参的人看不见它们。
+    //
+    // 做成参数还有第二个理由:「系数上下动 20%,结论变不变」这件事
+    // 只能在测试里扫。写死就扫不了,复制一份判据出来扫又是一次抄副本。
+    // 默认值全部来自实测(见 operators/pcb_color_ref.h 顶部的表),
+    // 每个默认值都留了余量,不是贴着数据取的。
+    p["dark_v_mul"]      = pcbcolor::kDarkMul;        // 暗: V < 0.6 x 板面V
+    p["bright_v_mul"]    = pcbcolor::kBrightMul;      // 白: V >= 1.3 x 板面V
+    p["neutral_max"]     = pcbcolor::kNeutralMax;     // 丝印白的中性度上限
+    p["off_color_mul"]   = pcbcolor::kOffColorMul;    // 错色: B,G >= 1.6 x 板面
+    p["off_color_r_max"] = pcbcolor::kOffColorRMax;   // 错色: R <= 1.3 x 板面
+    p["mask_v_mul"]      = pcbcolor::kMaskVMul;       // 金层/蓝环 HSV 掩膜的 V 下界
 
     // --- 全图 % ---
     // 短路圆环面积占全图:正常板最大的蓝斑 0.0107% ↔ 短路圆环 0.0411%,
@@ -193,6 +229,52 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
         return output;
     }
 
+    // ============================================================
+    // 板面基色:**逐图估计**,不是配置常量
+    // ============================================================
+    // 相对判据的右端也带 k 才叫相对。把参考图的板色写进配置当常量,
+    // 等式右边就没有 k 了,"相对"是假的 —— 那正是探针第一版栽的地方。
+    const cv::Vec3b boardBase = pcbcolor::estimateBoardBase(img);
+
+    // 颜色判据的系数。**必须先读再判天花板** —— 天花板这条线本身就是
+    // mul 算出来的(mul 调大,墙就往前挪)。顺序反了的话,
+    // 「把倍数调到 2.0」这个操作会**看起来是安全的**,而实际上
+    // 判据早就撞墙、守卫却还按 1.6 在放行。
+    const double darkVMul    = params.value("dark_v_mul").toDouble(pcbcolor::kDarkMul);
+    const double brightVMul  = params.value("bright_v_mul").toDouble(pcbcolor::kBrightMul);
+    const double neutralMax  = params.value("neutral_max").toDouble(pcbcolor::kNeutralMax);
+    const double offColorMul = params.value("off_color_mul").toDouble(pcbcolor::kOffColorMul);
+    const double offColorRMax= params.value("off_color_r_max").toDouble(pcbcolor::kOffColorRMax);
+    const double maskVMul    = params.value("mask_v_mul").toDouble(pcbcolor::kMaskVMul);
+
+    // ============================================================
+    // 撞 8 位色深上限时拒绝判定,而不是硬撑一个 PASS
+    // ============================================================
+    // 错色判据要"绿通道 >= 1.6 x 板面绿通道"。板面被照亮到这个程度时,
+    // 1.6 倍已经超过 255,uint8 里根本不存在这么亮的像素,判据永远返回
+    // false —— 不报错、不告警,直接报 PASS,废板判合格。
+    //
+    // 实测这个上限是实打实的物理墙,不是阈值没调好:k=1.55 时错色像素
+    // 已经 99.6% 削波,削波后是 (255,255,R),G/B=1.00 和暗本体重合,
+    // 换色相判据也救不回来。那一段的信息是真的没了。
+    //
+    // 所以这里给明确错误,让产线知道"这张图要重新曝光",而不是
+    // 让它拿到一个没有依据的合格 —— 和上面两处拒绝判定同一个道理。
+    if (pcbcolor::ceilingBreached(boardBase, offColorMul)) {
+        output["error"] = QString(
+            "曝光过强,无法判定:板面基色 BGR(%1,%2,%3),错色判据要求绿通道 ≥ "
+            "%4 倍板面 = %5,已超过 8 位色深上限 255。此时判据永远不成立,"
+            "若继续跑会报出一个没有依据的 PASS。实测这条线约在亮度 "
+            "%6 倍处(当前板面还能撑到 %7 倍)。请降低曝光后重拍。")
+                .arg(boardBase[0]).arg(boardBase[1]).arg(boardBase[2])
+                .arg(offColorMul, 0, 'f', 2)
+                .arg(offColorMul * boardBase[1], 0, 'f', 0)
+                .arg(pcbcolor::ceilingHeadroomK(boardBase, offColorMul), 0, 'f', 2);
+        output["component_count"] = comps.size();
+        // result 故意不给:没判定过就没有判定结果可给。
+        return output;
+    }
+
     // 老存档里存的是像素阈值(dark_thresh=50 之类)。
     // 这里**故意不去读那些旧名字**:50 被当成 50% 会比原来错得离谱,
     // 读不到就等于没传,退回下面这些新默认值 —— 宁可阈值不准,
@@ -214,9 +296,14 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     const double shortHMaxPct = params.value("short_h_max_pct").toDouble(6.0);
 
     // 金层 mask(bridge / insufficient 判定需要)
+    //
+    // H 和 S 本来就与整体亮度无关(OpenCV 从 max/min 算),只有 V 会缩放,
+    // 所以 V 下界锚在板面基色上。实测金层在 U1 ROI 占 12.96%、
+    // 25 档亮度一格不差(见 operators/pcb_color_ref.h 的说明)。
     cv::Mat hsv, goldMask;
     cv::cvtColor(img, hsv, cv::COLOR_BGR2HSV);
-    cv::inRange(hsv, cv::Scalar(85, 80, 80), cv::Scalar(115, 255, 255), goldMask);
+    cv::inRange(hsv, cv::Scalar(85, 80, pcbcolor::maskVLower(boardBase, maskVMul)),
+                    cv::Scalar(115, 255, 255), goldMask);
     cv::Mat k = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
     cv::morphologyEx(goldMask, goldMask, cv::MORPH_OPEN, k);
 
@@ -235,41 +322,65 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
         const double roiArea = static_cast<double>(roi.width) * roi.height;
         if (roiArea <= 0) continue;
 
+        // R2 的两条规则(missing / shifted)看的是同一张暗像素 mask,
+        // 算一遍就够。原来两处各写一遍 cvtColor + inRange —— 同样的
+        // 颜色判据在同一份代码里出现两次,改一处忘一处就是下一次事故。
+        cv::Mat darkMask;
+        if (label == "R2") {
+            // 原来是 inRange(rgb, (0,0,0)~(60,60,60)),60 是绝对值。
+            // 光一暗,板面自己就掉进"暗"区间(实测板面 R=40 < 60),
+            // 正常板整块误报缺件。现在锚在板面基色的 0.6 倍上。
+            darkMask = maskBy(img(roi), [&](const cv::Vec3b& p) {
+                return pcbcolor::isDark(p, boardBase, darkVMul);
+            });
+        }
+
         // ---------- missing: R2 本体暗像素过少 ----------
         if (label == "R2") {
-            cv::Mat rgb, dark;
-            cv::cvtColor(img(roi), rgb, cv::COLOR_BGR2RGB);
-            cv::inRange(rgb, cv::Scalar(0, 0, 0), cv::Scalar(60, 60, 60), dark);
-            const double darkCount = cv::countNonZero(dark);
+            const double darkCount = cv::countNonZero(darkMask);
             const double darkPct   = 100.0 * darkCount / roiArea;
             if (darkPct < darkMinPct) {
                 addDefect(defects, label, "missing",
-                          QString("暗像素 %1(占 ROI %2%)< 阈值 %3%(元件疑似被擦除)")
-                          .arg((int)darkCount).arg(darkPct, 0, 'f', 2).arg(darkMinPct));
+                          QString("暗像素 %1(占 ROI %2%)< 阈值 %3%(元件疑似被擦除;"
+                          "暗 = V < %4 x 板面V,板面 BGR %5,%6,%7)")
+                          .arg((int)darkCount).arg(darkPct, 0, 'f', 2).arg(darkMinPct)
+                          .arg(darkVMul, 0, 'f', 2)
+                          .arg(boardBase[0]).arg(boardBase[1]).arg(boardBase[2]));
                 cv::rectangle(marked, roi, cv::Scalar(0, 0, 255), 3);
             }
         }
 
-        // ---------- wrong: R3 本体变浅黄 ----------
+        // ---------- wrong: R3 本体上错色 ----------
+        //
+        // 原来是 inRange(BGR (150,150,0)~(255,255,80)):150 和 200 都是
+        // 绝对值,压暗后错色件掉出区间 -> 漏检;而且亮到一定程度它又会
+        // 整片撞 255 -> 判据恒假 -> **报 PASS**,废板判合格。
+        // 改成相对板面基色的倍数,并在上方 ceilingBreached 处拒绝判定。
         if (label == "R3") {
-            cv::Mat yellowMask;
-            cv::inRange(img(roi), cv::Scalar(150, 150, 0),
-                        cv::Scalar(255, 255, 80), yellowMask);
-            const double yellowPct =
-                100.0 * cv::countNonZero(yellowMask) / roiArea;
+            const cv::Mat offMask = maskBy(img(roi), [&](const cv::Vec3b& p) {
+                return pcbcolor::isOffColor(p, boardBase, offColorMul, offColorRMax);
+            });
+            const double yellowPct = 100.0 * cv::countNonZero(offMask) / roiArea;
             if (yellowPct > yellowMinPct) {
                 addDefect(defects, label, "wrong",
-                          QString("浅黄像素占 ROI %1% > 阈值 %2%(应为黑色电阻)")
-                          .arg(yellowPct, 0, 'f', 2).arg(yellowMinPct));
+                          QString("错色像素占 ROI %1% > 阈值 %2%(应为黑色电阻;"
+                          "判据 B,G >= %3 x 板面 且 R <= %4 x 板面,板面 BGR %5,%6,%7)")
+                          .arg(yellowPct, 0, 'f', 2).arg(yellowMinPct)
+                          .arg(offColorMul, 0, 'f', 2)
+                          .arg(offColorRMax, 0, 'f', 2)
+                          .arg(boardBase[0]).arg(boardBase[1]).arg(boardBase[2]));
                 cv::rectangle(marked, roi, cv::Scalar(0, 0, 255), 3);
             }
         }
 
         // ---------- polarity: C1 白色极性条偏右 ----------
         if (label == "C1") {
-            cv::Mat whiteMask;
-            cv::inRange(img(roi), cv::Scalar(200, 200, 200),
-                        cv::Scalar(255, 255, 255), whiteMask);
+            // 原来是 inRange(BGR >= (200,200,200)):压暗后丝印白掉出 200,
+            // 白色像素占比归零,white_min_pct 这道门直接把它挡掉 ——
+            // 于是 polarity 规则**静默不跑**,不报缺陷,看着像合格。
+            const cv::Mat whiteMask = maskBy(img(roi), [&](const cv::Vec3b& p) {
+                return pcbcolor::isWhiteSilk(p, boardBase, brightVMul, neutralMax);
+            });
             cv::Moments m = cv::moments(whiteMask, true);
             const double whitePct = 100.0 * m.m00 / roiArea;
             if (whitePct >= whiteMinPct) {   // 白色太少不判定
@@ -335,10 +446,9 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
         // —— 同一个数,只是被抄了一份,抄错了也不会有人发现。
         // ROI 是由元件本体框四周等量扩出来的,所以两者恒等。
         if (label == "R2") {
-            cv::Mat rgb, dark;
-            cv::cvtColor(img(roi), rgb, cv::COLOR_BGR2RGB);
-            cv::inRange(rgb, cv::Scalar(0, 0, 0), cv::Scalar(60, 60, 60), dark);
-            cv::Moments m = cv::moments(dark, true);
+            // 复用上面算好的暗像素 mask —— 原来这里是第三份同样的
+            // cvtColor + inRange。
+            cv::Moments m = cv::moments(darkMask, true);
             const double darkPct = 100.0 * m.m00 / roiArea;
             // m.m00 > 0 必须单独判:dark_min_pct 被调到 0 时,
             // "暗像素占比 >= 0%" 对**一张全黑都没有的 ROI 也成立**,
@@ -373,7 +483,8 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
         const double diag = std::sqrt(static_cast<double>(img.cols) * img.cols
                                     + static_cast<double>(img.rows) * img.rows);
         cv::Mat blueMask;
-        cv::inRange(hsv, cv::Scalar(100, 80, 100), cv::Scalar(135, 255, 255), blueMask);
+        cv::inRange(hsv, cv::Scalar(100, 80, pcbcolor::maskVLower(boardBase)),
+                          cv::Scalar(135, 255, 255), blueMask);
         cv::Mat labels, stats, centroids;
         int n = cv::connectedComponentsWithStats(blueMask, labels, stats, centroids);
         int bestIdx = -1, bestArea = 0;
@@ -437,6 +548,16 @@ void PcbDefectJudgeForm::buildUI() {
         s->setValue(val);
         return s;
     };
+    // 倍数类的量不一样:它们是"占板面基色多少倍",量级在 0.5~2,
+    // 用上面那个 0~100 / 步长 0.5 的框根本点不动。
+    auto mkMul = [](double val) {
+        auto* s = new QDoubleSpinBox;
+        s->setRange(0.0, 10.0);
+        s->setDecimals(2);
+        s->setSingleStep(0.05);
+        s->setValue(val);
+        return s;
+    };
     m_darkMinPct   = mk(2.0,   2);
     m_yellowMinPct = mk(12.0,  2);
     m_polarityR    = mk(60.0,  2);
@@ -452,6 +573,12 @@ void PcbDefectJudgeForm::buildUI() {
     m_shortWMaxPct = mk(8.0,   2);
     m_shortHMinPct = mk(1.0,   2);
     m_shortHMaxPct = mk(6.0,   2);
+    m_darkVMul      = mkMul(pcbcolor::kDarkMul);
+    m_brightVMul    = mkMul(pcbcolor::kBrightMul);
+    m_neutralMax    = mkMul(pcbcolor::kNeutralMax);
+    m_offColorMul   = mkMul(pcbcolor::kOffColorMul);
+    m_offColorRMax  = mkMul(pcbcolor::kOffColorRMax);
+    m_maskVMul      = mkMul(pcbcolor::kMaskVMul);
 
     m_layout->addRow(tr("缺件:暗像素占 ROI 下限 %"),   m_darkMinPct);
     m_layout->addRow(tr("错件:浅黄占 ROI 下限 %"),     m_yellowMinPct);
@@ -468,6 +595,17 @@ void PcbDefectJudgeForm::buildUI() {
     m_layout->addRow(tr("短路:宽上限 占对角线 %"),      m_shortWMaxPct);
     m_layout->addRow(tr("短路:高下限 占对角线 %"),      m_shortHMinPct);
     m_layout->addRow(tr("短路:高上限 占对角线 %"),      m_shortHMaxPct);
+
+    // 分组标题。上面 15 个是"占 ROI / 全图"的百分比,下面 6 个是
+    // "占板面基色"的倍数 —— 量纲不同,混在一起排会让人以为它们可比。
+    auto* sep = new QLabel(tr("—— 以下为「占板面基色」的倍数(自动按图估计板色)——"));
+    m_layout->addRow(sep);
+    m_layout->addRow(tr("缺件/偏移:暗 V < 板面 V x"),    m_darkVMul);
+    m_layout->addRow(tr("极性:白 V >= 板面 V x"),         m_brightVMul);
+    m_layout->addRow(tr("极性:白 中性度 上限"),           m_neutralMax);
+    m_layout->addRow(tr("错件:B,G >= 板面 x"),            m_offColorMul);
+    m_layout->addRow(tr("错件:R <= 板面 x"),              m_offColorRMax);
+    m_layout->addRow(tr("金层/蓝环掩膜 V 下界 x"),        m_maskVMul);
 }
 
 void PcbDefectJudgeForm::setParams(const QJsonObject& params) {
@@ -486,6 +624,12 @@ void PcbDefectJudgeForm::setParams(const QJsonObject& params) {
     m_shortWMaxPct->setValue(params.value("short_w_max_pct").toDouble(8.0));
     m_shortHMinPct->setValue(params.value("short_h_min_pct").toDouble(1.0));
     m_shortHMaxPct->setValue(params.value("short_h_max_pct").toDouble(6.0));
+m_darkVMul->setValue(params.value("dark_v_mul").toDouble(pcbcolor::kDarkMul));
+m_brightVMul->setValue(params.value("bright_v_mul").toDouble(pcbcolor::kBrightMul));
+m_neutralMax->setValue(params.value("neutral_max").toDouble(pcbcolor::kNeutralMax));
+m_offColorMul->setValue(params.value("off_color_mul").toDouble(pcbcolor::kOffColorMul));
+m_offColorRMax->setValue(params.value("off_color_r_max").toDouble(pcbcolor::kOffColorRMax));
+m_maskVMul->setValue(params.value("mask_v_mul").toDouble(pcbcolor::kMaskVMul));
 }
 
 QJsonObject PcbDefectJudgeForm::collect() const {
@@ -505,6 +649,12 @@ QJsonObject PcbDefectJudgeForm::collect() const {
     p["short_w_max_pct"] = m_shortWMaxPct->value();
     p["short_h_min_pct"] = m_shortHMinPct->value();
     p["short_h_max_pct"] = m_shortHMaxPct->value();
+    p["dark_v_mul"]      = m_darkVMul->value();
+    p["bright_v_mul"]    = m_brightVMul->value();
+    p["neutral_max"]     = m_neutralMax->value();
+    p["off_color_mul"]   = m_offColorMul->value();
+    p["off_color_r_max"] = m_offColorRMax->value();
+    p["mask_v_mul"]      = m_maskVMul->value();
     return p;
 }
 

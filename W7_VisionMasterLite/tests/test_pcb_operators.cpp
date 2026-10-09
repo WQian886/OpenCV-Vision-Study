@@ -18,18 +18,30 @@
 // 运行:  w7_pcb_test.exe      (工作目录必须是工程根,里面有 images/)
 // ============================================================
 
+// windows.h 会把 min/max 定义成宏,不加 NOMINMAX 的话
+// `std::max(...)` 会被展开成 `std::(max)(...)` -> C2589。
+// 本文件为了 SetConsoleOutputCP 必须要 windows.h,所以在这里挡掉。
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <QApplication>
 #include <QDebug>
+#include <QDir>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include <opencv2/opencv.hpp>
 #include <windows.h>   // SetConsoleOutputCP
+#include <algorithm>
+#include <cmath>
 
 #include "operators/pcb_inspect.h"
 #include "operators/pcb_defect_judge.h"
+#include "operators/pcb_color_ref.h"
 
 using namespace w7;
 
@@ -75,6 +87,31 @@ static RunResult runPipeline(const QString& fileName) {
 
     PcbDefectJudge judge;
     r.judgeOut = judge.run(judge.defaultParams(), r.inspectOut);
+
+    const QJsonArray defects = r.judgeOut.value("defects").toArray();
+    for (const auto& d : defects)
+        r.defectTypes.insert(d.toObject().value("type").toString());
+    return r;
+}
+
+// 同上,但判定算子的参数可以覆盖 —— 敏感性扫描要用。
+// 覆盖走和产线完全一样的 params JSON 入口,不是在测试里另开一条路:
+// 另开一条路的话,测的就不是产线真正跑的那条代码。
+static RunResult runPipelineWith(const QString& fileName,
+                                 const QJsonObject& overrides) {
+    RunResult r;
+    const QString path = "images/" + fileName;
+
+    PcbInspect inspect;
+    r.inspectOut = inspect.run(inspect.defaultParams(),
+                               QJsonObject{{"image_path", path}});
+
+    QJsonObject p = PcbDefectJudge().defaultParams();
+    for (auto it = overrides.begin(); it != overrides.end(); ++it)
+        p[it.key()] = it.value();
+
+    PcbDefectJudge judge;
+    r.judgeOut = judge.run(p, r.inspectOut);
 
     const QJsonArray defects = r.judgeOut.value("defects").toArray();
     for (const auto& d : defects)
@@ -446,6 +483,384 @@ static void test_hsv_param_guarded() {
               .arg(ok.value("count").toInt()));
 }
 
+// ------------------------------------------------------------
+// 用例 10:相对颜色判据的**尺度不变性**(性质测试)
+// ------------------------------------------------------------
+// "去绝对化"不是"结果差不多",是**逐像素分类结果完全一样**。
+// 这里直接钉性质:把图整体乘 k 之后,同一个像素在 isDark /
+// isOffColor / isWhiteSilk 三条判据下的分类必须**一模一样**。
+//
+// 只检查**缩放后逐位精确**的像素(pa[c]*k 恰好是整数且不超 255)。
+// 削波和 8 位舍入都是不可逆的信息丢失,乘回去补不回来 —— 削波那部分
+// 正是 pcb_color_ref.h 里 ceilingBreached 要处理的情况;而中性度这种
+// max/min 比值,在除数小的时候 ±0.5 的量化就能跨过阈值,那是噪声不是
+// 判据的性质。要求"所有像素完全一致"等于要求一个做不到的性质。
+//
+// 这条断言的可证伪性:把 isOffColor 里任意一个系数换回绝对值
+// (比如 double(p[1]) >= 150),k=0.6 那一档立刻大面积变红。
+// 反过来,把 kOffColorMul 从 1.6 改成 2.0,k=0.55 档会因为
+// 舍入差一个单位而翻车(实测青色 G/板面G ≈ 1.98)—— 也会被抓住。
+// ------------------------------------------------------------
+static void test_color_ref_scale_invariant() {
+    beginCase("相对颜色判据对整体亮度缩放逐像素不变");
+
+    cv::Mat src = cv::imread("images/baseline.png", cv::IMREAD_COLOR);
+    check(!src.empty(), "读得到 images/baseline.png");
+    if (src.empty()) return;
+
+    const cv::Vec3b base1 = pcbcolor::estimateBoardBase(src);
+    check(!pcbcolor::ceilingBreached(base1),
+          QString("原始亮度不撞上限 (板面 BGR %1,%2,%3,还能撑到 %4 倍)")
+              .arg(base1[0]).arg(base1[1]).arg(base1[2])
+              .arg(pcbcolor::ceilingHeadroomK(base1), 0, 'f', 2));
+
+    for (double k : {0.40, 0.60, 0.80, 1.20, 1.40, 1.60}) {
+        cv::Mat scaled;
+        src.convertTo(scaled, CV_8U, k);
+        const cv::Vec3b baseK = pcbcolor::estimateBoardBase(scaled);
+
+        // 基色本身必须跟着缩放走。差 1 个量化单位是舍入,不算错。
+        int maxDrift = 0;
+        for (int c = 0; c < 3; ++c)
+            maxDrift = std::max(maxDrift,
+                std::abs(int(baseK[c]) - int(std::lround(base1[c] * k))));
+        check(maxDrift <= 1,
+              QString("k=%1 板面基色跟着缩放 (原 %2,%3,%4 -> %5,%6,%7,最大偏差 %8)")
+                  .arg(k, 4, 'f', 2)
+                  .arg(base1[0]).arg(base1[1]).arg(base1[2])
+                  .arg(baseK[0]).arg(baseK[1]).arg(baseK[2]).arg(maxDrift));
+
+        // 逐像素:分类必须一致。
+        //
+        // 只看**缩放后没有舍入误差**的像素(pa[c]*k 恰好是整数且不超 255)。
+        // 理由:8 位量化本身有 ±0.5 的误差,isWhiteSilk 里的中性度是
+        // max/min 这种比值,除数小的时候 ±0.5 能让比值跨过阈值 —— 那是
+        // 量化噪声,不是判据不不变。要求"所有像素分类完全一致"就是在
+        // 要求一个物理上做不到的性质,那样的测试只会被量化误差搞红,
+        // 然后下一次就会被人把断言改松。**门槛只能往严里加,不能往松里调。**
+        //
+        // 逐位精确的那些像素上,不变性是可证的:三条判据都是像素和基色的
+        // 0 次齐次式,两边同时乘 k 不等号方向不变。
+        long nDark = 0, nOff = 0, nWhite = 0, nExact = 0;
+        for (int y = 0; y < src.rows; ++y) {
+            const cv::Vec3b* a = src.ptr<cv::Vec3b>(y);
+            const cv::Vec3b* b = scaled.ptr<cv::Vec3b>(y);
+            for (int x = 0; x < src.cols; ++x) {
+                const cv::Vec3b pa = a[x], pb = b[x];
+                bool exact = true;
+                for (int c = 0; c < 3; ++c)
+                    if (double(pb[c]) != double(pa[c]) * k) { exact = false; break; }
+                if (!exact) continue;
+                ++nExact;
+                if (pcbcolor::isDark(pa, base1) !=
+                    pcbcolor::isDark(pb, baseK)) ++nDark;
+                if (pcbcolor::isOffColor(pa, base1) !=
+                    pcbcolor::isOffColor(pb, baseK)) ++nOff;
+                if (pcbcolor::isWhiteSilk(pa, base1) !=
+                    pcbcolor::isWhiteSilk(pb, baseK)) ++nWhite;
+            }
+        }
+        check(nExact > 1000,
+              QString("k=%1 有足够的精确缩放像素可比(%2 个)")
+                  .arg(k, 4, 'f', 2).arg(nExact));
+        check(nDark == 0 && nOff == 0 && nWhite == 0,
+              QString("k=%1 精确像素上分类逐位不变 (暗判 %3 处 / 错色判 %4 处 /"
+                      "白判 %5 处,共比 %2 个)")
+                  .arg(k, 4, 'f', 2).arg(nExact).arg(nDark).arg(nOff).arg(nWhite));
+    }
+}
+
+// ------------------------------------------------------------
+// 用例 11:端到端的亮度不变性 —— 整条流水线跨亮度档
+// ------------------------------------------------------------
+// 用例 10 钉的是判据本身,这条钉的是**整条链路**:定位 -> 判定。
+// 定位那一步也可能有绝对量(SITES 已经归一化过),这里一起兜住。
+//
+// 亮度档取到 1.60 而不是更高:实测 k>1.77 时 1.6 x 板面绿 > 255,
+// 判据在物理上就不成立,那是过曝,归到用例 12。
+// ------------------------------------------------------------
+static RunResult runPipelineAbs(const QString& absPath) {
+    RunResult r;
+    PcbInspect inspect;
+    r.inspectOut = inspect.run(inspect.defaultParams(),
+                               QJsonObject{{"image_path", absPath}});
+    PcbDefectJudge judge;
+    r.judgeOut = judge.run(judge.defaultParams(), r.inspectOut);
+    const QJsonArray defects = r.judgeOut.value("defects").toArray();
+    for (const auto& d : defects)
+        r.defectTypes.insert(d.toObject().value("type").toString());
+    return r;
+}
+
+static void test_brightness_invariance_end_to_end() {
+    beginCase("整条流水线跨亮度不变(0.40x ~ 1.60x)");
+
+    struct Case { const char* file; const char* type; };
+    const Case cases[] = {
+        {"baseline.png",      nullptr},   // 必须 PASS
+        {"missing.png",       "missing"},
+        {"wrong.png",         "wrong"},
+        {"polarity.png",      "polarity"},
+        {"bridge.png",        "bridge"},
+        {"insufficient.png",  "insufficient"},
+        {"shifted.png",       "shifted"},
+        {"short.png",         "short"},
+    };
+    const QString outDir = "build/_bright";
+    QDir().mkpath(outDir);
+
+    int passCells = 0, totalCells = 0;
+    QStringList failed;
+
+    for (double k : {0.40, 0.60, 0.80, 1.00, 1.20, 1.40, 1.60}) {
+        for (const auto& c : cases) {
+            const QString stem = QString(c.file).remove(".png");
+            const QString path = QString("%1/%2_x%3.png")
+                .arg(outDir, stem).arg(k, 4, 'f', 2);
+
+            cv::Mat src = cv::imread(QString("images/%1").arg(c.file).toStdString(),
+                                     cv::IMREAD_COLOR);
+            if (src.empty()) continue;
+            cv::Mat scaled;
+            src.convertTo(scaled, CV_8U, k);
+            if (!cv::imwrite(path.toStdString(), scaled)) continue;
+
+            const RunResult r = runPipelineAbs(path);
+            ++totalCells;
+            const bool ok =
+                !r.judgeOut.contains("error")
+                && (c.type == nullptr
+                      ? r.judgeOut.value("result").toString() == "PASS"
+                      : r.judgeOut.value("result").toString() == "FAIL"
+                        && r.defectTypes.contains(c.type));
+            if (ok) ++passCells;
+            else failed << QString("%1@%2x(err=%3,result=%4,命中=%5)")
+                .arg(c.file).arg(k, 0, 'f', 2)
+                .arg(r.judgeOut.value("error").toString("无"),
+                     r.judgeOut.value("result").toString("无"),
+                     r.defectTypes.values().join("+"));
+        }
+    }
+
+    check(totalCells == 56, QString("格子数够(期望 56,实际 %1)").arg(totalCells));
+    check(failed.isEmpty(),
+          QString("7 档亮度 x 8 张图全部维持原结论 (%1/%2)%3")
+              .arg(passCells).arg(totalCells)
+              .arg(failed.isEmpty() ? QString()
+                                    : "  失败的格子:\n      " + failed.join("\n      ")));
+}
+
+// ------------------------------------------------------------
+// 用例 12:过曝时必须拒绝判定,不能报 PASS
+// ------------------------------------------------------------
+// 这是这次改动里最要紧的一条。错色判据要求绿通道 >= 1.6 x 板面绿,
+// 板面亮到一定程度这个数超过 255,uint8 里根本没有这么亮的像素,
+// 判据会**永远返回 false** —— 不报错、不告警,直接 PASS,废板判合格。
+//
+// 这和自动轮廓模式那个老问题是同一类:拿不到判定依据却输出合格。
+// 产线上那种错最难查 —— 状态点是绿的,日志一片正常。
+// ------------------------------------------------------------
+static void test_overexposed_refuses_to_judge() {
+    beginCase("曝光过强时拒绝判定,而不是报 PASS");
+
+    cv::Mat src = cv::imread("images/baseline.png", cv::IMREAD_COLOR);
+    if (src.empty()) { check(false, "读得到 images/baseline.png"); return; }
+
+    // k=1.90 -> 板面绿 171,1.6x = 273 > 255,越线
+    cv::Mat hot;
+    src.convertTo(hot, CV_8U, 1.90);
+    const QString path = "build/_bright/overexposed_x1.90.png";
+    QDir().mkpath("build/_bright");
+    cv::imwrite(path.toStdString(), hot);
+
+    PcbInspect inspect;
+    const QJsonObject iOut = inspect.run(inspect.defaultParams(),
+                                         QJsonObject{{"image_path", path}});
+    PcbDefectJudge judge;
+    const QJsonObject jOut = judge.run(judge.defaultParams(), iOut);
+
+    check(!iOut.contains("error"),
+          QString("定位这一步仍然成功(过曝不影响定位,实际 \"%1\")")
+              .arg(iOut.value("error").toString()));
+    check(jOut.value("error").toString().contains("曝光"),
+          QString("判定给出「曝光过强」的错误(实际 \"%1\")")
+              .arg(jOut.value("error").toString()));
+    check(!jOut.contains("result"),
+          QString("不给 result —— 没判定过就没有判定结果可给"
+                  "(实际 \"%1\")")
+              .arg(jOut.value("result").toString("没给")));
+    check(!jOut.contains("defects"),
+          QString("也不给 defects 列表(实际 %1 项)")
+              .arg(jOut.value("defects").toArray().size()));
+}
+
+// ------------------------------------------------------------
+// 用例 13:阈值不是刀尖上的平衡 —— 系数上下扫,结论纹丝不动
+// ------------------------------------------------------------
+// 这个项目吃过一次亏:`pad_min_pct` 取 0.44 是按 1x 的
+// (噪声斑 0.38%, 焊少那颗 0.51%) 算的,贴着噪声斑上沿,
+// 换个尺度就翻车。所以阈值不只要"此刻对",还得**离边界有距离**。
+//
+// 这条测试把每个系数**逐个**乘 0.8 / 1.2,再跑一遍 8 张样本,
+// 结论必须和原值完全一样。变了一格就说明这个数贴在悬崖边上。
+//
+// 三件事是踩过之后才写对的,记在这里免得下次又写回去:
+//
+// ① **断言的是结论,不是像素数。** 第一版断言"系数一动,各判据
+//    像素数完全不变"—— 那是错的:阈值一动,分到某一侧的像素当然会变,
+//    而且实测 x1.2 时白色像素质数从 0 跳到 17552(大量像素的中性度
+//    恰好压在 1.15 上)。像素数不是不变量,结论才是。
+//
+// ② **逐个扫,不一起扫。** 第一版把五个系数同时乘 f,测的是叠加效应,
+//    测不出"哪个系数贴在悬崖边"。
+//
+// ③ **参数化才扫得动。** 这些系数本来是 constexpr,写死就只能靠
+//    复制一份判据出来扫 —— 第四次抄副本。改成算子参数之后,
+//    测试走的是和产线完全一样的入口。
+//
+// 变异验证证明这条不是摆设:把 kNeutralMax 1.15->1.02、
+// 把 kDarkMul 0.6->0.9,在没有这条测试时都是**全绿**的。
+// ------------------------------------------------------------
+static void test_color_threshold_sensitivity() {
+    beginCase("颜色系数逐个上下 20%,结论不变");
+
+    // 每张图一个"结论"。用"每元件的缺陷类型串"而不是只看 PASS/FAIL:
+    // PASS/FAIL 是二值的,一个系数把错件类型换掉但没翻转结论时看不出来。
+    struct Case { const char* file; const char* type; };
+    const Case cases[] = {
+        {"baseline.png",      ""},
+        {"missing.png",       "missing"},
+        {"wrong.png",         "wrong"},
+        {"polarity.png",      "polarity"},
+        {"bridge.png",        "bridge"},
+        {"insufficient.png",  "insufficient"},
+        {"shifted.png",       "shifted"},
+        {"short.png",         "short"},
+    };
+
+    auto verdictOf = [&](const RunResult& r) {
+        QStringList v;
+        v << r.judgeOut.value("result").toString();
+        QStringList types = r.defectTypes.values();
+        std::sort(types.begin(), types.end());
+        v << types.join("+");
+        if (r.judgeOut.contains("error")) v << "ERR:" + r.judgeOut.value("error").toString().left(20);
+        return v.join("/");
+    };
+
+    QHash<QString, QString> base;
+    for (const auto& c : cases) base[c.file] = verdictOf(runPipeline(c.file));
+
+    // 逐个系数扫,一次只动一个 —— 之前一版把五个一起缩,那是测"叠加效应",
+    // 测不出"哪个系数贴在悬崖边"。
+    // neutral_max 不在这里:它往下有数学地板(恒 >= 1.0),
+    // 单独在下面按非对称扫。把它混进对称扫只会得到一条
+    // "±20% 结论不变"的假断言 —— 实测 x0.8 恰恰会变。
+    struct Coef { const char* key; const char* label; double base; };
+    const Coef coefs[] = {
+        {"dark_v_mul",      "暗判 V 倍数",      pcbcolor::kDarkMul},
+        {"bright_v_mul",    "白判 V 倍数",      pcbcolor::kBrightMul},
+        {"off_color_mul",   "错色倍数",        pcbcolor::kOffColorMul},
+        {"off_color_r_max", "错色红通道上限",  pcbcolor::kOffColorRMax},
+        {"mask_v_mul",      "金层掩膜 V 下界", pcbcolor::kMaskVMul},
+    };
+
+    for (const auto& co : coefs) {
+        for (double f : {0.8, 1.2}) {
+            const double v = co.base * f;
+            QStringList diff;
+            for (const auto& c : cases) {
+                const QString got = verdictOf(
+                    runPipelineWith(c.file, QJsonObject{{co.key, v}}));
+                if (got != base[c.file])
+                    diff << QString("%1:%2 != %3").arg(c.file, got, base[c.file]);
+            }
+            check(diff.isEmpty(),
+                  QString("%1 %2 -> x%3 结论不变%4")
+                      .arg(co.label, co.key).arg(f, 4, 'f', 1)
+                      .arg(diff.isEmpty() ? QString()
+                                          : "  实测 " + diff.join("; ")));
+        }
+    }
+
+    // ---- neutral_max 只能往上调,往下有数学地板 ----
+    //
+    // 上面那轮 ±20% 扫里,neutral_max x0.8 = 0.92 会让 polarity.png
+    // 从 FAIL/polarity 变成 PASS。查下来不是阈值偏严,是判据被证伪:
+    // neutralness = max/min 恒 >= 1,所以 <= 0.92 永远不成立。
+    // 实测(白像素占 C1 ROI 面积):
+    //     1.15 -> 4.21%   1.02 -> 4.10%   1.00 -> 4.05%
+    //     0.98 -> 0.00%   0.92 -> 0.00%   0.80 -> 0.00%
+    // 断崖 -> 掩膜全空 -> white_min_pct 把 polarity 规则挡掉 -> 报 PASS。
+    // 极性反的板判合格,还不报错。所以这条不能对称扫,得单独钉。
+    {
+        for (double nm : {1.02, 1.00}) {
+            const RunResult r = runPipelineWith("polarity.png",
+                                                 QJsonObject{{"neutral_max", nm}});
+            check(r.defectTypes.contains("polarity"),
+                  QString("neutral_max=%1(polarity 地板之上),polarity 仍判出(实际 %2)")
+                      .arg(nm, 0, 'f', 2).arg(r.defectTypes.values().join("+")));
+        }
+        // 地板之下必须被夹住 —— 夹住的表现是"照常判出",不是"照常报 PASS"
+        for (double nm : {0.92, 0.50}) {
+            const RunResult r = runPipelineWith("polarity.png",
+                                                 QJsonObject{{"neutral_max", nm}});
+            check(r.defectTypes.contains("polarity"),
+                  QString("neutral_max=%1(低于 1.0 地板)被夹住,polarity 仍判出(实际 %2)")
+                      .arg(nm, 0, 'f', 2).arg(r.defectTypes.values().join("+")));
+        }
+
+        // ⚠ 上面那两条只证明了"不越界不塌",证明不了**默认值本身够不够远**。
+        //
+        // 原因值得记下来:敏感性扫是**相对默认值**做的 ——
+        // 把默认值从 1.15 改成 1.02,整条扫描会跟着一起挪到 1.02 附近,
+        // 结论照样一致,全绿。变异验证 M8(kNeutralMax 1.15->1.02)就是这么
+        // 活下来的。**结论不变的测试永远抓不到"默认值选错了"**。
+        //
+        // 而 1.02 确实是错的选法:它离实测断崖(1.00)只剩 2%,
+        // 正是本项目吃过亏的那种"刀尖上的平衡"。所以默认值必须单独
+        // 钉住离地板的余量。
+        //
+        // 为什么地板之上还要留 10%:白像素占比在 1.00~1.15 之间
+        // 只从 4.05% 爬到 4.21%,曲线极平 —— 也就是说这段区间里
+        // 阈值调高调低几乎没区别,唯独贴到 1.00 就断崖。
+        // 平坦区意味着"这个参数在这里没什么用",而不是"这里很稳"。
+        check(pcbcolor::kNeutralMax >= 1.10,
+              QString("中性度默认值离 1.0 地板留 >=10%% 余量(实际 %1,离地板 %2%%)")
+                  .arg(pcbcolor::kNeutralMax, 0, 'f', 2)
+                  .arg(100.0 * (pcbcolor::kNeutralMax - pcbcolor::kNeutralFloor)
+                           / pcbcolor::kNeutralFloor, 0, 'f', 1));
+    }
+
+    // 定向钉两条。上面是 ±20% 的"余量够不够",这条是"明知有问题时能不能被抓住":
+    // kNeutralMax 收到 1.02 会削掉约 4% 的白色像素(实测 17230 -> 16563),
+    // 这是**实测结论**,不是"应当不变" —— 所以这条断言的是"判定结果仍然正确",
+    // 而不是"像素数一个不动"。像素数本来就会动,把不变当不变量是写错了断言。
+    {
+        RunResult a = runPipelineWith("polarity.png", QJsonObject{{"neutral_max", 1.02}});
+        check(a.judgeOut.value("result").toString() == "FAIL"
+                  && a.defectTypes.contains("polarity"),
+              QString("kNeutralMax 收到 1.02,polarity.png 仍判出极性反(实际 %1:%2)")
+                  .arg(a.judgeOut.value("result").toString(),
+                       a.defectTypes.values().join("+")));
+
+        RunResult b = runPipelineWith("missing.png", QJsonObject{{"dark_v_mul", 0.9}});
+        check(b.judgeOut.value("result").toString() == "FAIL"
+                  && b.defectTypes.contains("missing"),
+              QString("kDarkMul 放宽到 0.9,missing.png 仍判出缺件(实际 %1:%2)")
+                  .arg(b.judgeOut.value("result").toString(),
+                       b.defectTypes.values().join("+")));
+
+        // 反向:系数动到明显离谱时,判定必须跟着动。
+        // 只测"变了一定没事"会退化成"这参数根本没人看"——
+        // M8/M9 之所以活下来,就是因为没有任何断言要求它生效。
+        RunResult c = runPipelineWith("missing.png", QJsonObject{{"dark_v_mul", 2.0}});
+        check(!c.defectTypes.contains("missing"),
+              QString("kDarkMul 放到 2.0(远高于板面 V),缺件不该再报(实际 %1)")
+                  .arg(c.defectTypes.values().join("+")));
+    }
+}
+
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");   // headless
     // Windows 控制台默认 GBK,中文断言信息会乱码。强制 UTF-8
@@ -463,6 +878,10 @@ int main(int argc, char* argv[]) {
     test_judge_refuses_uninspectable_components();
     test_short_crosstalk_and_wrong_owner();
     test_hsv_param_guarded();
+    test_color_ref_scale_invariant();
+    test_brightness_invariance_end_to_end();
+    test_overexposed_refuses_to_judge();
+    test_color_threshold_sensitivity();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;

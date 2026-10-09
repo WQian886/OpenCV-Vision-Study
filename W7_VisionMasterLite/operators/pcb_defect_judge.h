@@ -96,6 +96,14 @@ private:
     QDoubleSpinBox* m_shortWMaxPct = nullptr;  // short: 圆环宽上限(占全图对角线)
     QDoubleSpinBox* m_shortHMinPct = nullptr;  // short: 圆环高下限(占全图对角线)
     QDoubleSpinBox* m_shortHMaxPct = nullptr;  // short: 圆环高上限(占全图对角线)
+    // 颜色判据的倍数(占板面基色,不是占 ROI)。range 和上面那些百分比
+    // 一样是 0~100,步长不同 —— 0.6/1.15/1.6 这几个数要能精确敲进去。
+    QDoubleSpinBox* m_darkVMul      = nullptr;  // 暗: V < 0.6 x 板面V
+    QDoubleSpinBox* m_brightVMul    = nullptr;  // 白: V >= 1.3 x 板面V
+    QDoubleSpinBox* m_neutralMax    = nullptr;  // 丝印白: 中性度 max/min 上限
+    QDoubleSpinBox* m_offColorMul   = nullptr;  // 错色: B,G >= 1.6 x 板面
+    QDoubleSpinBox* m_offColorRMax  = nullptr;  // 错色: R <= 1.3 x 板面
+    QDoubleSpinBox* m_maskVMul      = nullptr;  // 金层/蓝环 HSV 掩膜 V 下界
 };
 
 } // namespace w7
