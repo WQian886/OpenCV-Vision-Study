@@ -59,18 +59,38 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     p["yellow_min_pct"]  = 12.0;
     // C1 白色像素占 ROI 4.17%;这是"白色够不够,不够就别判极性"的门槛。
     p["white_min_pct"]   = 0.5;
-    // U1 焊盘噪声门槛 —— **这一条我第一次是拍错的,被回归测试当场抓住**。
-    // 我原本按"正常焊盘占 0.80%"想当然取 0.2%,结果噪声斑(60px = 0.38%)
-    // 被放进来了,最小焊盘从 136 掉到 60,drop = 56%,baseline 整块误报 insufficient。
-    // 实测三档(占 ROI 面积):噪声斑 0.38% / 焊少图那颗小焊盘 0.51% /
-    // 正常焊盘 0.80%。可用窗口只有 (0.38, 0.51),取几何中点 0.44。
-    // 窗口窄是**继承来的**:老代码的裸 80px 折合 0.50%,也落在同一窗口里,
-    // 而且紧贴 0.51% 那颗 —— 不是这次改窄的。换成分比之后它至少
-    // 不再随分辨率漂移(缩到 0.5x 时 80px 和 60px/81px 会一起缩,
-    // 老代码在低分辨率下正常焊盘会掉到门槛以下被滤光,判定必然失效)。
-    p["pad_min_pct"]     = 0.44;
-    // U1 最小焊盘比中位数低多少:正常 5.9% ↔ 焊少 40.4%,取 20。
-    p["pad_drop_pct"]    = 20.0;
+    // U1 焊盘噪声门槛 —— **这一条我错过两次,都是因为只量了 1x**。
+    //
+    // 第一次:按"正常焊盘占 0.80%"想当然取 0.2%,噪声斑(0.38%)被放进来了,
+    //         baseline 整块误报。是 12/12 回归测试当场抓住的。
+    // 第二次:改成 0.44% 之后以为稳了 —— 其实那只是按 1x 的 (0.38%, 0.51%)
+    //         取的,贴着噪声斑上沿。跨尺度一量,噪声斑会漂到 0.42%。
+    //
+    // 跨尺度实测(占 ROI 面积,量的是所有金层连通域):
+    //         尺度   噪声斑    焊少那颗   正常板最小真焊盘
+    //         0.5x    0.38%     0.60%      0.80%
+    //         0.75x   0.42%     0.52%      0.85%
+    //         1.0x    0.38%     0.51%      0.80%
+    //         1.25x   0.41%     0.56%      0.87%
+    //         2.0x    0.38%     0.51%      0.83%
+    // 窗口 = (噪声斑最坏 0.42%, 焊少那颗最小 0.51%),几何中点 0.46。
+    //
+    // ⚠ 窗口只有 0.09pp,天生就窄。根子在样本数据:那颗"焊少"的焊盘
+    //   跟噪声斑差不了多少。真实产线数据上大概率更宽,但换数据要重标。
+    p["pad_min_pct"]     = 0.46;
+    // U1 最小焊盘比中位数低多少 —— 同样必须跨尺度量。
+    // 只量 1x 会看到"正常 5.9% / 焊少 40.4%",于是取 20;
+    // 但降采样对小焊盘啃得比大焊盘狠(1x 最小/中位=94%,0.5x 掉到 74%),
+    // 正常板的 drop 会被顶上去:
+    //         尺度   正常板 drop   缺陷板 drop
+    //         0.5x    25.6%        44.2%
+    //         0.75x   12.4%        46.1%
+    //         1.0x     5.9%        40.4%
+    //         1.25x    7.9%        40.2%
+    //         2.0x     2.0%        40.4%
+    // 窗口 = (正常板最差 25.6%, 缺陷板最小 40.2%),中点 33。
+    // 20 落在窗口**外面** —— 0.5x 下正常板因此误报 insufficient。
+    p["pad_drop_pct"]    = 33.0;
 
     // --- ROI 宽度 % ---
     p["polarity_ratio"]  = 60.0;  // 见上
@@ -182,8 +202,8 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     const double polarityRatio= params.value("polarity_ratio").toDouble(60.0);
     const double whiteMinPct  = params.value("white_min_pct").toDouble(0.5);
     const double bridgeMinPct = params.value("bridge_min_pct").toDouble(40.0);
-    const double padMinPct    = params.value("pad_min_pct").toDouble(0.44);
-    const double padDropPct   = params.value("pad_drop_pct").toDouble(20.0);
+    const double padMinPct    = params.value("pad_min_pct").toDouble(0.46);
+    const double padDropPct   = params.value("pad_drop_pct").toDouble(33.0);
     const double shiftXPct    = params.value("shift_x_pct").toDouble(8.0);
     const double shiftYPct    = params.value("shift_y_pct").toDouble(10.0);
     const double shortMinPct  = params.value("short_min_pct").toDouble(0.021);
@@ -422,8 +442,8 @@ void PcbDefectJudgeForm::buildUI() {
     m_polarityR    = mk(60.0,  2);
     m_whiteMinPct  = mk(0.5,   2);
     m_bridgeMinPct = mk(40.0,  2);
-    m_padMinPct    = mk(0.44,  2);
-    m_padDropPct   = mk(20.0,  2);
+    m_padMinPct    = mk(0.46,  2);
+    m_padDropPct   = mk(33.0,  2);
     m_shiftXPct    = mk(8.0,   2);
     m_shiftYPct    = mk(10.0,  2);
     m_shortMinPct  = mk(0.021, 3);
@@ -456,8 +476,8 @@ void PcbDefectJudgeForm::setParams(const QJsonObject& params) {
     m_polarityR->setValue(params.value("polarity_ratio").toDouble(60.0));
     m_whiteMinPct->setValue(params.value("white_min_pct").toDouble(0.5));
     m_bridgeMinPct->setValue(params.value("bridge_min_pct").toDouble(40.0));
-    m_padMinPct->setValue(params.value("pad_min_pct").toDouble(0.44));
-    m_padDropPct->setValue(params.value("pad_drop_pct").toDouble(20.0));
+    m_padMinPct->setValue(params.value("pad_min_pct").toDouble(0.46));
+    m_padDropPct->setValue(params.value("pad_drop_pct").toDouble(33.0));
     m_shiftXPct->setValue(params.value("shift_x_pct").toDouble(8.0));
     m_shiftYPct->setValue(params.value("shift_y_pct").toDouble(10.0));
     m_shortMinPct->setValue(params.value("short_min_pct").toDouble(0.021));
