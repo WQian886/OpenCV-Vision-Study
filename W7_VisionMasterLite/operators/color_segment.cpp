@@ -1,4 +1,5 @@
 #include "color_segment.h"
+#include "hsv_params.h"
 #include <QSpinBox>
 #include <QJsonArray>
 #include <QDir>
@@ -6,58 +7,11 @@
 
 namespace w7 {
 
-// ============================================================
-// 从 params 里取出一个 HSV 三元组
-//
-// 为什么要单独抽出来、而不是直接 lo[0].toInt():
-// QJsonArray::operator[] **不检查越界**。数组空的时候 lo[0] 拿到的是
-// 一个指向空容器的 QJsonValueRef,再 toInt() 就是解引用空指针 ——
-// 实测直接 0xC0000005 崩掉(2026-10-08)。
-//
-// 这个坑本来是已知的:同一个文件的 ColorSegmentForm::setParams 里
-// 就写了 `if (lo.size() >= 3)`。只是 run() 这一处漏了。
-//
-// 另一个决定:形状不对时报 error,**不补默认值**。
-// 补默认值看起来更"健壮",但那会让用户以为自己的阈值生效了,
-// 实际跑的是默认阈值 —— 属于"配置看着对、结果全错",
-// 比直接报错难查一个数量级。
-// ============================================================
-// QJsonValue::typeName() 是 Qt 5 的 API,Qt 6 里没了,所以自己映射一张表。
-// 报错里写"是字符串"比写"isString"有用 —— 用户看的是自己写下的东西。
-static QString jsonTypeName(QJsonValue::Type t) {
-    switch (t) {
-        case QJsonValue::Null:      return QStringLiteral("null");
-        case QJsonValue::Bool:      return QStringLiteral("布尔值");
-        case QJsonValue::Double:    return QStringLiteral("数字");
-        case QJsonValue::String:    return QStringLiteral("字符串");
-        case QJsonValue::Array:     return QStringLiteral("数组");
-        case QJsonValue::Object:    return QStringLiteral("对象");
-        case QJsonValue::Undefined: return QStringLiteral("未定义");
-    }
-    return QStringLiteral("未知类型");
-}
-
-static bool readHsvTriple(const QJsonValue& v, const QString& key,
-                          int out[3], QString* err) {
-    if (!v.isArray()) {
-        *err = QString("%1 不是数组(实际是%2)").arg(key, jsonTypeName(v.type()));
-        return false;
-    }
-    const QJsonArray a = v.toArray();
-    if (a.size() < 3) {
-        *err = QString("%1 只有 %2 个元素,至少要 3 个(H/S/V)").arg(key).arg(a.size());
-        return false;
-    }
-    for (int i = 0; i < 3; ++i) {
-        if (!a[i].isDouble()) {          // const 数组的 operator[] 返回 QJsonValue,不越界
-            *err = QString("%1 第 %2 个不是数字(实际是%3)")
-                     .arg(key).arg(i + 1).arg(jsonTypeName(a[i].type()));
-            return false;
-        }
-        out[i] = a[i].toInt();
-    }
-    return true;
-}
+// readHsvTriple / jsonTypeName 现在住在 operators/hsv_params.h。
+// 原来是本文件里的 static 副本 —— 后来 pcb_inspect.cpp:83 又踩了同一个坑
+// (`lo[0].toInt(85)`,空数组解引用,同样的崩法)。抄副本这条路在这个项目里
+// 已经埋了两次雷(上一次是 EXPECTS[6] 抄了一份 ROI 几何中心),
+// 所以守卫只保留一份定义,两个算子共用。
 
 QJsonObject ColorSegment::defaultParams() const {
     QJsonObject p;
@@ -150,17 +104,24 @@ void ColorSegmentForm::buildUI() {
 }
 
 void ColorSegmentForm::setParams(const QJsonObject& params) {
-    QJsonArray lo = params.value("hsv_low").toArray();
-    QJsonArray hi = params.value("hsv_high").toArray();
-    if (lo.size() >= 3) {
-        m_hLow->setValue(lo[0].toInt());
-        m_sLow->setValue(lo[1].toInt());
-        m_vLow->setValue(lo[2].toInt());
+    // 和 PcbInspectForm::setParams 走同一个守卫,读法保持一致。
+    // 原来这里只查了 `size() >= 3`,漏了元素类型:
+    // QJsonValue::toInt() 对字符串返回 **0**,而 0 是合法阈值,
+    // 于是手改过的 .sol.json 里 ["85","80","80"] 会安静地变成 (0,0,0)。
+    //
+    // 读不出来就保持界面默认值,不报错 —— run() 会明确报。
+    int lo[3] = {0, 0, 0};
+    int hi[3] = {0, 0, 0};
+    QString err;
+    if (readHsvTriple(params.value("hsv_low"), "hsv_low", lo, &err)) {
+        m_hLow->setValue(lo[0]);
+        m_sLow->setValue(lo[1]);
+        m_vLow->setValue(lo[2]);
     }
-    if (hi.size() >= 3) {
-        m_hHigh->setValue(hi[0].toInt());
-        m_sHigh->setValue(hi[1].toInt());
-        m_vHigh->setValue(hi[2].toInt());
+    if (readHsvTriple(params.value("hsv_high"), "hsv_high", hi, &err)) {
+        m_hHigh->setValue(hi[0]);
+        m_sHigh->setValue(hi[1]);
+        m_vHigh->setValue(hi[2]);
     }
 }
 

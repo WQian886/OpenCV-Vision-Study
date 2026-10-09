@@ -1,4 +1,5 @@
 #include "pcb_inspect.h"
+#include "hsv_params.h"
 #include <QSpinBox>
 #include <QComboBox>
 #include <QJsonArray>
@@ -78,10 +79,18 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
     }
 
     // --- 金层提取 ---
-    QJsonArray lo = params.value("hsv_low").toArray();
-    QJsonArray hi = params.value("hsv_high").toArray();
-    cv::Scalar low(lo[0].toInt(85),  lo[1].toInt(80), lo[2].toInt(80));
-    cv::Scalar high(hi[0].toInt(115), hi[1].toInt(255), hi[2].toInt(255));
+    // 守卫见 operators/hsv_params.h。以前这里是裸的 lo[0].toInt(85),
+    // QJsonArray::operator[] 不检查越界,hsv_low 传成空数组就 0xC0000005。
+    int lo[3] = {85, 80, 80};
+    int hi[3] = {115, 255, 255};
+    QString hsvErr;
+    if (!readHsvTriple(params.value("hsv_low"),  "hsv_low",  lo, &hsvErr) ||
+        !readHsvTriple(params.value("hsv_high"), "hsv_high", hi, &hsvErr)) {
+        output["error"] = QString("金层 HSV 阈值不合法: %1").arg(hsvErr);
+        return output;
+    }
+    const cv::Scalar low (lo[0], lo[1], lo[2]);
+    const cv::Scalar high(hi[0], hi[1], hi[2]);
 
     cv::Mat hsv, goldMask;
     cv::cvtColor(img, hsv, cv::COLOR_BGR2HSV);
@@ -257,17 +266,22 @@ void PcbInspectForm::setParams(const QJsonObject& params) {
     const int idx = m_mode->findData(mode);
     if (idx >= 0) m_mode->setCurrentIndex(idx);
 
-    QJsonArray lo = params.value("hsv_low").toArray();
-    QJsonArray hi = params.value("hsv_high").toArray();
-    if (lo.size() >= 3) {
-        m_hLow->setValue(lo[0].toInt());
-        m_sLow->setValue(lo[1].toInt());
-        m_vLow->setValue(lo[2].toInt());
+    // 读不出来就保持界面上的默认值,**不在这里报错**:
+    // 界面控件自己 collect() 出来的永远是三个整数,只有手改 .sol.json
+    // 才可能拿到怪东西 —— 那时 run() 会明确报错(见 run() 里的守卫),
+    // 界面不必替它再吵一遍。
+    int lo[3] = {0, 0, 0};
+    int hi[3] = {0, 0, 0};
+    QString err;
+    if (readHsvTriple(params.value("hsv_low"), "hsv_low", lo, &err)) {
+        m_hLow->setValue(lo[0]);
+        m_sLow->setValue(lo[1]);
+        m_vLow->setValue(lo[2]);
     }
-    if (hi.size() >= 3) {
-        m_hHigh->setValue(hi[0].toInt());
-        m_sHigh->setValue(hi[1].toInt());
-        m_vHigh->setValue(hi[2].toInt());
+    if (readHsvTriple(params.value("hsv_high"), "hsv_high", hi, &err)) {
+        m_hHigh->setValue(hi[0]);
+        m_sHigh->setValue(hi[1]);
+        m_vHigh->setValue(hi[2]);
     }
     m_minArea->setValue(params.value("min_area").toInt(80));
 }

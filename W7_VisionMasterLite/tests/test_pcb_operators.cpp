@@ -379,6 +379,73 @@ static void test_short_crosstalk_and_wrong_owner() {
           QString("wrong 挂在 R3 上(实际 '%1')").arg(wrongOwner));
 }
 
+// ------------------------------------------------------------
+// 用例 9:HSV 阈值给成怪形状时报错,不崩
+//
+// 成因是抄副本:QJsonArray::operator[] **不检查越界**。
+// 以前 pcb_inspect.cpp 的 run() 写的是裸的 `lo[0].toInt(85)`,
+// hsv_low 传成空数组就 0xC0000005。同样的守卫 color_segment.cpp
+// 早就修过了 —— 抄副本的结果是同一个坑踩两次。
+//
+// 这里钉两件事:
+//   ① 崩 -> 变成一条明确的 error
+//   ② 报错时**不产出任何元件** —— 不能给下游一个"0 个元件"的列表,
+//      那和"什么都没检查却报 PASS"是同一类安静的错误。
+// ------------------------------------------------------------
+static void test_hsv_param_guarded() {
+    beginCase("金层 HSV 参数形状不对时报错,不崩");
+
+    PcbInspect inspect;
+    const QJsonObject in{{"image_path", "images/baseline.png"}};
+
+    struct Case {
+        const char* what;
+        QJsonValue low;
+        const char* expect;         // 报错里应该点名的字段
+    };
+    const Case cases[] = {
+        {"空数组",       QJsonArray{},                 "hsv_low"},
+        {"只有两个元素", QJsonArray{85, 80},           "hsv_low"},
+        {"第一个是字符串", QJsonArray{"85", 80, 80},   "hsv_low"},
+        {"根本不是数组",  QJsonValue(85),              "hsv_low"},
+    };
+
+    for (const auto& c : cases) {
+        QJsonObject p = inspect.defaultParams();
+        p["hsv_low"] = c.low;
+        QJsonObject out = inspect.run(p, in);
+
+        check(out.contains("error"),
+              QString("%s -> 有 error(实际 result=\"%1\")")
+                  .arg(c.what, out.value("result").toString()));
+        check(out.value("error").toString().contains(c.expect),
+              QString("%s -> 报错点名字段 %2(实际 \"%3\")")
+                  .arg(c.what, c.expect, out.value("error").toString()));
+        check(!out.contains("count"),
+              QString("%s -> 不产出 count(实际 %1)")
+                  .arg(c.what).arg(out.value("count").toInt()));
+    }
+
+    // hsv_high 同样要查,别只测一半
+    {
+        QJsonObject p = inspect.defaultParams();
+        p["hsv_high"] = QJsonArray{};
+        QJsonObject out = inspect.run(p, in);
+        check(out.value("error").toString().contains("hsv_high"),
+              QString("hsv_high 空数组 -> 报错点名 hsv_high(实际 \"%1\")")
+                  .arg(out.value("error").toString()));
+    }
+
+    // 对照组:没有这条,"永远报错"也能让上面全绿 —— 而那等于把定位废了
+    QJsonObject ok = inspect.run(inspect.defaultParams(), in);
+    check(!ok.contains("error"),
+          QString("对照组:默认参数照常工作(实际 error=\"%1\")")
+              .arg(ok.value("error").toString()));
+    check(ok.value("count").toInt() == 6,
+          QString("对照组:仍然定位到 6 个元件(实际 %1)")
+              .arg(ok.value("count").toInt()));
+}
+
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");   // headless
     // Windows 控制台默认 GBK,中文断言信息会乱码。强制 UTF-8
@@ -395,6 +462,7 @@ int main(int argc, char* argv[]) {
     test_auto_contour_mode();
     test_judge_refuses_uninspectable_components();
     test_short_crosstalk_and_wrong_owner();
+    test_hsv_param_guarded();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;
