@@ -227,9 +227,21 @@ QJsonObject PcbDefectJudge::defaultParams() const {
 
     // --- ROI 宽度 % ---
     p["polarity_ratio"]  = 60.0;  // 见上
-    // R1 最长金段占 ROI 宽度:正常 15.8% ↔ 焊桥 100%,几何中点 40。
-    // 原来是 70px = 58.3%,能用但偏在缺陷侧。
-    p["bridge_min_pct"]  = 40.0;
+    // R1 最长金段占 ROI 宽度。原来只按 demo 一张图定:正常 15.83 ↔
+    // 焊桥 100,几何中点 ~40。四块板全部接入后必须重算(2026-10-10):
+    //
+    //     好板一侧最大值  37.50   signal R1 @1x   ← 原来完全没量过这块板
+    //     坏板一侧最小值  91.43   mcu Y1(mcu_bridge.png)
+    //                       100.00 demo R1(bridge.png)
+    //
+    // 40 是拿 demo 单独一张图的中点算的,signal 板加进来之后,
+    // 好板最大值 37.50 离阈值只剩 **2.5 个点** —— 这就是 signal_baseline
+    // 在非 1x 档位误报的根因。可行区间是 (37.50, 91.43),
+    // 几何中点 sqrt(37.50*91.43) ≈ 58.6,取 60,两头各留 20 个点以上。
+    //
+    // ⚠ 60 修不了 signal R1/R3 的问题,那不是阈值的事 —— 见下面
+    //   "走线穿过 ROI"那段注释。
+    p["bridge_min_pct"]  = 60.0;
     // R2 质心横向偏移容差,占 ROI 宽:缺陷图实测 15.8%,取 8(约 2 倍余量)。
     p["shift_x_pct"]     = 8.0;
     // R2 质心纵向偏移容差,占 ROI 高:缺陷图实测 18.8%,取 10(约 1.9 倍余量)。
@@ -423,7 +435,10 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     const double yellowMinPct = params.value("yellow_min_pct").toDouble(32.0);
     const double polarityRatio= params.value("polarity_ratio").toDouble(60.0);
     const double whiteMinPct  = params.value("white_min_pct").toDouble(0.5);
-    const double bridgeMinPct = params.value("bridge_min_pct").toDouble(40.0);
+    // ⚠ 这个 60 是上面 defaultParams 里那份的第二份副本(老毛病:同一个数
+    //   在一个文件里抄多处,改一处忘一处,界面和实际跑的就会不一样)。
+    //   改的时候两处一起改。
+    const double bridgeMinPct = params.value("bridge_min_pct").toDouble(60.0);
     const double padMinPct    = params.value("pad_min_pct").toDouble(0.46);
     const double padDropPct   = params.value("pad_drop_pct").toDouble(33.0);
     const double shiftXPct    = params.value("shift_x_pct").toDouble(8.0);
@@ -600,6 +615,32 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
         }
 
         // ---------- bridge: 焊盘间金条连片 ----------
+        //
+        // ⚠⚠ 这条判据有个**结构性的适用范围**,别再拿它去调参:
+        //   它量的是"ROI 里最长一行的金像素个数"。只要有一条正常的
+        //   金走线从元件 ROI 里横穿过去,好板这一行就会占满整个宽度。
+        //
+        //   实测(2026-10-10,扰动矩阵跑出来的,不是推的):
+        //       signal 板信号链 y=450 那条金走线
+        //       (gen_complex_pcb.py L512~L519)正好从 R1(220,450) 和
+        //       R3(720,450) 身上穿过去;R2(480,350)/R4(860,350) 在 y=350,
+        //       躲开了。
+        //
+        //           元件   1x      0.5x    0.75x   1.25x   2.0x
+        //           R1     37.50   71.88   69.39   69.14   68.75   ← 走线穿过
+        //           R2     29.69   31.25   38.78   30.86   29.69   ← 没穿过
+        //           R3     29.69   84.38  100.00  100.00  100.00   ← 走线穿过
+        //           R4     29.69   31.25   38.78   30.86   29.69   ← 没穿过
+        //
+        //   R2/R4 完美缩放(1x 的 19px → 0.5x 的 10px,正好一半),
+        //   R1/R3 完全不缩放,到 2.0x 直接顶到 100% —— 整行都是走线。
+        //   **好板的值和真焊桥(100)完全重合,任何阈值都分不开。**
+        //
+        //   所以 bridge 只对"ROI 里没有走线横穿"的元件成立。
+        //   对被走线贯穿的元件,判据得改成量"两个焊盘之间有没有被
+        //   金层连成**同一块**"(连通域跨越两焊盘),而不是量长度 ——
+        //   走线是连着焊盘的,但它在 ROI 边界处出去、回来,
+        //   不占满中间那几行。这个改法还没做,先记在这。
         if (rules.contains(QString::fromUtf8(recipe_rule::kBridge))) {
             cv::Mat roiMask = goldMask(roi);
             int maxWidth = 0, maxY = 0;
