@@ -1,9 +1,11 @@
 #include "pcb_inspect.h"
 #include "hsv_params.h"
 #include "pcb_color_ref.h"
+#include "board_recipe.h"
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QComboBox>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QStringList>
 #include <opencv2/opencv.hpp>
@@ -13,45 +15,38 @@
 namespace w7 {
 
 // ============================================================
-// 板型真值(同步自 W6 main.cpp 的 SITES 数组)
-// 只在 known_site 模式用。auto_contour 模式不依赖它。
+// 板型真值 —— 现在从 recipes/*.json 读,不再写在源码里
 //
-// === 表里的数字是什么意思 ===
-// 数字还是从 1000x700 那张图上量的,但**含义变了**:
-// 它们是"这块板在整张图里占多大比例、中心在图上什么位置"的参考值。
-// run() 里统一乘上 (imgW/1000, imgH/700),所以换分辨率、换工位相机时
-// ROI 会跟着缩放,而不是死死钉在那几个像素上。
+// === 这里原来是什么,以及为什么拿掉 ===
 //
-// 改之前是什么样(实测,不是推演):
-//   图缩到 500x350 -> R2 的 ROI(90,456,120,48)整个掉到板外,
-//   元件被 continue 跳过 -> 6 个元件只剩 2 个 -> 判定照样输出 PASS。
-//   一条日志都没有。这是"什么都没检查却报合格",比判错更危险。
+// 原来是一张 SITES[6] 硬编码表 + 判定算子里七处 `if (label == "R2")`。
+// **同一份板型真值抄了两遍,分居两个文件。**
 //
-// ⚠ 归一化只解决"分辨率变了",不解决"板型变了"。
-//    换一块布局不同的板子,这组比例照样是错的 —— 那是另一件事。
+// 实测代价(2026-10-09,把 W6 遗留的三种板型直接喂进来):
+//   - 元件数恒等于 6,与图上实际有什么无关
+//   - 三块**好板**全被判废(误报 3/3)
+//   - 两块废板的输出与好板**逐字相同**(signal 板 0/2 有信号)
+//
+// 根因不是坐标写死 —— 坐标归一化过了,换分辨率是好的。
+// 根因是**规则也写死**:换一块布局不同的板,坐标不对,
+// 那七处 label== 更是每一条都匹配不上,一条规则都不跑。
+//
+// 现在坐标和规则都在同一份 JSON 里(recipes/*.json),
+// 由 tools/export_recipes.py 从 W6 生成器导出。
+// 换板子 = 换一份 JSON,**不改一行代码**。
+//
+// ⚠ JSON 是产物不是源。要改配方去改 W6 生成器再重跑导出脚本。
 // ============================================================
 namespace {
-// 标定时的参考分辨率
-constexpr int kRefW   = 1000;
-constexpr int kRefH   =  700;
-// 参考分辨率下 ROI 四周多留的余量(像素)
-constexpr int kRefBuf =   10;
+// 默认板型:自带的那张 demo 板。
+const QString kDefaultRecipe = QStringLiteral("recipes/demo.json");
 
-struct SiteDef {
-    const char* label;
-    const char* kind;
-    int refCx, refCy;         // 参考分辨率下的中心点
-    int refBodyW, refBodyH;   // 参考分辨率下的本体尺寸
-};
-
-const SiteDef SITES[6] = {
-    {"R1", "R",  150, 200, 100, 28},
-    {"C1", "C",  400, 200,  70, 28},
-    {"U1", "IC", 720, 200, 180, 60},
-    {"R2", "R",  150, 480, 100, 28},
-    {"C2", "C",  400, 480,  70, 28},
-    {"R3", "R",  700, 480, 100, 28},
-};
+// auto_contour 模式不读配方,聚类半径就没有 refW/refH 和本体尺寸可依,
+// 只能退回改造前写死的真值。**这三个数是原值,不是新选的**:
+// kRefW/kRefH 和 SITES[6] 里 U1 的 180x60。改动它们会直接改变
+// test_auto_contour_scale_stable 钉死的 7/10/10/11。
+constexpr int kFallbackRefW = 1000;
+constexpr int kFallbackRefH =  700;
 } // namespace
 
 QJsonObject PcbInspect::defaultParams() const {
@@ -75,6 +70,9 @@ QJsonObject PcbInspect::defaultParams() const {
     p["hsv_s_low"]  = pcbcolor::goldBand().sLo;
     p["mask_v_mul"] = pcbcolor::kMaskVMul;
     p["min_area"] = 80;
+    // 板型:换板子只改这一项(指向 recipes/ 下的另一份 JSON),
+    // 不改任何代码。原来这里是隐含的 —— 只有一张写死的表。
+    p["recipe"] = kDefaultRecipe;
     return p;
 }
 
@@ -91,6 +89,13 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
         output["error"] = "imread failed: " + imgPath;
         return output;
     }
+
+    // ============================================================
+    // 板型配方在下面读(要等 mode 读出来才知道该不该读),
+    // 这里先把类型声明好 —— 一张配方横跨整个 run(),
+    // 后面 auto_contour 分支也用它的 ref_w/ref_h 算归一化基准。
+    // ============================================================
+    BoardRecipe recipe;
 
     // --- 金层提取 ---
     // 守卫见 operators/hsv_params.h。以前这里是裸的 lo[0].toInt(85),
@@ -147,6 +152,25 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
                                         pcbcolor::kernelScale(img));
 
     const QString mode = params.value("mode").toString("known_site");
+
+    // ============================================================
+    // 板型配方
+    //
+    // 真值模式才需要配方;auto_contour 不依赖它,所以放到 mode 分支里读。
+    // 读失败**必须在这里停**:带着一份"凑合用"的站点表往下走,
+    // 会输出一份看起来正常的元件清单,只是清单是错的 ——
+    // 而下游判定无从知道这一点。
+    // ============================================================
+    if (mode != "auto_contour") {
+        const QString recipePath =
+            params.value("recipe").toString(kDefaultRecipe);
+        QString reason;
+        if (!loadRecipe(recipePath, &recipe, &reason)) {
+            output["error"] = QString("板型配方加载失败:%1").arg(reason);
+            return output;
+        }
+    }
+
     // min_area 从绝对像素改成占全图面积的比例。
     //
     // 实测(只改分辨率、不改亮度,auto_contour 元件数):
@@ -164,15 +188,36 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
     const int minArea = static_cast<int>(
         std::lround(minAreaPct / 100.0 * img.cols * img.rows));
     // 聚类半径:取元件本体最大尺寸的一半。跟着图像尺寸缩放,
-    // 和 SITES 那边的归一化同一个道理。
+    // 和配方那边的归一化同一个道理。
+    //
+    // auto_contour 不依赖配方,那它按什么缩放?按基准图的分辨率
+    // —— 没有配方可读时,用下面那两个兜底常数(改造前的原值)。
+    const int refW = recipe.isEmpty() ? kFallbackRefW : recipe.refW;
+    const int refH = recipe.isEmpty() ? kFallbackRefH : recipe.refH;
     int maxBodyW = 0, maxBodyH = 0;
-    for (const auto& s : SITES) {
-        maxBodyW = std::max(maxBodyW, s.refBodyW);
-        maxBodyH = std::max(maxBodyH, s.refBodyH);
+    for (const auto& s : recipe.sites) {
+        maxBodyW = std::max(maxBodyW, s.bodyW);
+        maxBodyH = std::max(maxBodyH, s.bodyH);
     }
+    // auto_contour 不读配方(见上面),所以这里拿不到站点尺寸,
+    // 只能退回改造前那套写死的真值。这三个数就是原 SITES[6] / kRef* 的
+    // 原值,**不是新挑的**:换成别的数,mergeDist 就不是当年那个 90.0,
+    // test_auto_contour_scale_stable 的 7/10/10/11 会立刻变。
+    //
+    // ⚠ 这里踩过一次坑,记下来:第一版兜底写成 maxBodyW=100 且
+    //   refW=img.cols,结果 mergeDist 恒等于 90 —— 半径不跟着图缩放了,
+    //   0.5x 的小图被按大图的半径聚类,过度聚类,7 个元件糊成 6 个,
+    //   正好复现该测试注释里记的 M16 失效模式。
+    //   也就是说"参照分辨率"必须是**固定的基准图尺寸**,
+    //   不能拿当前图自己的尺寸去归一化自己 —— 那样等于把尺度消掉。
+    //
+    // 改造前 0.5x 下 mergeDist = 0.5*180*0.5 = 45,1.0x = 90,2.0x = 180。
+    // 真要让 auto_contour 跨分辨率稳定,得让它也读一份配方;那属于下一步。
+    if (maxBodyW <= 0) maxBodyW = 180;
+    if (maxBodyH <= 0) maxBodyH = 60;
     const double mergeDist = std::max(
-        1.0, 0.5 * std::max(maxBodyW * img.cols / static_cast<double>(kRefW),
-                            maxBodyH * img.rows / static_cast<double>(kRefH)));
+        1.0, 0.5 * std::max(maxBodyW * img.cols / static_cast<double>(refW),
+                            maxBodyH * img.rows / static_cast<double>(refH)));
 
     QJsonArray compsJson;
     cv::Mat marked = img.clone();
@@ -229,41 +274,58 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
                         cv::Scalar(0, 200, 255), 1);
         }
     } else {
-        // --- 真值模式:按 SITES 构造 ROI(W6 已验证路径) ---
+        // --- 真值模式:按配方构造 ROI(W6 已验证路径) ---
         //
-        // 站点几何按图像尺寸等比缩放(见上面"表里的数字是什么意思")。
+        // 站点几何按图像尺寸等比缩放。**基准从固定的 1000x700 换成了
+        // 配方自己的 ref_w/ref_h** —— 换板型时基准也跟着换,
+        // 否则一块 1200x900 的板会拿 1000x700 的坐标去切,全错。
+        //
         // 余量取**较小**的那个缩放比:ROI 撑大只会稀释下游的比例阈值,
         // 留窄一点最多是贴边,不会把元件切掉 —— 宁可保守。
-        const double sx = static_cast<double>(img.cols) / kRefW;
-        const double sy = static_cast<double>(img.rows) / kRefH;
+        const double sx = static_cast<double>(img.cols) / recipe.refW;
+        const double sy = static_cast<double>(img.rows) / recipe.refH;
         const int buf = std::max(1, static_cast<int>(
-            std::lround(kRefBuf * std::min(sx, sy))));
+            std::lround(recipe.buffer * std::min(sx, sy))));
 
         // 站点被丢掉的要记账。以前是"越界就 continue",于是
         // 上游少给几个元件,下游照样报 PASS,没人知道少算了。
         QStringList skipped;
+        // 本体检测:每个站点的框里到底有没有东西。见下面那道闸。
+        int sitesWithBody = 0;
 
-        for (const auto& s : SITES) {
-            const int cx = static_cast<int>(std::lround(s.refCx * sx));
-            const int cy = static_cast<int>(std::lround(s.refCy * sy));
-            const int bw = static_cast<int>(std::lround(s.refBodyW * sx));
-            const int bh = static_cast<int>(std::lround(s.refBodyH * sy));
+        for (const auto& s : recipe.sites) {
+            const int cx = static_cast<int>(std::lround(s.cx * sx));
+            const int cy = static_cast<int>(std::lround(s.cy * sy));
+            const int bw = static_cast<int>(std::lround(s.bodyW * sx));
+            const int bh = static_cast<int>(std::lround(s.bodyH * sy));
             cv::Rect roi(cx - bw / 2 - buf, cy - bh / 2 - buf,
                          bw + 2 * buf, bh + 2 * buf);
             // ROI 与图像边界求交,换分辨率也不会越界
             roi &= cv::Rect(0, 0, img.cols, img.rows);
             if (roi.width <= 0 || roi.height <= 0) {
-                skipped << QString::fromUtf8(s.label);
+                skipped << s.label;
                 continue;
             }
 
             QJsonObject cj;
-            cj["label"] = QString::fromUtf8(s.label);
-            cj["kind"]  = QString::fromUtf8(s.kind);
+            cj["label"] = s.label;
+            cj["kind"]  = s.kind;
             cj["x"]     = roi.x;
             cj["y"]     = roi.y;
             cj["w"]     = roi.width;
             cj["h"]     = roi.height;
+            // 这一行是这次改动的核心:判定规则随元件一起下发。
+            //
+            // 以前规则写死在判定算子里(`if (label == "R2")`),
+            // 于是换块板那七处一条都匹配不上。现在由配方决定,
+            // 判定算子只认这个名字 —— 换板子不改代码。
+            QJsonArray checks;
+            for (const QString& c : s.checks) checks.append(c);
+            cj["checks"] = checks;
+            // 偏移容差按封装给(配方里可省,省了用算子默认)。
+            // 写死成一个数等于"所有元件一样灵":小电阻挪 20px 可能
+            // 还没出框,QFP64 挪 20px 就是大事。
+            if (s.hasShiftTol()) cj["shift_tol_pct"] = s.shiftTolPct;
             // ROI 内的金像素数。⚠ 这个字段**曾经是死的**:
             // 写了但全仓库没有任何消费者(2026-10-09 实测 grep),
             // 而它恰好是唯一能暴露"定位算子与判定算子的金层掩膜已经
@@ -274,12 +336,45 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
             // 像素数留着只会被误当成能跨分辨率用的数。
             cj["gold_pct"] = 100.0 * cv::countNonZero(goldMask(roi))
                            / (roi.width * roi.height);
+
+            // --- 这道闸:这份配方跟这张图是一块板吗? ---
+            //
+            // 框里**完全**是板面基色 = 这个站点上没有元件。
+            // 一块板上一个都找不到,只可能是配方配错了图。
+            //
+            // 以前没有这道闸,实测后果(2026-10-09,三块好板):
+            //   16 个站点全空 -> 下游 16 条 "missing" -> 很自信地判废,
+            //   而废板报的是同样的 missing,两者**逐字相同**。
+            //   程序错了,但表现得像在正常工作。
+            //
+            // 判据用"与板面基色的距离",不写死像素差 —— 后者就是
+            // 我们这个项目反复踩的绝对值坑:换个亮度/材质就整片失效。
+            const cv::Vec3b bb = boardBase;
+            int nonBoard = 0;
+            for (int y = roi.y; y < roi.y + roi.height; ++y) {
+                const cv::Vec3b* row = img.ptr<cv::Vec3b>(y);
+                for (int x = roi.x; x < roi.x + roi.width; ++x) {
+                    const cv::Vec3b& p = row[x];
+                    if (std::abs(p[0] - bb[0]) > 12 ||
+                        std::abs(p[1] - bb[1]) > 12 ||
+                        std::abs(p[2] - bb[2]) > 12) {
+                        ++nonBoard;
+                    }
+                }
+            }
+            const double bodyPct = 100.0 * nonBoard
+                                  / (roi.width * roi.height);
+            cj["body_pct"] = bodyPct;
+            // 1% 是保守取值:真元件再怎么小,本体也远不止占框内 1%。
+            // 定高了会把"元件被整体擦掉"的真缺陷也当成"配方不匹配",
+            // 那就变成漏检了 —— 两边都要顾。
+            if (bodyPct >= 1.0) ++sitesWithBody;
+
             compsJson.append(cj);
 
             cv::rectangle(marked, roi, cv::Scalar(0, 220, 0), 2);
             cv::putText(marked,
-                        QString("%1(%2)").arg(QString::fromUtf8(s.label),
-                                              QString::fromUtf8(s.kind)).toStdString(),
+                        QString("%1(%2)").arg(s.label, s.kind).toStdString(),
                         cv::Point(roi.x, std::max(12, roi.y - 4)),
                         cv::FONT_HERSHEY_SIMPLEX, 0.5,
                         cv::Scalar(0, 220, 0), 1);
@@ -287,12 +382,38 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
 
         if (!skipped.isEmpty()) {
             output["warning"] = QString(
-                "板型真值里的 %1 个站点(%2)在这张 %3x%4 的图上算不出有效 ROI,"
+                "配方里的 %1 个站点(%2)在这张 %3x%4 的图上算不出有效 ROI,"
                 "已经跳过 —— 下游只能判定剩下的 %5 个元件,"
                 "不要把这次的结论当成整板都查过了。")
                 .arg(skipped.size()).arg(skipped.join(","))
                 .arg(img.cols).arg(img.rows).arg(compsJson.size());
         }
+
+        // ============================================================
+        // 配方-图像匹配门禁
+        //
+        // 这不是"优化",是**堵一个静默失效**:配方和图配错时,
+        // 原来会输出一份结构完整的判定结果,而且看起来完全正常。
+        // 用户没有任何线索知道自己检的是另一块板。
+        //
+        // 宁可拒绝判定。理由和前面 auto_contour 的守卫一样:
+        // "查不了"要说出来,"查了一半说 PASS"才是产线事故。
+        //
+        // 阈值取"多数站点都有本体"(过半)。全空 = 肯定配错;
+        // 一两个站点空 = 那个元件真被拆了,那是缺件缺陷,归判定算子管。
+        // ============================================================
+        if (!compsJson.isEmpty() && sitesWithBody * 2 < compsJson.size()) {
+            output["error"] = QString(
+                "配方 \"%1\"(%2 个站点)跟这张 %3x%4 的图对不上:"
+                "%5 个站点里只有 %6 个能找到元件本体(阈值:过半)。"
+                "很可能是**选错板型了** —— 换一张配方再试。"
+                "这次没有判定结果,不要当成合格。")
+                .arg(recipe.name).arg(compsJson.size())
+                .arg(img.cols).arg(img.rows)
+                .arg(compsJson.size()).arg(sitesWithBody);
+            return output;
+        }
+        output["recipe"] = recipe.name;
     }
 
     QString markedPath = "images/w7_pcb_inspect.png";
@@ -321,8 +442,28 @@ PcbInspectForm::PcbInspectForm(QWidget* parent) : ParamForm(parent) {}
 
 void PcbInspectForm::buildUI() {
     m_mode = new QComboBox;
-    m_mode->addItem(tr("真值坐标(已知板型)"), "known_site");
-    m_mode->addItem(tr("自动轮廓(换板型)"),   "auto_contour");
+    m_mode->addItem(tr("真值坐标(按板型配方)"), "known_site");
+    m_mode->addItem(tr("自动轮廓(无配方,不判定)"), "auto_contour");
+
+    // 板型配方下拉框。列的是 recipes/ 下真实存在的文件 ——
+    // 列一个不存在的板型,比不列更糟:用户选了它,
+    // 拿到的会是"读不到配方文件",而不是"这块板不支持"。
+    m_recipe = new QComboBox;
+    const QStringList recipes = listRecipes();
+    if (recipes.isEmpty()) {
+        // recipes/ 读不到时不静默给空下拉框:那会让界面上
+        // "板型"这一栏什么都没有,用户不知道该填什么。
+        m_recipe->addItem(tr("(未找到 recipes/ 目录)"), QString());
+        m_recipe->setEditable(true);
+    } else {
+        for (const QString& p : recipes) {
+            // 显示板名而不是路径,免得一行太长看不清;
+            // 但 currentData 存完整相对路径,那是 run() 要用的。
+            const QString shown = QFileInfo(p).completeBaseName();
+            m_recipe->addItem(shown, p);
+        }
+        m_recipe->setEditable(true);   // 允许直接输路径加载自定义配方
+    }
 
     m_hLow  = new QSpinBox;  m_hLow->setRange(0, 179);  m_hLow->setValue(85);
     m_sLow  = new QSpinBox;  m_sLow->setRange(0, 255);  m_sLow->setValue(80);
@@ -335,6 +476,7 @@ void PcbInspectForm::buildUI() {
     m_minAreaPct->setValue(0.05);
 
     m_layout->addRow(tr("定位模式"),   m_mode);
+    m_layout->addRow(tr("板型配方"),   m_recipe);
     m_layout->addRow(tr("金层 H 下限"), m_hLow);
     m_layout->addRow(tr("金层 S 下限"), m_sLow);
     m_layout->addRow(tr("金层 H 上限"), m_hHigh);
@@ -346,6 +488,14 @@ void PcbInspectForm::setParams(const QJsonObject& params) {
     const QString mode = params.value("mode").toString("known_site");
     const int idx = m_mode->findData(mode);
     if (idx >= 0) m_mode->setCurrentIndex(idx);
+
+    // 配方:列表里有的按路径选中,没有的(自定义路径)直接填进去。
+    // 找不到就保持下拉框当前值,不报错 —— 和下面几个阈值一样的规矩:
+    // 界面上替 run() 再吵一遍没用,run() 才是真正决定成败的地方。
+    const QString recipe = params.value("recipe").toString(kDefaultRecipe);
+    const int ridx = m_recipe->findData(recipe);
+    if (ridx >= 0) m_recipe->setCurrentIndex(ridx);
+    else if (!recipe.isEmpty()) m_recipe->setCurrentText(recipe);
 
     // 读不出来就保持界面上的默认值,**不在这里报错**:
     // 界面控件自己 collect() 出来的永远是合法数字,只有手改 .sol.json
@@ -364,6 +514,8 @@ void PcbInspectForm::setParams(const QJsonObject& params) {
 QJsonObject PcbInspectForm::collect() const {
     QJsonObject p;
     p["mode"]        = m_mode->currentData().toString();
+    p["recipe"]      = m_recipe->currentData().toString().isEmpty()
+                     ? m_recipe->currentText() : m_recipe->currentData().toString();
     p["hsv_h_low"]   = m_hLow->value();
     p["hsv_s_low"]   = m_sLow->value();
     p["hsv_h_high"]  = m_hHigh->value();

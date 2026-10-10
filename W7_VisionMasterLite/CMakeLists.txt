@@ -98,6 +98,9 @@ set(SOURCES
     operators/image_source_video.cpp
     operators/pcb_inspect.cpp
     operators/pcb_defect_judge.cpp
+    # 板型配方解析。进 SOURCES 而不是只在测试目标里链:
+    # 主程序也要读 recipes/*.json,漏了这个是链接期 LNK2019。
+    operators/board_recipe.cpp
     operators/dl_postprocess.cpp
     operators/dl_infer.cpp
     operators/line_fit.cpp
@@ -133,6 +136,7 @@ set(HEADERS
     operators/image_source_video.h
     operators/pcb_inspect.h
     operators/pcb_defect_judge.h
+    operators/board_recipe.h
     operators/dl_postprocess.h
     operators/dl_infer.h
     operators/line_fit.h
@@ -241,6 +245,9 @@ qt_add_executable(w7_pcb_test
     operators/param_form.cpp
     operators/pcb_inspect.cpp
     operators/pcb_defect_judge.cpp
+    # 板型配方解析:pcb_inspect 要读 recipes/*.json,必须一起链进去,
+    # 否则链接期才报 LNK2019(症状和 CMakeLists 顶部那个 ABI 报错混在一起,难查)
+    operators/board_recipe.cpp
 )
 
 target_include_directories(w7_pcb_test PRIVATE
@@ -266,6 +273,28 @@ add_custom_command(TARGET w7_pcb_test POST_BUILD
 
 add_test(NAME pcb_operators COMMAND w7_pcb_test
          WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# ============================================================
+# === 板型配方随二进制一起拷一份
+#
+# pcb_inspect 按相对路径 "recipes/xxx.json" 读板型真值(和 images/ 同一套约定:
+# 工作目录由调用方保证)。所以拷到输出目录旁边,免得换个地方起二进制就
+# 读不到 —— 读不到的表现是"配方加载失败",不是"板型不支持",两种混起来
+# 会让人查错方向。
+# ============================================================
+add_custom_command(TARGET w7_vm_lite POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/recipes
+        $<TARGET_FILE_DIR:w7_vm_lite>/recipes
+    COMMENT "Copying board recipes to output directory"
+)
+
+add_custom_command(TARGET w7_pcb_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/recipes
+        $<TARGET_FILE_DIR:w7_pcb_test>/recipes
+    COMMENT "Copying board recipes to test output directory"
+)
 
 # ============================================================
 # === DL 后处理 回归测试 (headless, 不需要模型也不需要 ONNX Runtime)

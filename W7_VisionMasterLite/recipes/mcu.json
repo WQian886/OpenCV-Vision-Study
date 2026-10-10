@@ -1,0 +1,306 @@
+{
+  "name": "mcu",
+  "title": "STM32F103 最小系统板",
+  "ref_w": 1200,
+  "ref_h": 900,
+  "buffer": 10,
+  "sites": [
+    {
+      "label": "U1",
+      "kind": "QFP64",
+      "cx": 600,
+      "cy": 450,
+      "body_w": 140,
+      "body_h": 140,
+      "checks": [
+        "missing",
+        "insufficient"
+      ],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "Y1",
+      "kind": "XTAL",
+      "cx": 600,
+      "cy": 240,
+      "body_w": 50,
+      "body_h": 22,
+      "checks": [
+        "insufficient",
+        "bridge"
+      ],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "Y2",
+      "kind": "XTAL",
+      "cx": 700,
+      "cy": 240,
+      "body_w": 50,
+      "body_h": 22,
+      "checks": [
+        "insufficient",
+        "bridge"
+      ],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "C1",
+      "kind": "CAP_SMALL",
+      "cx": 530,
+      "cy": 240,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C2",
+      "kind": "CAP_SMALL",
+      "cx": 770,
+      "cy": 240,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C3",
+      "kind": "CAP_SMALL",
+      "cx": 180,
+      "cy": 200,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C4",
+      "kind": "CAP_SMALL",
+      "cx": 180,
+      "cy": 700,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C5",
+      "kind": "CAP_SMALL",
+      "cx": 1020,
+      "cy": 200,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C6",
+      "kind": "CAP_SMALL",
+      "cx": 1020,
+      "cy": 700,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "SW1",
+      "kind": "BUTTON",
+      "cx": 1020,
+      "cy": 450,
+      "body_w": 48,
+      "body_h": 48,
+      "checks": [],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "R1",
+      "kind": "RES",
+      "cx": 940,
+      "cy": 450,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "LED1",
+      "kind": "LED",
+      "cx": 180,
+      "cy": 450,
+      "body_w": 16,
+      "body_h": 16,
+      "checks": [],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "R2",
+      "kind": "RES",
+      "cx": 260,
+      "cy": 450,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "JP1",
+      "kind": "HEADER",
+      "cx": 480,
+      "cy": 240,
+      "body_w": 40,
+      "body_h": 8,
+      "checks": [],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "R3",
+      "kind": "RES",
+      "cx": 180,
+      "cy": 820,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "R4",
+      "kind": "RES",
+      "cx": 290,
+      "cy": 820,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "R5",
+      "kind": "RES",
+      "cx": 400,
+      "cy": 820,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "R6",
+      "kind": "RES",
+      "cx": 510,
+      "cy": 820,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "R7",
+      "kind": "RES",
+      "cx": 620,
+      "cy": 820,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "R8",
+      "kind": "RES",
+      "cx": 730,
+      "cy": 820,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "R9",
+      "kind": "RES",
+      "cx": 840,
+      "cy": 820,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "R10",
+      "kind": "RES",
+      "cx": 950,
+      "cy": 820,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    }
+  ]
+}

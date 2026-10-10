@@ -1,0 +1,247 @@
+{
+  "name": "signal",
+  "title": "双运放信号链板",
+  "ref_w": 1200,
+  "ref_h": 900,
+  "buffer": 10,
+  "sites": [
+    {
+      "label": "J1",
+      "kind": "TERMINAL",
+      "cx": 80,
+      "cy": 450,
+      "body_w": 32,
+      "body_h": 30,
+      "checks": [],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "R1",
+      "kind": "RES",
+      "cx": 220,
+      "cy": 450,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C1",
+      "kind": "CAP_SMALL",
+      "cx": 340,
+      "cy": 450,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "U1",
+      "kind": "SOIC8",
+      "cx": 480,
+      "cy": 450,
+      "body_w": 80,
+      "body_h": 50,
+      "checks": [
+        "missing",
+        "insufficient"
+      ],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "R2",
+      "kind": "RES",
+      "cx": 480,
+      "cy": 350,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C2",
+      "kind": "CAP_SMALL",
+      "cx": 580,
+      "cy": 350,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C3",
+      "kind": "CAP_SMALL",
+      "cx": 620,
+      "cy": 450,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "R3",
+      "kind": "RES",
+      "cx": 720,
+      "cy": 450,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "U2",
+      "kind": "SOIC8",
+      "cx": 860,
+      "cy": 450,
+      "body_w": 80,
+      "body_h": 50,
+      "checks": [
+        "missing",
+        "insufficient"
+      ],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "R4",
+      "kind": "RES",
+      "cx": 860,
+      "cy": 350,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "D1",
+      "kind": "DIODE",
+      "cx": 760,
+      "cy": 350,
+      "body_w": 40,
+      "body_h": 14,
+      "checks": [
+        "missing",
+        "shifted",
+        "polarity"
+      ],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "D2",
+      "kind": "DIODE",
+      "cx": 960,
+      "cy": 350,
+      "body_w": 40,
+      "body_h": 14,
+      "checks": [
+        "missing",
+        "shifted",
+        "polarity"
+      ],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "C4",
+      "kind": "CAP_SMALL",
+      "cx": 1020,
+      "cy": 450,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "J2",
+      "kind": "TERMINAL",
+      "cx": 1140,
+      "cy": 450,
+      "body_w": 32,
+      "body_h": 30,
+      "checks": [],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "C5",
+      "kind": "CAP_SMALL",
+      "cx": 380,
+      "cy": 600,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C6",
+      "kind": "CAP_SMALL",
+      "cx": 580,
+      "cy": 600,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C7",
+      "kind": "CAP_SMALL",
+      "cx": 760,
+      "cy": 600,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C8",
+      "kind": "CAP_SMALL",
+      "cx": 960,
+      "cy": 600,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    }
+  ]
+}

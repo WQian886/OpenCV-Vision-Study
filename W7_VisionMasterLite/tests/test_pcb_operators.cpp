@@ -1095,6 +1095,113 @@ static void test_auto_contour_scale_stable() {
               .arg(n05).arg(n10).arg(n15).arg(n20));
 }
 
+// ================================================================
+// 用例 15:换板型 —— 另外三块板走配方跑
+//
+// 为什么必须有这条:
+//   前面 14 个用例全部只跑 images/ 里那 8 张 1000x700 的 demo 板。
+//   而"板型可切换"这个功能真正的验收对象是 W6 那三块 1200x900 的复杂板
+//   (power 16 元件 / mcu 22 / signal 18)。它们以前只能靠一个临时探针验,
+//   探针跑完就删 —— 也就是说**仓库里没有任何东西守着它们**:
+//   配方哪天漂了、阈值哪天又调坏了,ctest 一声不响,只有产线会发现。
+//
+// 参照物是 W6 自带的真值表 W6_PCB_DefectProject/images/complex/
+// complex_manifest.csv,不另抄一份期望出来。
+// ================================================================
+
+// 跑一块板:用板型配方定位,再判定。
+static RunResult runBoard(const QString& recipeName, const QString& absPath) {
+    RunResult r;
+    PcbInspect inspect;
+    QJsonObject p = inspect.defaultParams();
+    p["recipe"] = QString("recipes/") + recipeName;   // 换板型只改这一个字段
+    r.inspectOut = inspect.run(p, QJsonObject{{"image_path", absPath}});
+    PcbDefectJudge judge;
+    r.judgeOut = judge.run(judge.defaultParams(), r.inspectOut);
+    for (const auto& d : r.judgeOut.value("defects").toArray())
+        r.defectTypes.insert(d.toObject().value("type").toString());
+    return r;
+}
+
+static void test_board_switch_good_boards_clean() {
+    beginCase("三块别的好板换配方后必须 PASS 且零缺陷");
+    // 漏报的代价不对称:好板被误判成废板只是停线,
+    // 废板被判成好板是**流到下工序**,所以这两条都得钉死。
+    struct Good { const char* recipe; const char* file; int count; };
+    const Good goods[] = {
+        {"power.json",  "power_baseline.png",  16},
+        {"mcu.json",    "mcu_baseline.png",    22},
+        {"signal.json", "signal_baseline.png", 18},
+    };
+    for (const auto& g : goods) {
+        const QString dir =
+            "E:/qianwie/00study/OpenCV/W6_PCB_DefectProject/images/complex/";
+        RunResult r = runBoard(QString::fromUtf8(g.recipe), dir + QString::fromUtf8(g.file));
+        const QString who = QString::fromUtf8(g.file);
+        check(!r.inspectOut.contains("error"),
+              QString("%1 定位无错误 (%2)")
+                  .arg(who, r.inspectOut.value("error").toString("无")));
+        check(r.inspectOut.value("count").toInt() == g.count,
+              QString("%1 框出 %2 个元件 (实际 %3)")
+                  .arg(who).arg(g.count).arg(r.inspectOut.value("count").toInt()));
+        check(r.judgeOut.value("defect_count").toInt() == 0,
+              QString("%1 零缺陷 (实际 %2) 命中:%3")
+                  .arg(who).arg(r.judgeOut.value("defect_count").toInt())
+                  .arg(r.defectTypes.values().join(",")));
+    }
+}
+
+static void test_board_switch_defect_boards() {
+    beginCase("三块板的 6 张废板:能抓的必须抓,抓不到的必须写明");
+    // 期望值来自 W6 的真值表 complex_manifest.csv,不另抄一份。
+    //
+    // knownMiss=true 的两条是**已知的漏检**(废板被判成合格)。
+    // 写在这里是为了让它**可见** —— 漏检在界面上跟真合格一模一样,
+    // 光看 result=="PASS" 分不出"查过了没问题"和"根本没看见"。
+    // 各条为什么调阈值解决不了,实测数据记在 pcb_defect_judge.cpp
+    // 的 polarity / short 两段,不在这儿重复。
+    //
+    // ⚠ 这两条记的是**当前真实行为**,不是"期望行为"。
+    //   哪天判据重做完了,把它改成 caught,并补上命中类型的断言。
+    struct Bad {
+        const char* recipe;  const char* file;
+        bool knownMiss;                          // true = 已知漏检,期望 PASS
+        const char* type;                        // 抓到时应命中的那一类
+        const char* why;                         // 抓不到的结构性原因
+    };
+    const Bad bads[] = {
+        {"power.json",  "power_short.png",     true,  "short",
+         "short 判据找的是环(宽<=8%对角线),这张图是一条金条:"
+         "蓝紫连通域 621x61、宽 41.4% 对角线,两头都撞出窗口"},
+        {"power.json",  "power_missing.png",   false, "missing", ""},
+        {"mcu.json",    "mcu_wrong.png",       false, "wrong",   ""},
+        {"mcu.json",    "mcu_bridge.png",      false, "bridge",  ""},
+        {"signal.json", "signal_shifted.png",  false, "shifted", ""},
+        {"signal.json", "signal_polarity.png", true,  "polarity",
+         "polarity 判据是单边的(只在质心偏右时报),"
+         "这张图把极性条挪到**左侧**:51.95% -> 29.87%,"
+         "而好板 power D1 在 41.84% —— 双边化所需的容差区间(8.16, 20.13)无解"},
+    };
+    for (const auto& b : bads) {
+        const QString dir =
+            "E:/qianwie/00study/OpenCV/W6_PCB_DefectProject/images/complex/";
+        RunResult r = runBoard(QString::fromUtf8(b.recipe), dir + QString::fromUtf8(b.file));
+        const QString who = QString::fromUtf8(b.file);
+        const QString got = r.judgeOut.value("result").toString("无结论");
+        if (b.knownMiss) {
+            check(got == "PASS",
+                  QString("【已知漏检】%1 期望 PASS(实测 %2)。原因:%3")
+                      .arg(who, got, QString::fromUtf8(b.why)));
+        } else {
+            check(got == "FAIL", QString("%1 判废 (实际 %2)").arg(who, got));
+            check(r.defectTypes.contains(QString::fromUtf8(b.type)),
+                  QString("%1 命中 %2 (实际命中:%3)")
+                      .arg(who, QString::fromUtf8(b.type),
+                           r.defectTypes.values().join(",")));
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");   // headless
     // Windows 控制台默认 GBK,中文断言信息会乱码。强制 UTF-8
@@ -1118,6 +1225,8 @@ int main(int argc, char* argv[]) {
     test_color_threshold_sensitivity();
     test_gold_mask_shared_between_operators();
     test_auto_contour_scale_stable();
+    test_board_switch_good_boards_clean();
+    test_board_switch_defect_boards();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;

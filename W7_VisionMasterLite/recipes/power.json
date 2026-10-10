@@ -1,0 +1,212 @@
+{
+  "name": "power",
+  "title": "LM2596 电源稳压板",
+  "ref_w": 1200,
+  "ref_h": 900,
+  "buffer": 10,
+  "sites": [
+    {
+      "label": "J1",
+      "kind": "TERMINAL",
+      "cx": 80,
+      "cy": 200,
+      "body_w": 32,
+      "body_h": 30,
+      "checks": [],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "C1",
+      "kind": "CAP_BIG",
+      "cx": 200,
+      "cy": 200,
+      "body_w": 40,
+      "body_h": 40,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "U1",
+      "kind": "TO220",
+      "cx": 380,
+      "cy": 200,
+      "body_w": 60,
+      "body_h": 70,
+      "checks": [
+        "missing",
+        "insufficient"
+      ],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "D1",
+      "kind": "DIODE",
+      "cx": 520,
+      "cy": 200,
+      "body_w": 40,
+      "body_h": 14,
+      "checks": [
+        "missing",
+        "shifted",
+        "polarity"
+      ],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "L1",
+      "kind": "INDUCTOR",
+      "cx": 680,
+      "cy": 200,
+      "body_w": 50,
+      "body_h": 24,
+      "checks": [],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "C2",
+      "kind": "CAP_BIG",
+      "cx": 820,
+      "cy": 200,
+      "body_w": 40,
+      "body_h": 40,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "J2",
+      "kind": "TERMINAL",
+      "cx": 980,
+      "cy": 200,
+      "body_w": 32,
+      "body_h": 30,
+      "checks": [],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "R1",
+      "kind": "RES",
+      "cx": 380,
+      "cy": 360,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "R2",
+      "kind": "RES",
+      "cx": 480,
+      "cy": 360,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "LED1",
+      "kind": "LED",
+      "cx": 200,
+      "cy": 480,
+      "body_w": 16,
+      "body_h": 16,
+      "checks": [],
+      "shift_tol_pct": null
+    },
+    {
+      "label": "R3",
+      "kind": "RES",
+      "cx": 290,
+      "cy": 480,
+      "body_w": 44,
+      "body_h": 16,
+      "checks": [
+        "missing",
+        "shifted",
+        "wrong",
+        "bridge"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C3",
+      "kind": "CAP_SMALL",
+      "cx": 620,
+      "cy": 480,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C4",
+      "kind": "CAP_SMALL",
+      "cx": 720,
+      "cy": 480,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C5",
+      "kind": "CAP_SMALL",
+      "cx": 820,
+      "cy": 480,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C6",
+      "kind": "CAP_SMALL",
+      "cx": 200,
+      "cy": 640,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    },
+    {
+      "label": "C7",
+      "kind": "CAP_SMALL",
+      "cx": 820,
+      "cy": 640,
+      "body_w": 36,
+      "body_h": 18,
+      "checks": [
+        "missing",
+        "polarity"
+      ],
+      "shift_tol_pct": 15.0
+    }
+  ]
+}

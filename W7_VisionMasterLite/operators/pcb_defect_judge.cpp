@@ -1,5 +1,6 @@
 #include "pcb_defect_judge.h"
 #include "pcb_color_ref.h"
+#include "board_recipe.h"
 #include <QDoubleSpinBox>
 #include <QLabel>
 #include <QJsonArray>
@@ -20,16 +21,97 @@ void addDefect(QJsonArray& arr, const QString& label, const char* type,
     arr.append(d);
 }
 
-// 本算子真正写了判定规则的标签。run() 里按 label 分支的六处
-// (R2 missing / R3 wrong / C1 polarity / R1 bridge / U1 insufficient /
-//  R2 shifted)只认这些名字 —— 拿别的名字进来,一条规则都跑不了。
-const char* const kJudgeableLabels[] = {"R1", "R2", "R3", "C1", "U1"};
+// 每条规则跑完都记一笔实测值,**不管有没有触发**。
+//
+// 为什么要记"没触发的":阈值调不动的时候,人需要看到的是
+// "好板上是 12%,废板上是 55%,阈值在 40",而不是一句 "FAIL"。
+// 只报缺陷的话,好板上那 16 个 12% 全都看不见 ——
+// 只能看到一堆红的,看不到红的离阈值有多远。
+//
+// 这不是为了调试临时加的输出:产线调阈值时它就是主要依据。
+void addMetric(QJsonArray& arr, const QString& label, const char* rule,
+               double value, double threshold, const char* unit) {
+    QJsonObject m;
+    m["component"] = label;
+    m["rule"]      = QString::fromUtf8(rule);
+    m["value"]     = value;
+    m["threshold"] = threshold;
+    m["unit"]      = QString::fromUtf8(unit);
+    arr.append(m);
+}
 
-bool isJudgeableLabel(const QString& label) {
-    for (const char* l : kJudgeableLabels) {
-        if (label == QString::fromUtf8(l)) return true;
+// ============================================================
+// 没有 checks 时,从封装类别推一套默认规则
+//
+// 只在**上游没给 checks** 时用 —— 老存档、auto_contour 产物。
+// 配方明确写了 checks(哪怕是空数组)则以配方为准。
+//
+// 为什么不能"没给就当不查任何规则":那会让一条规则都不跑,
+// 于是**所有缺陷图一路 PASS** —— 这正是原来七处 label== 全落空
+// 时的行为(实测:三块好板全判废,两块废板输出与好板逐字相同)。
+//
+// 为什么按 kind 而不是按 label:label 是"这块板上的第几个元件",
+// 换块板就对不上;kind 是"这个封装长什么样",换板子也对得上 ——
+// 那是物理事实,不是标定值。
+// ============================================================
+QStringList knownRulesForKind(const QString& kind) {
+    const QString k = kind.toUpper();
+    if (k == QLatin1String("RES") || k == QLatin1String("R")) {
+        // 电阻:黑本体,两侧金焊盘。dark -> missing/shifted;
+        // 单色本体,换色看得出来 -> wrong;金条连片 -> bridge。
+        return {QString::fromUtf8(recipe_rule::kMissing),
+                QString::fromUtf8(recipe_rule::kShifted),
+                QString::fromUtf8(recipe_rule::kWrong),
+                QString::fromUtf8(recipe_rule::kBridge)};
     }
-    return false;
+    if (k == QLatin1String("IC") || k == QLatin1String("TO220")
+        || k == QLatin1String("QFP64") || k == QLatin1String("SOIC8")) {
+        // IC:黑本体 + 几十个金焊盘(有中位数才谈得上 insufficient)。
+        return {QString::fromUtf8(recipe_rule::kMissing),
+                QString::fromUtf8(recipe_rule::kInsufficient),
+                QString::fromUtf8(recipe_rule::kBridge)};
+    }
+    if (k == QLatin1String("C") || k == QLatin1String("CAP")
+        || k == QLatin1String("CAP_SMALL") || k == QLatin1String("CAP_BIG")) {
+        // 电容:本体是彩色/灰色而不是黑,所以 missing 规则**不适用**
+        // (会被整框判缺件);但有白色极性条,也有金焊盘。
+        return {QString::fromUtf8(recipe_rule::kPolarity),
+                QString::fromUtf8(recipe_rule::kBridge)};
+    }
+    // 不认识的封装(TERMINAL / LED / BUTTON / XTAL ...):
+    // **一条规则都不跑,但要说得出来**。返回一个特殊值,
+    // 让 run() 在报告里写明"这些元件没配规则",而不是让使用者
+    // 以为整板都查过了。
+    return {};
+}
+
+// ============================================================
+// 这个元件跑哪些规则 —— **判定"配方说了算"的唯一入口**
+//
+// ⚠ "checks 字段不存在"和"checks 是空数组"是**两件不同的事**,
+//   以前这里用 rules.isEmpty() 把它们当成同一件,于是 demo 板的 C2
+//   明明在配方里写了 checks: [](意思是"这个元件我不管它"),
+//   却掉进 knownRulesForKind() 的兜底,凭空多出 polarity+bridge。
+//   实测后果(2026-10-10):好板 baseline.png 在**所有缩放**下都报焊桥,
+//   端到端 56 条断言掉到 49 条 —— 56 条一直绿着,因为判据是对的,
+//   配方一改就露馅。
+//
+//   两种输入的来源不同,所以含义必须不同:
+//     字段不存在  -> 上游没给配方信息(老存档 / auto_contour 产物)
+//                    按封装类别推一套,免得一条规则都不跑 → 假 PASS。
+//     字段存在但是空 -> 配方**明确说这个元件不参与判定**。
+//                    照做。不许替使用者做主。
+//
+// 这个函数以前在 run() 里写了两遍(覆盖度统计 + 逐元件分派),
+// 两遍各写一遍兜底逻辑 —— 改一处忘一处,下一次就是这样出来的。
+// ============================================================
+QStringList rulesForComponent(const QJsonObject& c) {
+    if (c.contains("checks")) {              // 配方说了算,空数组也算
+        QStringList rs;
+        for (const auto& r : c.value("checks").toArray()) rs << r.toString();
+        return rs;
+    }
+    return knownRulesForKind(c.value("kind").toString());
 }
 
 // 把一个逐像素判据铺成 0/255 mask。
@@ -69,13 +151,45 @@ cv::Mat maskBy(const cv::Mat& roi, Pred pred) {
 QJsonObject PcbDefectJudge::defaultParams() const {
     QJsonObject p;
     // --- ROI 面积 % ---
-    // R2 正常板暗像素占 ROI 45.6%,缺件时 0%。原来写死 50px(=0.87%),
-    // 离"缺陷侧"只有 0.87 个百分点;取 2% 两边都宽裕。
-    p["dark_min_pct"]    = 2.0;
-    // R3 正常浅黄 3.40% ↔ 错件 44.8%。原来 200px = 3.47%,
-    // **离正常板只有 4 个像素**(196 vs 200)—— 噪声 σ=4 就能翻盘。
-    // 几何中点 sqrt(3.40*44.8) = 12.3,取 12。
-    p["yellow_min_pct"]  = 12.0;
+    // 暗像素占 ROI 的百分比,低于它判 missing(缺件)。
+    //
+    // 原来取 2%,那是按"黑本体"定的:R2 正常板 45.6%,缺件 0%。
+    // 但这批图里有一半的封装本体不是黑的,实测暗像素占比如下
+    // (2026-10-10,四块板好板全量):
+    //     RES 20.57~28.13   DIODE 21.96~25.78  TO220 57.07
+    //     QFP64 71.97       SOIC8 46.66        CAP_BIG 2.22~2.94
+    //     CAP_SMALL 4.42~5.08                     BUTTON 4.09
+    //     TERMINAL 2.96~4.77   INDUCTOR 2.34
+    //     LED 0.77          HEADER 0.00     ← 这两个是**灰/绿本体**,
+    //                                                几乎没有暗像素
+    //
+    // 2% 把 CAP_BIG 的 2.22 压在边上(余量 0.22 个百分点),把 INDUCTOR 的 2.34
+    // 也压在边上。降到 1% 是**为了余量,不是为了抓到缺件** ——
+    // 缺件侧实测一律 0.00%,所以 2% 其实也照样能抓到 power_missing
+    // (这一点做过变异验证:把 2.0 改回去,那条断言照样绿)。
+    // 真正让 power_missing 从漏检变成抓到的,是配方里给 CAP_BIG
+    // 补上了 missing —— 变异验证也做了:把 CAP_BIG 的 checks 清空,
+    // 断言立刻转红。
+    //
+    // 1% 之后:黑本体那一批(最小 20.57)余量不变,CAP_BIG 余量 2.2 倍,
+    // CAP_SMALL 4.4 倍。代价是 LED(0.77)/HEADER(0.00)离 1% 太近 ——
+    // 所以**这两种封装绝不能配 missing**,见 tools/export_recipes.py 的 CHECKS 表。
+    p["dark_min_pct"]    = 1.0;
+    // R3 错色像素占 ROI 的百分比。**四块板一起量**(2026-10-10),
+    // 因为这个阈值原来只在 demo 一块板上标定过:
+    //     demo   R3 好  3.40   废(wrong.png)     44.77
+    //     mcu    R2 好 23.05   废(mcu_wrong.png) 42.14
+    //     power  RES 好 19.36~23.35      signal RES 好 15.49~23.22
+    // 好板最大 23.35,废板最小 42.14 —— 中间空着,阈值能放进去。
+    // 几何中点 sqrt(23.35*42.14) ≈ 31.4,取 32。
+    //
+    // ⚠ 原来取 12,那是 demo 板 R3 的几何中点 sqrt(3.40*44.8)≈12.3。
+    //   单看 demo 是对的,但另外三块板的**好板**电阻本身就落在 13~23%,
+    //   全部高于 12 —— 于是每块好板的每个电阻都报"错色"
+    //   (实测三块好板各报 3 / 8 / 4 个)。
+    //   这就是"只在一张图上标定的阈值换板型就整片失效",
+    //   本项目的老毛病,只不过这次是**上限**太低而不是下限太高。
+    p["yellow_min_pct"]  = 32.0;
     // C1 白色像素占 ROI 4.17%;这是"白色够不够,不够就别判极性"的门槛。
     p["white_min_pct"]   = 0.5;
     // U1 焊盘噪声门槛 —— **这一条我错过两次,都是因为只量了 1x**。
@@ -182,8 +296,8 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     // 比崩了还难查:画布上状态点是绿的,日志一片正常,产线上直接漏检。
     //
     // 所以不能靠"恰好没报缺陷"反推出合格 —— 判定结果必须对应
-    // 真正跑过的规则。kind 是可靠的区分依据:真值模式来自 SITES
-    // (kind 是 R/C/U),自动模式写死 kind="AUTO"。
+    // 真正跑过的规则。kind 是可靠的区分依据:真值模式来自配方
+    // (kind 是 R/C/RES/QFP64...),自动模式写死 kind="AUTO"。
     // ============================================================
     int autoCount = 0;
     for (const auto& v : comps) {
@@ -191,37 +305,52 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     }
     if (autoCount > 0) {
         output["error"] = QString(
-            "上游给的是 pcb_inspect 的【自动轮廓】模式产物(%1 个元件,标签是"
-            "按轮廓扫描顺序编的 C1/C2/C3...,不是站点标签),而本算子的判定规则"
-            "是按真值标签 R1/R2/R3/C1/U1 写的。拿自动标签去匹配只会误命中一颗"
-            "元件,其余规则全部空转,最后报出一个没有依据的 PASS。"
-            "请把 pcb_inspect 的模式切回真值模式再判定。").arg(autoCount);
+            "上游给的是 pcb_inspect 的【自动轮廓】模式产物(%1 个元件)。"
+            "自动模式不带板型配方,这些元件身上没有配任何判定规则 —— "
+            "规则一条都跑不了,跑下去只会报出一个没有依据的 PASS。"
+            "请把 pcb_inspect 的模式切回【真值坐标】并选好板型配方再判定。")
+                .arg(autoCount);
         output["component_count"] = comps.size();
         // result 故意不给:没判定过就没有判定结果可给。
         return output;
     }
 
-    // 兜底(手改过的 JSON 可能没有 kind 字段):一个 label 都对不上时同样
-    // 不能判 PASS。宁可拒绝判定,也不能给一个没跑过规则的合格。
-    int judgeable = 0;
+    // ============================================================
+    // 覆盖度检查:**一个元件都没有规则可跑**时不给 PASS
+    //
+    // 这条以前写的是"没有一个 label 认得" —— 判据是位号,
+    // 而位号只是这块板上的一个名字,换板就全落空(实测三块别的板
+    // 全落空,于是好板判废、废板判废,理由还一模一样)。
+    //
+    // 现在判据换成"这个元件身上有没有配规则",这是配方说的,
+    // 换板型时配方跟着换,这里就不会再误判。
+    //
+    // 为什么必须留这道闸:上面那句"规则一条都跑不了,跑下去只会报出
+    // 一个没有依据的 PASS"是实测出来的,不是理论担忧 ——
+    // 所以要在代码里挡住,不能指望上游永远配对。
+    // ============================================================
+    int withRules = 0;
     for (const auto& v : comps) {
-        if (isJudgeableLabel(v.toObject().value("label").toString())) ++judgeable;
+        const QJsonObject c = v.toObject();
+        // 覆盖度必须用同一个函数算,和下面逐元件分派走同一条判据。
+        if (!rulesForComponent(c).isEmpty()) ++withRules;
     }
-    if (judgeable == 0) {
+    if (withRules == 0) {
         output["error"] = QString(
-            "%1 个元件的标签里没有一个是本算子认得的(R1/R2/R3/C1/U1),"
-            "判定规则一条都跑不了 —— 不给 result,而不是报 PASS。")
-                .arg(comps.size());
+            "%1 个元件里没有一个配了判定规则,判定跑不起来 —— "
+            "不给 result,而不是报 PASS。请在板型配方里给元件写上 "
+            "\"checks\"(可查的规则:%2)。")
+                .arg(comps.size()).arg(knownChecks().join(" / "));
         output["component_count"] = comps.size();
         return output;
     }
-    // 认得一部分:判定只覆盖了其中几个元件,必须说清楚覆盖了多少,
+    // 只覆盖一部分:必须说清楚覆盖了多少,
     // 否则"合格"会被当成整板都查过了。
-    if (judgeable < comps.size()) {
+    if (withRules < comps.size()) {
         output["warning"] = QString(
-            "%1 个元件里只有 %2 个有对应判定规则,另外 %3 个未判定 —— "
+            "%1 个元件里只有 %2 个配了判定规则,另外 %3 个未判定 —— "
             "result 只覆盖已判定的那些。")
-                .arg(comps.size()).arg(judgeable).arg(comps.size() - judgeable);
+                .arg(comps.size()).arg(withRules).arg(comps.size() - withRules);
     }
     cv::Mat img = cv::imread(imgPath.toStdString(), cv::IMREAD_COLOR);
     if (img.empty()) {
@@ -279,8 +408,19 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     // 这里**故意不去读那些旧名字**:50 被当成 50% 会比原来错得离谱,
     // 读不到就等于没传,退回下面这些新默认值 —— 宁可阈值不准,
     // 也不能让用户以为是自己配的数在起作用。
-    const double darkMinPct   = params.value("dark_min_pct").toDouble(2.0);
-    const double yellowMinPct = params.value("yellow_min_pct").toDouble(12.0);
+    const double darkMinPct   = params.value("dark_min_pct").toDouble(1.0);
+    // yellow_min_pct:实测四块板(2026-10-10),同一封装"好板"与"错色废板"
+    // 的错色像素占比:
+    //     demo  R3  好  3.40   废(wrong.png) 44.77
+    //     mcu   R2  好 23.05   废(mcu_wrong) 42.14
+    //     power RES 好 19.36~23.35   signal RES 好 15.49~23.22
+    // 好板最大 23.35,废板最小 42.14 —— 中间是空的,阈值能放进去。
+    // 取几何中点 sqrt(23.35*42.14) ≈ 31.4,取 32。
+    //
+    // 原来写死 12.0,比好板最大值还低一半,于是**每一块好板的每个电阻
+    // 都报错色** —— 实测三块好板各报 3/8/4 个 wrong。
+    // 这个数是 demo 板一张图上量出来的,换板型就整片失效(老毛病)。
+    const double yellowMinPct = params.value("yellow_min_pct").toDouble(32.0);
     const double polarityRatio= params.value("polarity_ratio").toDouble(60.0);
     const double whiteMinPct  = params.value("white_min_pct").toDouble(0.5);
     const double bridgeMinPct = params.value("bridge_min_pct").toDouble(40.0);
@@ -308,11 +448,38 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
         pcbcolor::kernelScale(img));
 
     QJsonArray defects;
+    QJsonArray metrics;
     cv::Mat marked = img.clone();
 
     for (const auto& v : comps) {
         QJsonObject c = v.toObject();
         const QString label = c.value("label").toString();
+
+        // ============================================================
+        // 这个元件要跑哪些规则 —— **由上游配方决定,不再认标签**
+        //
+        // 原来这里是七处 `if (label == "R2")` / `"R3"` / `"C1"` ...
+        // 写死在源码里,换一块布局不同的板,那七个名字一个都不出现,
+        // 于是**每一条规则都不跑**,而判定照样输出结论,
+        // 结论是"零缺陷 → PASS"。不报错、不告警。
+        //
+        // 实测(2026-10-09,拿三种别的板型直接跑):三块好板全被判废,
+        // 两块废板的输出与好板逐字相同 —— 规则没跑过,当然分不出来。
+        //
+        // 现在配方里每个站点自带 checks[],这里只按名字分派。
+        // label 退化成"报告里给人看的位号",判定不再依赖它。
+        // ============================================================
+        // 走 rulesForComponent():字段缺失才按封装类别兜底,
+        // 配方显式写了空数组就照做(见该函数上面的说明)。
+        const QStringList rules = rulesForComponent(c);
+
+        // shift_tol_pct:配方可按封装单列(小电阻和 QFP64 的容忍度差很多),
+        // 没给就用算子默认值。
+        const double cShiftX = c.contains("shift_tol_pct")
+                             ? c.value("shift_tol_pct").toDouble() : shiftXPct;
+        const double cShiftY = c.contains("shift_tol_pct")
+                             ? c.value("shift_tol_pct").toDouble() : shiftYPct;
+
         cv::Rect roi(c.value("x").toInt(), c.value("y").toInt(),
                      c.value("w").toInt(), c.value("h").toInt());
         roi &= cv::Rect(0, 0, img.cols, img.rows);
@@ -322,11 +489,12 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
         const double roiArea = static_cast<double>(roi.width) * roi.height;
         if (roiArea <= 0) continue;
 
-        // R2 的两条规则(missing / shifted)看的是同一张暗像素 mask,
+        // missing / shifted 两条规则看的是同一张暗像素 mask,
         // 算一遍就够。原来两处各写一遍 cvtColor + inRange —— 同样的
         // 颜色判据在同一份代码里出现两次,改一处忘一处就是下一次事故。
         cv::Mat darkMask;
-        if (label == "R2") {
+        if (rules.contains(QString::fromUtf8(recipe_rule::kMissing))
+            || rules.contains(QString::fromUtf8(recipe_rule::kShifted))) {
             // 原来是 inRange(rgb, (0,0,0)~(60,60,60)),60 是绝对值。
             // 光一暗,板面自己就掉进"暗"区间(实测板面 R=40 < 60),
             // 正常板整块误报缺件。现在锚在板面基色的 0.6 倍上。
@@ -335,10 +503,12 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
             });
         }
 
-        // ---------- missing: R2 本体暗像素过少 ----------
-        if (label == "R2") {
+        // ---------- missing: 本体暗像素过少 ----------
+        if (rules.contains(QString::fromUtf8(recipe_rule::kMissing))) {
             const double darkCount = cv::countNonZero(darkMask);
             const double darkPct   = 100.0 * darkCount / roiArea;
+            addMetric(metrics, label, recipe_rule::kMissing,
+                      darkPct, darkMinPct, "% ROI");
             if (darkPct < darkMinPct) {
                 addDefect(defects, label, "missing",
                           QString("暗像素 %1(占 ROI %2%)< 阈值 %3%(元件疑似被擦除;"
@@ -350,17 +520,19 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
             }
         }
 
-        // ---------- wrong: R3 本体上错色 ----------
+        // ---------- wrong: 本体上错色 ----------
         //
         // 原来是 inRange(BGR (150,150,0)~(255,255,80)):150 和 200 都是
         // 绝对值,压暗后错色件掉出区间 -> 漏检;而且亮到一定程度它又会
         // 整片撞 255 -> 判据恒假 -> **报 PASS**,废板判合格。
         // 改成相对板面基色的倍数,并在上方 ceilingBreached 处拒绝判定。
-        if (label == "R3") {
+        if (rules.contains(QString::fromUtf8(recipe_rule::kWrong))) {
             const cv::Mat offMask = maskBy(img(roi), [&](const cv::Vec3b& p) {
                 return pcbcolor::isOffColor(p, boardBase, offColorMul, offColorRMax);
             });
             const double yellowPct = 100.0 * cv::countNonZero(offMask) / roiArea;
+            addMetric(metrics, label, recipe_rule::kWrong,
+                      yellowPct, yellowMinPct, "% ROI");
             if (yellowPct > yellowMinPct) {
                 addDefect(defects, label, "wrong",
                           QString("错色像素占 ROI %1% > 阈值 %2%(应为黑色电阻;"
@@ -373,8 +545,35 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
             }
         }
 
-        // ---------- polarity: C1 白色极性条偏右 ----------
-        if (label == "C1") {
+        // ---------- polarity: 白色极性条偏右 ----------
+        //
+        // ⚠⚠ 这条判据**只能抓到一半的极性反**,另一半在结构上抓不到。
+        //   别再花时间调 polarity_ratio 了 —— 实测过(2026-10-10),
+        //   四块板好板 + 3 张极性缺陷图的丝印白质心横向位置(占 ROI 宽 %):
+        //
+        //       demo   C1(应为左)好 17.89  ->  反装 81.99   ✓ 抓得到
+        //       signal D1(应为右)好 51.95  ->  反装 29.87   ✗ 抓不到
+        //
+        //   原因是判据是**单边**的(只在 cxPct > polarityRatio 时报),
+        //   而"反装"是把极性条挪到**另一边**:demo 那张挪到了右边(撞上单边阈值),
+        //   signal 那张挪到了左边(单边阈值根本不看那边)。
+        //
+        //   直觉上应该改成双边("偏左或偏右超过容差就算反"),实测**没有可用的容差**。
+        //   "极性条该在哪一侧"是**每种封装各自的物理事实**,而配方里没有这个字段;
+        //   拿 ROI 中心(50%)当前提去凑,两边要求互相矛盾:
+        //       不误报 power D1(好板 41.84)  要容差 < 8.16
+        //       抓到 signal D1(废板 29.87)  要容差 > 20.13
+        //   8.16 < T < 20.13 无解。好板那一批(41.84~52.73)之所以贴得这么近,
+        //   是因为丝印框对称、在白像素里占的份量比极性条还大,质心被拉到中间。
+        //
+        //   下一步(不是调参能解决的):
+        //     1. 配方增加每站点的 polarity_side(left/right),由导出脚本从
+        //        生成器的 draw_* 函数推出 —— 真值在生成器里,不是手抄。
+        //     2. 量"极性条本体"而不是"整个 ROI 的白":先把 ROI 按 buffer 收到
+        //        本体大小再量质心,丝印框就落在窗外了,分离度会从 22 个点拉到 50 个点。
+        //   这两步都做完之前,signal_polarity 这张图是**已知漏检**,不是回归。
+        // ============================================================
+        if (rules.contains(QString::fromUtf8(recipe_rule::kPolarity))) {
             // 原来是 inRange(BGR >= (200,200,200)):压暗后丝印白掉出 200,
             // 白色像素占比归零,white_min_pct 这道门直接把它挡掉 ——
             // 于是 polarity 规则**静默不跑**,不报缺陷,看着像合格。
@@ -383,9 +582,15 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
             });
             cv::Moments m = cv::moments(whiteMask, true);
             const double whitePct = 100.0 * m.m00 / roiArea;
+            // 白色占比不够时这条规则**不判定** —— 这是第三种状态:
+            // 既没报缺陷,也没说"查过了"。记一笔,免得看起来像合格。
             if (whitePct >= whiteMinPct) {   // 白色太少不判定
-                double cx = m.m10 / m.m00;
-                if (cx > roi.width * polarityRatio / 100.0) {
+                double cx = m.m00 > 0 ? m.m10 / m.m00 : 0.0;
+                const double cxPct = roi.width > 0
+                                  ? 100.0 * cx / roi.width : 0.0;
+                addMetric(metrics, label, recipe_rule::kPolarity,
+                          cxPct, polarityRatio, "% ROI 宽(偏右为反)");
+                if (m.m00 > 0 && cxPct > polarityRatio) {
                     addDefect(defects, label, "polarity",
                               QString("极性条质心 x=%1 > %2% 宽度(极性反)")
                               .arg((int)cx).arg(polarityRatio));
@@ -394,8 +599,8 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
             }
         }
 
-        // ---------- bridge: R1 焊盘间金条连片 ----------
-        if (label == "R1") {
+        // ---------- bridge: 焊盘间金条连片 ----------
+        if (rules.contains(QString::fromUtf8(recipe_rule::kBridge))) {
             cv::Mat roiMask = goldMask(roi);
             int maxWidth = 0, maxY = 0;
             for (int y = 0; y < roiMask.rows; ++y) {
@@ -403,6 +608,8 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
                 if (w > maxWidth) { maxWidth = w; maxY = y; }
             }
             const double runPct = 100.0 * maxWidth / roi.width;
+            addMetric(metrics, label, recipe_rule::kBridge,
+                      runPct, bridgeMinPct, "% ROI 宽(最长金段)");
             if (runPct > bridgeMinPct) {
                 addDefect(defects, label, "bridge",
                           QString("最长金段占 ROI 宽 %1% > 阈值 %2%(焊桥)@y=%3")
@@ -411,8 +618,8 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
             }
         }
 
-        // ---------- insufficient: U1 某焊盘面积远小于中位数 ----------
-        if (label == "U1") {
+        // ---------- insufficient: 某焊盘面积远小于中位数 ----------
+        if (rules.contains(QString::fromUtf8(recipe_rule::kInsufficient))) {
             cv::Mat roiMask = goldMask(roi);
             cv::Mat labels, stats, centroids;
             int n = cv::connectedComponentsWithStats(roiMask, labels, stats, centroids);
@@ -429,6 +636,10 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
                 const int minArea = areas.front();
                 const double dropPct =
                     median > 0 ? 100.0 * (median - minArea) / median : 0.0;
+                if (median > 0) {
+                    addMetric(metrics, label, recipe_rule::kInsufficient,
+                              dropPct, padDropPct, "% (最小焊盘低于中位数)");
+                }
                 if (median > 0 && dropPct > padDropPct) {
                     addDefect(defects, label, "insufficient",
                               QString("最小焊盘 %1px² 比中位数 %2px² 低 %3%% > 阈值 %4%(焊少)")
@@ -439,13 +650,13 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
             }
         }
 
-        // ---------- shifted: R2 质心偏离应站中心 ----------
+        // ---------- shifted: 本体质心偏离应站中心 ----------
         //
         // 期望质心就是 ROI 的几何中心,不需要一张"每个元件该长什么样"的表。
         // 以前 EXPECTS[6] 里 R2 写死的 (60,24) 正是 120x48 这个 ROI 的中心
         // —— 同一个数,只是被抄了一份,抄错了也不会有人发现。
         // ROI 是由元件本体框四周等量扩出来的,所以两者恒等。
-        if (label == "R2") {
+        if (rules.contains(QString::fromUtf8(recipe_rule::kShifted))) {
             // 复用上面算好的暗像素 mask —— 原来这里是第三份同样的
             // cvtColor + inRange。
             cv::Moments m = cv::moments(darkMask, true);
@@ -459,8 +670,15 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
                 const double expCy = roi.height * 0.5;
                 const double cx = m.m10 / m.m00, cy = m.m01 / m.m00;
                 const double dx = cx - expCx, dy = cy - expCy;
-                const double tolX = roi.width  * shiftXPct / 100.0;
-                const double tolY = roi.height * shiftYPct / 100.0;
+                const double tolX = roi.width  * cShiftX / 100.0;
+                const double tolY = roi.height * cShiftY / 100.0;
+                // 取 x/y 两个方向里更接近阈值的那一个来报:
+                // 偏移量本身没有"正常/异常"的绝对值,只有相对容差的大小,
+                // 报"超了 12%"不如报"超了 1.3 倍"直观。
+                const double over = std::max(std::abs(dx) / std::max(tolX, 1e-9),
+                                             std::abs(dy) / std::max(tolY, 1e-9));
+                addMetric(metrics, label, recipe_rule::kShifted,
+                          over, 1.0, "倍(>1 即超容差)");
                 if (std::abs(dx) > tolX || std::abs(dy) > tolY) {
                     addDefect(defects, label, "shifted",
                               QString("质心(%1,%2) 偏离 ROI 中心(%3,%4) 超容差(%5,%6)")
@@ -478,6 +696,23 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     // 它不属于任何元件,所以没有 ROI 可依,基准只能用整张图:
     // 面积对全图面积,宽高对全图对角线(对角线是唯一一个
     // "不管横竖怎么变都跟着图一起缩"的尺子)。
+    //
+    // ⚠⚠ 这条判据找的是**环**,而 power 板那张短路图画的是**一条金条**,
+    //   实测(2026-10-10)它在蓝紫色带里连成一大块:
+    //       power_baseline 最大蓝块   2x13   面积 26   = 0.0024% 图
+    //       power_short    最大蓝块 621x61   面积 2151 = 0.1992% 图
+    //                                        宽 41.4% 对角线 高 4.1%
+    //   而 short_w_max_pct = 8(宽的上界)、short_max_pct = 0.08(面积上界),
+    //   41.4 和 0.1992 **两头都撞出去了**,所以判据直接把它放过去。
+    //   顺带纠正一个容易搞错的地方:蓝紫这一道**不过开运算**,金层过 ——
+    //   探针第一版两边都加了开运算,数出来的连通域比判据看到的少一大截,
+    //   差点得出"short 是零触发"的结论。量具得和被量的东西一模一样。
+    //
+    //   这条同样**不是调阈值能解决的**:好板上有 812x20(signal)和 901x290(power)
+    //   的合法走线,长宽比 40:1 和 3:1 都盖住了缺陷那张 621x10 的 62:1,
+    //   单看"长"或"扁"都分不开。要改的是缺陷定义本身
+    //   (比如"不该存在的跨区导体"),不是这四个数。下一步。
+    // ============================================================
     {
         const double imgArea = static_cast<double>(img.cols) * img.rows;
         const double diag = std::sqrt(static_cast<double>(img.cols) * img.cols
@@ -524,6 +759,9 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
 
     output["marked_path"]   = markedPath;
     output["defects"]       = defects;
+    // 每条跑过的规则都记了实测值(含没触发的)。调阈值时看这个:
+    // 只看 defects 的话,好板上那一堆"离阈值还差多少"全是隐形的。
+    output["metrics"]       = metrics;
     output["defect_count"]  = defects.size();
     output["component_count"] = comps.size();
     output["result"]        = defects.isEmpty() ? "PASS" : "FAIL";
@@ -613,15 +851,22 @@ void PcbDefectJudgeForm::buildUI() {
 }
 
 void PcbDefectJudgeForm::setParams(const QJsonObject& params) {
-    m_darkMinPct->setValue(params.value("dark_min_pct").toDouble(2.0));
-    m_yellowMinPct->setValue(params.value("yellow_min_pct").toDouble(12.0));
-    m_polarityR->setValue(params.value("polarity_ratio").toDouble(60.0));
-    m_whiteMinPct->setValue(params.value("white_min_pct").toDouble(0.5));
-    m_bridgeMinPct->setValue(params.value("bridge_min_pct").toDouble(40.0));
-    m_padMinPct->setValue(params.value("pad_min_pct").toDouble(0.46));
-    m_padDropPct->setValue(params.value("pad_drop_pct").toDouble(33.0));
-    m_shiftXPct->setValue(params.value("shift_x_pct").toDouble(8.0));
-    m_shiftYPct->setValue(params.value("shift_y_pct").toDouble(10.0));
+    // 默认值一律取自 defaultParams(),不在这儿再抄一遍。
+    // 抄第二遍的后果是实测过的:yellow_min_pct 在 defaultParams 里
+    // 从 12 改成 32,而这个 setValue 还写着 12 —— 界面显示 12、
+    // 存盘写 12、下次 setParams 又读回 12,而无头调用走的是 32,
+    // 于是"界面上调阈值没反应"和"测试全绿但产线不对"同时发生。
+    // 这已是同一个数在本文件里第三份副本(第四份在 run() 的 toDouble 里)。
+    const QJsonObject d = PcbDefectJudge().defaultParams();
+    m_darkMinPct->setValue(params.value("dark_min_pct").toDouble(d.value("dark_min_pct").toDouble()));
+    m_yellowMinPct->setValue(params.value("yellow_min_pct").toDouble(d.value("yellow_min_pct").toDouble()));
+    m_polarityR->setValue(params.value("polarity_ratio").toDouble(d.value("polarity_ratio").toDouble()));
+    m_whiteMinPct->setValue(params.value("white_min_pct").toDouble(d.value("white_min_pct").toDouble()));
+    m_bridgeMinPct->setValue(params.value("bridge_min_pct").toDouble(d.value("bridge_min_pct").toDouble()));
+    m_padMinPct->setValue(params.value("pad_min_pct").toDouble(d.value("pad_min_pct").toDouble()));
+    m_padDropPct->setValue(params.value("pad_drop_pct").toDouble(d.value("pad_drop_pct").toDouble()));
+    m_shiftXPct->setValue(params.value("shift_x_pct").toDouble(d.value("shift_x_pct").toDouble()));
+    m_shiftYPct->setValue(params.value("shift_y_pct").toDouble(d.value("shift_y_pct").toDouble()));
     m_shortMinPct->setValue(params.value("short_min_pct").toDouble(0.021));
     m_shortMaxPct->setValue(params.value("short_max_pct").toDouble(0.08));
     m_shortWMinPct->setValue(params.value("short_w_min_pct").toDouble(1.1));

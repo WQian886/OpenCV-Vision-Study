@@ -1,0 +1,74 @@
+{
+  "name": "demo",
+  "title": "W7 自带 demo 板(1000x700)",
+  "ref_w": 1000,
+  "ref_h": 700,
+  "buffer": 10,
+  "sites": [
+    {
+      "label": "R1",
+      "kind": "R",
+      "cx": 150,
+      "cy": 200,
+      "body_w": 100,
+      "body_h": 28,
+      "checks": [
+        "bridge"
+      ]
+    },
+    {
+      "label": "C1",
+      "kind": "C",
+      "cx": 400,
+      "cy": 200,
+      "body_w": 70,
+      "body_h": 28,
+      "checks": [
+        "polarity"
+      ]
+    },
+    {
+      "label": "U1",
+      "kind": "IC",
+      "cx": 720,
+      "cy": 200,
+      "body_w": 180,
+      "body_h": 60,
+      "checks": [
+        "insufficient"
+      ]
+    },
+    {
+      "label": "R2",
+      "kind": "R",
+      "cx": 150,
+      "cy": 480,
+      "body_w": 100,
+      "body_h": 28,
+      "checks": [
+        "missing",
+        "shifted"
+      ]
+    },
+    {
+      "label": "C2",
+      "kind": "C",
+      "cx": 400,
+      "cy": 480,
+      "body_w": 70,
+      "body_h": 28,
+      "checks": []
+    },
+    {
+      "label": "R3",
+      "kind": "R",
+      "cx": 700,
+      "cy": 480,
+      "body_w": 100,
+      "body_h": 28,
+      "checks": [
+        "wrong"
+      ]
+    }
+  ]
+}
