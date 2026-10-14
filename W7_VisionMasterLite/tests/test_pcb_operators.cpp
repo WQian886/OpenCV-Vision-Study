@@ -31,6 +31,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QMap>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -76,7 +77,22 @@ struct RunResult {
     QJsonObject inspectOut;
     QJsonObject judgeOut;
     QSet<QString> defectTypes;   // 判定出的缺陷类型集合
+    // 每一类缺陷具体点到了哪些元件。单独记一份,是因为"报了 missing"
+    // 和"报的是**那个** missing"是两回事 —— 前者一个瞎子也能做到。
+    QMap<QString, QStringList> defectSites;
 };
+
+static void collectDefects(RunResult* r) {
+    r->defectTypes.clear();
+    r->defectSites.clear();
+    const QJsonArray defects = r->judgeOut.value("defects").toArray();
+    for (const auto& d : defects) {
+        const QJsonObject o = d.toObject();
+        const QString t = o.value("type").toString();
+        r->defectTypes.insert(t);
+        r->defectSites[t].push_back(o.value("component").toString());
+    }
+}
 
 static RunResult runPipeline(const QString& fileName) {
     RunResult r;
@@ -89,9 +105,7 @@ static RunResult runPipeline(const QString& fileName) {
     PcbDefectJudge judge;
     r.judgeOut = judge.run(judge.defaultParams(), r.inspectOut);
 
-    const QJsonArray defects = r.judgeOut.value("defects").toArray();
-    for (const auto& d : defects)
-        r.defectTypes.insert(d.toObject().value("type").toString());
+    collectDefects(&r);
     return r;
 }
 
@@ -114,9 +128,7 @@ static RunResult runPipelineWith(const QString& fileName,
     PcbDefectJudge judge;
     r.judgeOut = judge.run(p, r.inspectOut);
 
-    const QJsonArray defects = r.judgeOut.value("defects").toArray();
-    for (const auto& d : defects)
-        r.defectTypes.insert(d.toObject().value("type").toString());
+    collectDefects(&r);
     return r;
 }
 
@@ -1119,8 +1131,7 @@ static RunResult runBoard(const QString& recipeName, const QString& absPath) {
     r.inspectOut = inspect.run(p, QJsonObject{{"image_path", absPath}});
     PcbDefectJudge judge;
     r.judgeOut = judge.run(judge.defaultParams(), r.inspectOut);
-    for (const auto& d : r.judgeOut.value("defects").toArray())
-        r.defectTypes.insert(d.toObject().value("type").toString());
+    collectDefects(&r);
     return r;
 }
 
@@ -1168,17 +1179,28 @@ static void test_board_switch_defect_boards() {
         const char* recipe;  const char* file;
         bool knownMiss;                          // true = 已知漏检,期望 PASS
         const char* type;                        // 抓到时应命中的那一类
+        const char* site;                        // 抓到时应当被点名的元件
         const char* why;                         // 抓不到的结构性原因
     };
+    // site 一列是量出来的,不是照着真值表想当然的 —— 跑出厂默认参数,
+    // 逐张图看它到底点名了谁:
+    //   power_missing.png  -> C2/missing
+    //   mcu_wrong.png      -> R2/wrong (+R2/bridge)
+    //   mcu_bridge.png     -> Y1/bridge (+一条空 component 的全局 short)
+    //   signal_shifted.png -> R3/shifted
+    // 钉住"点名谁"是因为:板子整体 FAIL **不等于**那个元件被找到了 ——
+    // 别的站点报一条同类型的缺陷就能把 verdict 撑成 FAIL。实测绝对判据下,
+    // power_missing.png 从 sigma=图宽千分之八起 C2 就不再被报,
+    // 但整张板仍然显示 FAIL:missing,只看类型根本看不出来。
     const Bad bads[] = {
-        {"power.json",  "power_short.png",     true,  "short",
+        {"power.json",  "power_short.png",     true,  "short",  "",
          "short 判据找的是环(宽<=8%对角线),这张图是一条金条:"
          "蓝紫连通域 621x61、宽 41.4% 对角线,两头都撞出窗口"},
-        {"power.json",  "power_missing.png",   false, "missing", ""},
-        {"mcu.json",    "mcu_wrong.png",       false, "wrong",   ""},
-        {"mcu.json",    "mcu_bridge.png",      false, "bridge",  ""},
-        {"signal.json", "signal_shifted.png",  false, "shifted", ""},
-        {"signal.json", "signal_polarity.png", true,  "polarity",
+        {"power.json",  "power_missing.png",   false, "missing", "C2", ""},
+        {"mcu.json",    "mcu_wrong.png",       false, "wrong",   "R2", ""},
+        {"mcu.json",    "mcu_bridge.png",      false, "bridge",  "Y1", ""},
+        {"signal.json", "signal_shifted.png",  false, "shifted", "R3", ""},
+        {"signal.json", "signal_polarity.png", true,  "polarity", "",
          "polarity 判据是单边的(只在质心偏右时报),"
          "这张图把极性条挪到**左侧**:51.95% -> 29.87%,"
          "而好板 power D1 在 41.84% —— 双边化所需的容差区间(8.16, 20.13)无解"},
@@ -1199,6 +1221,17 @@ static void test_board_switch_defect_boards() {
                   QString("%1 命中 %2 (实际命中:%3)")
                       .arg(who, QString::fromUtf8(b.type),
                            r.defectTypes.values().join(",")));
+            // 点名到具体元件才算抓到。只看类型的话,一个瞎子也能通过 ——
+            // 上面 site 一列的注释就是被这么瞒过去的一次。
+            if (*b.site) {
+                check(r.defectSites.value(QString::fromUtf8(b.type))
+                          .contains(QString::fromUtf8(b.site)),
+                      QString("%1 的 %2 应点名 %3 (实际点名:%4)")
+                          .arg(who, QString::fromUtf8(b.type),
+                               QString::fromUtf8(b.site),
+                               r.defectSites.value(QString::fromUtf8(b.type))
+                                   .join("/")));
+            }
         }
     }
 }
@@ -1243,18 +1276,47 @@ static void test_cap_missing_uses_body_pct() {
         return std::numeric_limits<double>::quiet_NaN();
     };
 
+    // 从 inspect 的输出**自己重算一遍中位数**,别拿算子的输出去验证算子的输出
+    // —— 变异会两边一起变,恒等,断言永远绿(见变异教训)。
+    auto medianBodyOf = [](const QJsonObject& inspectOut) {
+        std::vector<double> v;
+        for (const auto& c : inspectOut.value("components").toArray()) {
+            const QJsonObject co = c.toObject();
+            if (co.contains("body_pct")) v.push_back(co.value("body_pct").toDouble());
+        }
+        std::sort(v.begin(), v.end());
+        return v.empty() ? 0.0 : v[v.size() / 2];
+    };
+    auto unitOf = [](const QJsonObject& judgeOut, const QString& label,
+                     const QString& rule) {
+        for (const auto& m : judgeOut.value("metrics").toArray()) {
+            const QJsonObject mo = m.toObject();
+            if (mo.value("component").toString() == label
+                && mo.value("rule").toString() == rule)
+                return mo.value("unit").toString();
+        }
+        return QString();
+    };
+
     RunResult good = runBoard("power.json", dir + "power_baseline.png");
     check(good.judgeOut.value("result").toString() == "PASS",
           QString("power 好板零缺陷 (实际 %1,命中:%2)")
               .arg(good.judgeOut.value("result").toString(),
                    good.defectTypes.values().join(",")));
 
-    // C2 是 CAP_BIG,好板上它必须有本体。对不上就是判据又退回暗像素了。
-    const double bodyC2 = bodyOf(good.inspectOut, "C2");
-    const double missC2 = metricOf(good.judgeOut, "C2", "missing");
-    check(qAbs(missC2 - bodyC2) < 0.01,
-          QString("C2 的 missing 读数应等于 body_pct(实测 missing=%1, body_pct=%2)")
-              .arg(missC2, 0, 'f', 2).arg(bodyC2, 0, 'f', 2));
+    // C2 是 CAP_BIG。判据必须问"占同板中位数多少",不是绝对百分比 ——
+    // 绝对阈值要求 T ∈ (55.9, 49.2),空集,k>=4 必漏(实测见 .cpp)。
+    const double bodyC2   = bodyOf(good.inspectOut, "C2");
+    const double medBoard = medianBodyOf(good.inspectOut);
+    const double missC2   = metricOf(good.judgeOut, "C2", "missing");
+    check(qAbs(missC2 - bodyC2 / medBoard) < 0.005,
+          QString("C2 的 missing 读数应等于 body_pct/同板中位数"
+                  "(实测 missing=%1, body_pct=%2, 中位数=%3, 应为 %4)")
+              .arg(missC2, 0, 'f', 3).arg(bodyC2, 0, 'f', 2)
+              .arg(medBoard, 0, 'f', 2).arg(bodyC2 / medBoard, 0, 'f', 3));
+    check(unitOf(good.judgeOut, "C2", "missing") == QString::fromUtf8("比同板中位数"),
+          QString("C2 的 missing 单位应标明走的是比值(实际 \"%1\")")
+              .arg(unitOf(good.judgeOut, "C2", "missing")));
 
     // 暗像素那条读数仍然要单独记着 —— 换判据不等于把诊断信息扔了。
     const double darkC2 = metricOf(good.judgeOut, "C2", "dark_pct");
@@ -1271,33 +1333,48 @@ static void test_cap_missing_uses_body_pct() {
                   "(实测 missing=%1, body_pct=%2)")
               .arg(missR1, 0, 'f', 2).arg(bodyR1, 0, 'f', 2));
 
-    // 旋钮是活的吗?放宽到 0:全板不再报缺件。
+    // 旋钮是活的吗?两个方向都要,否则这参数删掉测试照样绿。
     {
         PcbInspect inspect;
         QJsonObject ip = inspect.defaultParams();
         ip["recipe"] = "recipes/power.json";
-        const QJsonObject io = inspect.run(
-            ip, QJsonObject{{"image_path", dir + "power_missing.png"}});
         PcbDefectJudge judge;
-        QJsonObject jp = judge.defaultParams();
-        jp["body_min_pct"] = 0;                 // 放宽:彩色本体永远有"东西"
-        const QJsonObject jo = judge.run(jp, io);
-        bool stillMissing = false;
-        for (const auto& d : jo.value("defects").toArray())
-            if (d.toObject().value("type").toString() == "missing")
-                stillMissing = true;
-        check(!stillMissing, "body_min_pct=0 时不再判缺件");
 
-        // 反向:收紧到 100,连好板上的电容也该被判掉 ——
-        // 只测"变了一定没事"的话,这参数删掉测试照样绿。
+        auto hasMissing = [&](const QJsonObject& jo) {
+            for (const auto& d : jo.value("defects").toArray())
+                if (d.toObject().value("type").toString() == "missing")
+                    return true;
+            return false;
+        };
+        const QJsonObject ioBad = inspect.run(
+            ip, QJsonObject{{"image_path", dir + "power_missing.png"}});
+        const QJsonObject ioGood = inspect.run(
+            ip, QJsonObject{{"image_path", dir + "power_baseline.png"}});
+
+        // 放宽:比值下限 0 -> 什么都不可能低于 0。
+        QJsonObject jp = judge.defaultParams();
+        jp["body_ratio_min"] = 0;
+        check(!hasMissing(judge.run(jp, ioBad)),
+              "body_ratio_min=0 时不再判缺件");
+
+        // 收紧:下限 1.0 -> 任何不在中位数之上的站点都会被报出来。
         QJsonObject jp2 = judge.defaultParams();
-        jp2["body_min_pct"] = 100;
-        const QJsonObject jo2 = judge.run(
-            jp2, inspect.run(ip, QJsonObject{{"image_path",
-                                              dir + "power_baseline.png"}}));
-        check(jo2.value("result").toString() == "FAIL",
-              QString("body_min_pct=100 时好板也应 FAIL(证明阈值生效,实际 %1)")
-                  .arg(jo2.value("result").toString()));
+        jp2["body_ratio_min"] = 1.0;
+        check(judge.run(jp2, ioGood).value("result").toString() == "FAIL",
+              QString("body_ratio_min=1.0 时好板也应 FAIL(证明阈值生效,实际 %1)")
+                  .arg(judge.run(jp2, ioGood).value("result").toString()));
+
+        // 站点不足时必须退回绝对判据 —— 并且说清走了哪条。
+        // 只测正常路径的话,这个兜底分支永远没人走过。
+        QJsonObject jp3 = judge.defaultParams();
+        jp3["body_min_sites"] = 999;
+        jp3["body_min_pct"] = 0;
+        const QJsonObject jo3 = judge.run(jp3, ioBad);
+        check(!hasMissing(jo3),
+              "站点不足退回绝对判据后,body_min_pct=0 应能压住缺件(兜底分支可达)");
+        const QString u3 = unitOf(jo3, "C2", "missing");
+        check(u3.contains(QString::fromUtf8("绝对")),
+              QString("站点不足时单位应标明走了绝对兜底(实际 \"%1\")").arg(u3));
     }
 }
 

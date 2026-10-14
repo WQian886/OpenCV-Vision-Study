@@ -221,17 +221,53 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     // 对不对得上"那道闸读过,**没有任何判据消费过它** —— 和当初的
     // gold_px 一个毛病:字段在,没人读,所以没人发现判据缺了这一半。
     //
-    // 42.0 是实测出来的(2026-10-14,四块板 x k=0..6 全部站点):
-    //   缺件侧最大 41.5(demo R2 @k=3;power C2 @k=6 是 36.5)
-    //   好板侧最小 49.2(power C2 @k=0)
-    // 窗口 (41.5, 49.2),几何中点 sqrt(41.5*49.2)=45.2,取 42 偏向下沿
-    // —— 下沿买的是"缺件别漏",上沿买的余量(49.2-42=7.2 个点)已经够。
+    // 下面两个阈值都是 2026-10-14 实测的,量法只有一条规矩:
+    // **只量真正读 body_pct 的站点**(CAP*),别把 RES/DIODE 混进来。
+    // 混进来过一次 —— 前一版注释写着"缺件侧最大 55.9(demo R2 @k=6)
+    // 已超过好板侧最小 49.2,所以绝对阈值无解",那个结论是错的:
+    // demo R2 是 RES,走的是暗像素,根本不读 body_pct。
+    // 拿一个不进这个判据的数去说"这个判据没有窗口",等于量错了东西。
     //
-    // ⚠ 这个窗口会随模糊整体上滑(blur 把"不像板面"的判据吹大),
-    //   所以 42 只保证到 k≈3;k>=4 缺件会漏。不是阈值调错了,
-    //   是"逐通道差 >12"这个绝对判据本身对模糊不免疫 —— 要根治得把
-    //   body_pct 也做去绝对化,那是下一轮的事。
+    // 绝对版(阈值 42),power C2 实测:
+    //     缺件侧 7.69(k=0) -> 41.75(k=7) -> 46.42(k=8) 越过阈值
+    //     好板侧 49.17(k=0) -> 97.58(k=6)  随模糊一路涨
+    // 窗口全程非空,但**下沿在合拢**:k=8 起 C2 不再被检出。
+    // 危险的是这不影响 verdict —— 别的站点照样报 missing,
+    // 整张板仍然显示 FAIL:missing,只看缺陷类型根本看不出来。
+    // 所以回归用例断言的是"点名到 C2",不是"报了 missing"。
     p["body_min_pct"]    = 42.0;
+    // ↑ 归一化之前的绝对版。现在只作**站点数不足时的兜底**(见 body_min_sites)。
+    //
+    // 正常路径走比值:body_pct / 同板全部站点中位数。
+    // 下面这张表是同一批图、同一条流水线、直接读 PcbDefectJudge 原话输出
+    // 量出来的(k=0..14,四块板,只看真正读 body_pct 的 CAP 站点):
+    //     k      绝对 C2 读数   比值 C2 读数   好板最低(绝对 / 比值)
+    //     0        7.694          0.140        49.167 / 0.892
+    //     6       36.528          0.373        97.583 / 0.996
+    //     7       41.750          0.427        95.833 / 0.980
+    //     8       46.417 <-漏     0.477        95.194 / 0.979
+    //    12       65.444          0.654        97.472 / 0.975
+    //    13       72.806          0.728 <-漏   98.500 / 0.985
+    //    14       76.583          0.766        98.889 / 0.989
+    //
+    // 全局窗口 = (缺件侧最大 0.766, 好板侧最小 0.892),全程非空。
+    // 0.714 落在里面,但**故意偏向下沿**:离好板侧 0.178,离缺件侧只有 0.052。
+    // 这么偏是因为坏的两侧不对称 —— 缺件侧随模糊一路涨(0.140 -> 0.766),
+    // 好板侧基本不动(0.892 ~ 1.22)。余量要花在会动的那一侧,那才是
+    // 能买来模糊耐受度的地方。代价是 k=13 就开始漏(绝对版是 k=8)。
+    // 比值版比绝对版多撑 5 级,就是这么来的。
+    //
+    // 根子:绝对版好板侧从 49 一路涨到 98(窗口跟着滑),比值版始终在
+    // 0.89~1.22 之间不动。模糊对整块板是**全局**作用,所有站点一起抬,
+    // 所以"这个站点比同板其它站点空多少"和模糊无关。
+    //
+    // ⚠ 5 级这个说法只覆盖 k=0..14,**k>14 没量过**。
+    //
+    // 站点数下限:只有一个站点时"比值"恒等于 1,判据恒假 —— 报 PASS,
+    // 和"检查过了没问题"长得一模一样。低于下限时退回绝对判据,
+    // 并在 metrics 的 unit 里写明走的是哪条路。
+    p["body_ratio_min"] = 0.714;
+    p["body_min_sites"] = 4;
     // R3 错色像素占 ROI 的百分比。**四块板一起量**(2026-10-10),
     // 因为这个阈值原来只在 demo 一块板上标定过:
     //     demo   R3 好  3.40   废(wrong.png)     44.77
@@ -496,6 +532,8 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     // 也不能让用户以为是自己配的数在起作用。
     const double darkMinPct   = params.value("dark_min_pct").toDouble(1.0);
     const double bodyMinPct   = params.value("body_min_pct").toDouble(42.0);
+    const double bodyRatioMin = params.value("body_ratio_min").toDouble(0.714);
+    const int    bodyMinSites = params.value("body_min_sites").toInt(4);
     // yellow_min_pct:实测四块板(2026-10-10),同一封装"好板"与"错色废板"
     // 的错色像素占比:
     //     demo  R3  好  3.40   废(wrong.png) 44.77
@@ -540,6 +578,23 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     QJsonArray defects;
     QJsonArray metrics;
     cv::Mat marked = img.clone();
+
+    // 全板 body_pct 的中位数 —— 归一化判据的分母。
+    //
+    // 只统计**上游真给了 body_pct 的站点**:老存档 / auto_contour 产物没有这个
+    // 字段,把它们的 0 混进来算中位数会把分母拉到接近 0,于是比值爆表,
+    // 全板一起误报缺件 —— 而症状看起来像"阈值太小"。
+    std::vector<double> bodyAll;
+    bodyAll.reserve(comps.size());
+    for (const auto& v : comps) {
+        const QJsonObject c = v.toObject();
+        if (c.contains("body_pct")) bodyAll.push_back(c.value("body_pct").toDouble());
+    }
+    double bodyMedian = 0.0;
+    if (!bodyAll.empty()) {
+        std::sort(bodyAll.begin(), bodyAll.end());
+        bodyMedian = bodyAll[bodyAll.size() / 2];
+    }
 
     for (const auto& v : comps) {
         QJsonObject c = v.toObject();
@@ -609,20 +664,58 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
             // 0 的意思是"框里空空的",会把整个元件误判成缺件。
             // 这种情况退回暗像素判据,和上游缺字段时的其它处理一个口径。
             const bool haveBodyPct = c.contains("body_pct");
-            const bool useBody     = byBody && haveBodyPct;
-            const double value     = useBody ? bodyPct : darkPct;
-            const double threshold = useBody ? bodyMinPct : darkMinPct;
+            // 归一化:除以**同一张图上所有站点的 body_pct 中位数**。
+            //
+            // 为什么要归一化(2026-10-14 实测,四块板 k=0..14,只看读 body_pct 的站点):
+            // body_pct 会被模糊整体吹大 —— 模糊对整块图是全局的,同一张图上
+            // 所有站点一起抬,所以绝对阈值和好板/废板两条曲线**一起往上滑**,
+            // 窗口跟着滑。实测 power C2 的"最后一级还能检出":
+            //     绝对阈值 42    -> k=7  (k=8 读数 46.42 越过去了)
+            //     比值阈值 0.714 -> k=12 (k=13 读数 0.728 越过去了)
+            // 多买 5 级模糊。根子是好板那一侧:绝对版 49.17(k=0) 一路涨到
+            // 97.58(k=6),比值版始终在 0.89~1.22 之间不动 —— 模糊对全图是
+            // 一次性的整体抬升,除掉之后就没了。
+            //
+            // ⚠ 别把 demo R2 之类的数混进来量窗口:R2 是 RES,走暗像素,
+            //   根本不读 body_pct。前一版注释就是这么把两条不同判据的数
+            //   放到一个窗口里,得出了"绝对阈值无解"的错误结论。
+            //
+            // 代价是**站点之间耦合了**:一个站点的判定要看别的站点。
+            // 站点太少时中位数不可靠(只有一个站点时比值恒等于 1,永远不报缺件),
+            // 所以带 body_min_sites 兜底,退回绝对判据并在 metrics 里说清走的哪条。
+            const bool enoughSites = static_cast<int>(comps.size()) >= bodyMinSites;
+            const bool useRatio    = byBody && haveBodyPct && enoughSites;
+            const bool useBodyAbs  = byBody && haveBodyPct && !enoughSites;
+            const double value = useRatio  ? bodyPct / std::max(1e-9, bodyMedian)
+                             : useBodyAbs ? bodyPct
+                             :              darkPct;
+            const double threshold = useRatio  ? bodyRatioMin
+                             : useBodyAbs ? bodyMinPct
+                             :              darkMinPct;
 
             addMetric(metrics, label, "dark_pct",  darkPct, darkMinPct, "% ROI");
-            addMetric(metrics, label, recipe_rule::kMissing,
-                      value, threshold, useBody ? "% ROI(非板面)" : "% ROI(暗)");
+            // unit 里写清这次走的是哪条路。归一化之后这三行的数字**不可比**:
+            // 0.85(比值)和 49.2(百分比)不是一个量,混在一张 metrics 里
+            // 不标清楚,调阈值的人一定会拿错单位去比。
+            const QString unit = useRatio  ? "比同板中位数"
+                              : useBodyAbs ? QString("% ROI(非板面,站点不足 %1 走绝对)")
+                                                  .arg(bodyMinSites)
+                              :              QString("% ROI(暗)");
+            addMetric(metrics, label, recipe_rule::kMissing, value, threshold,
+                      unit.toUtf8().constData());
             if (value < threshold) {
                 addDefect(defects, label, "missing",
-                          useBody
+                          useRatio
+                            ? QString("框内非板面像素占同板中位数的 %1 < 阈值 %2"
+                                      "(本体疑似被擦除;body_pct %3%,同板中位数 %4%)")
+                                .arg(value, 0, 'f', 3).arg(threshold, 0, 'f', 3)
+                                .arg(bodyPct, 0, 'f', 1).arg(bodyMedian, 0, 'f', 1)
+                          : useBodyAbs
                             ? QString("框内非板面像素占 ROI %1% < 阈值 %2%"
-                                      "(本体疑似被擦除;body_pct = 与板面基色的"
-                                      "逐通道差 >12 的像素占比)")
+                                      "(本体疑似被擦除;本板站点数 %3 < %4,"
+                                      "比值不可靠,退回绝对判据)")
                                 .arg(value, 0, 'f', 2).arg(threshold, 0, 'f', 2)
+                                .arg(comps.size()).arg(bodyMinSites)
                             : QString("暗像素 %1(占 ROI %2%)< 阈值 %3%(元件疑似被擦除;"
                                       "暗 = V < %4 x 板面V,板面 BGR %5,%6,%7)")
                                 .arg((int)darkCount).arg(value, 0, 'f', 2)
@@ -1038,6 +1131,10 @@ void PcbDefectJudgeForm::buildUI() {
     };
     m_darkMinPct   = mk(dflt("dark_min_pct",   1.0),   2);
     m_bodyMinPct   = mk(dflt("body_min_pct",  42.0),   2);
+    m_bodyRatioMin = mk(dflt("body_ratio_min", 0.714), 3);
+    m_bodyMinSites = new QSpinBox;
+    m_bodyMinSites->setRange(1, 999);
+    m_bodyMinSites->setValue(static_cast<int>(dflt("body_min_sites", 4)));
     m_yellowMinPct = mk(dflt("yellow_min_pct", 32.0),  2);
     m_polarityR    = mk(dflt("polarity_ratio", 60.0), 2);
     m_whiteMinPct  = mk(dflt("white_min_pct",  0.5),   2);
@@ -1061,6 +1158,8 @@ void PcbDefectJudgeForm::buildUI() {
 
     m_layout->addRow(tr("缺件(黑本体):暗像素占 ROI 下限 %"), m_darkMinPct);
     m_layout->addRow(tr("缺件(彩色本体):非板面占 ROI 下限 %"), m_bodyMinPct);
+    m_layout->addRow(tr("缺件(彩色本体):占同板中位数下限"), m_bodyRatioMin);
+    m_layout->addRow(tr("缺件:用比值所需最少站点数"), m_bodyMinSites);
     m_layout->addRow(tr("错件:浅黄占 ROI 下限 %"),     m_yellowMinPct);
     m_layout->addRow(tr("极性:白条质心 占 ROI 宽 %"), m_polarityR);
     m_layout->addRow(tr("极性:白色像素占 ROI 下限 %"), m_whiteMinPct);
@@ -1098,6 +1197,8 @@ void PcbDefectJudgeForm::setParams(const QJsonObject& params) {
     const QJsonObject d = PcbDefectJudge().defaultParams();
     m_darkMinPct->setValue(params.value("dark_min_pct").toDouble(d.value("dark_min_pct").toDouble()));
     m_bodyMinPct->setValue(params.value("body_min_pct").toDouble(d.value("body_min_pct").toDouble()));
+    m_bodyRatioMin->setValue(params.value("body_ratio_min").toDouble(d.value("body_ratio_min").toDouble()));
+    m_bodyMinSites->setValue(params.value("body_min_sites").toInt(d.value("body_min_sites").toInt()));
     m_yellowMinPct->setValue(params.value("yellow_min_pct").toDouble(d.value("yellow_min_pct").toDouble()));
     m_polarityR->setValue(params.value("polarity_ratio").toDouble(d.value("polarity_ratio").toDouble()));
     m_whiteMinPct->setValue(params.value("white_min_pct").toDouble(d.value("white_min_pct").toDouble()));
@@ -1126,6 +1227,8 @@ QJsonObject PcbDefectJudgeForm::collect() const {
     QJsonObject p;
     p["dark_min_pct"]    = m_darkMinPct->value();
     p["body_min_pct"]    = m_bodyMinPct->value();
+    p["body_ratio_min"]  = m_bodyRatioMin->value();
+    p["body_min_sites"]  = m_bodyMinSites->value();
     p["yellow_min_pct"]  = m_yellowMinPct->value();
     p["polarity_ratio"]  = m_polarityR->value();
     p["white_min_pct"]   = m_whiteMinPct->value();

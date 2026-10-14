@@ -48,6 +48,7 @@
 #include "param_form.h"
 
 class QDoubleSpinBox;
+class QSpinBox;
 
 namespace w7 {
 
@@ -87,7 +88,9 @@ private:
     // 全是百分比(用 QDoubleSpinBox,不是整数 SpinBox):
     // 短路圆环的面积只占全图的 0.01%~0.04%,整数表达不了。
     QDoubleSpinBox* m_darkMinPct   = nullptr;  // missing(黑本体): 暗像素占 ROI 面积下限
-    QDoubleSpinBox* m_bodyMinPct   = nullptr;  // missing(彩色本体): 非板面像素占 ROI 面积下限
+    QDoubleSpinBox* m_bodyMinPct   = nullptr;  // missing(彩色本体): 非板面像素占 ROI 面积下限(站点不足时的兜底)
+    QDoubleSpinBox* m_bodyRatioMin = nullptr;  // missing(彩色本体): 占同板中位数的下限
+    QSpinBox*       m_bodyMinSites = nullptr;  // 用比值所需的最少站点数
     QDoubleSpinBox* m_yellowMinPct = nullptr;  // wrong:   浅黄占 ROI 面积下限
     QDoubleSpinBox* m_polarityR    = nullptr;  // polarity:白条质心 x 占 ROI 宽 %
     QDoubleSpinBox* m_whiteMinPct  = nullptr;  // polarity:白色像素占 ROI 面积下限
