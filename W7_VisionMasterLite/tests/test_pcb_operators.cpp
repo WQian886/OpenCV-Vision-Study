@@ -32,6 +32,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMap>
+#include <QRegularExpression>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -1378,6 +1379,156 @@ static void test_cap_missing_uses_body_pct() {
     }
 }
 
+// ============================================================
+// 被守卫跳过的规则必须报出来(2026-10-14)
+// ============================================================
+//
+// 起因是一个量不出来的问题:`insufficient` 在 complex 三块板上到底跑没跑。
+// 量出来的结论是**一次都没跑** ——
+//
+//     板型/站点          金层连通域   insufficient
+//     demo  U1  IC             13        跑
+//     mcu   U1  QFP64           3        没跑
+//     mcu   Y1/Y2 XTAL        3 / 3      没跑
+//     power U1  TO220           2        没跑
+//     signal U1/U2 SOIC8       0 / 0      没跑
+//
+// 连通域数是把开运算后的金层掩膜重数一遍得到的,并与算子自己的输出
+// 交叉验证过(7 个站点 7 个一致);"跑没跑"则是直接读算子吐的 metric。
+// 根因是 `areas.size() >= 4` 这道守卫,不是阈值。
+//
+// 而它一直没被发现,是因为**报告在撒谎**:覆盖度 withRules 是**按配方里
+// 写了什么**算的,不是按真的跑了什么。于是配方点名要查 insufficient、
+// 实际一次没跑,覆盖度报告还写"已覆盖",界面上一点异常都没有。
+//
+// 所以这里不只钉 insufficient 的具体数字,更钉一条**不变式**:
+//     配方为某站点要的每一条规则,必须出现在 metrics 或 skipped 里。
+// 这条不变式管的是将来 —— 以后再加一道守卫,忘了报就会红。
+static void test_skipped_rules_are_reported() {
+    beginCase("被守卫跳过的规则必须报出来,不能默默不跑");
+
+    struct Img { const char* recipe; const char* file; bool complex; };
+    const Img imgs[] = {
+        {"demo.json",   "baseline.png",        false},
+        {"demo.json",   "insufficient.png",    false},
+        {"mcu.json",    "mcu_baseline.png",    true },
+        {"power.json",  "power_baseline.png",  true },
+        {"signal.json", "signal_baseline.png", true },
+        {"power.json",  "power_missing.png",   true },
+    };
+
+    // 这几条是有归属元件的规则。short 是全局缺陷、没有 ROI,
+    // 不在这条不变式里(配方也从来不给任何站点写 short)。
+    const QStringList owned = {"missing", "wrong", "polarity",
+                               "bridge", "insufficient", "shifted"};
+
+    for (const auto& im : imgs) {
+        const QString dir = im.complex
+            ? QString("E:/qianwie/00study/OpenCV/W6_PCB_DefectProject/images/complex/")
+            : QString("E:/qianwie/00study/OpenCV/W7_VisionMasterLite/images/");
+        RunResult r = runBoard(QString::fromUtf8(im.recipe),
+                               dir + QString::fromUtf8(im.file));
+        const QString who = QString::fromUtf8(im.file);
+        check(!r.judgeOut.contains("error"),
+              QString("%1 判定无错误(%2)").arg(who, r.judgeOut.value("error").toString("无")));
+
+        // 跑过的(在 metrics 里)和跳过的(在 skipped 里)各收一份
+        QSet<QString> ran, skipped;
+        for (const auto& m : r.judgeOut.value("metrics").toArray()) {
+            const QJsonObject mo = m.toObject();
+            ran << mo.value("component").toString() + "/" + mo.value("rule").toString();
+        }
+        for (const auto& s : r.judgeOut.value("skipped").toArray()) {
+            const QJsonObject so = s.toObject();
+            check(!so.value("reason").toString().isEmpty(),
+                  QString("%1 %2 的跳过原因不能是空串")
+                      .arg(who, so.value("component").toString()));
+            // 原因里必须带**实测数**,不能只是一句"没查"。
+            // 只查"非空"的话,把原因换成任何一句别的照样绿 —— 实测过:
+            // 故意把 insufficient 的原因改成一句无关的话,测试照样全过。
+            // 而"为什么没跑"正是调参的人唯一用得上的信息。
+            if (so.value("rule").toString() == "insufficient") {
+                const QString reason = so.value("reason").toString();
+                const QRegularExpression re(QString::fromUtf8("(\\d+) 个"));
+                check(re.match(reason).hasMatch(),
+                      QString("%1 %2/insufficient 的跳过原因要写明连通域个数"
+                              "(实际 \"%1\")")
+                          .arg(who, so.value("component").toString(), reason));
+            }
+            skipped << so.value("component").toString() + "/"
+                     + so.value("rule").toString();
+        }
+        // skipped_count 必须和 skipped 数组对得上(报告本身也要自洽)
+        check(r.judgeOut.value("skipped_count").toInt()
+                  == r.judgeOut.value("skipped").toArray().size(),
+              QString("%1 skipped_count 与 skipped 数组一致(实际 %2 vs %3)")
+                  .arg(who)
+                  .arg(r.judgeOut.value("skipped_count").toInt())
+                  .arg(r.judgeOut.value("skipped").toArray().size()));
+
+        // ★ 不变式:配方要的每条规则,要么跑过,要么被报为跳过
+        QStringList missing_;
+        for (const auto& c : r.inspectOut.value("components").toArray()) {
+            const QJsonObject co = c.toObject();
+            const QString label = co.value("label").toString();
+            for (const auto& ru : co.value("checks").toArray()) {
+                const QString rule = ru.toString();
+                if (!owned.contains(rule)) continue;
+                const QString key = label + "/" + rule;
+                if (!ran.contains(key) && !skipped.contains(key))
+                    missing_ << key;
+            }
+        }
+        check(missing_.isEmpty(),
+              QString("%1 配方要的规则全都跑过或被报为跳过"
+                      "(悄悄没跑的有:%1)")
+                  .arg(who, missing_.isEmpty() ? QString("(无)")
+                                               : missing_.join(" ")));
+
+        // 有跳过就必须有告警 —— 否则"没查"这件事还是看不见
+        if (!skipped.isEmpty()) {
+            check(r.judgeOut.value("warning").toString().contains(QString::fromUtf8("没查")),
+                  QString("%1 有规则被跳过时,告警里必须写明\"没查\"(实际 \"%1\")")
+                      .arg(who, r.judgeOut.value("warning").toString()));
+        }
+    }
+
+    // ---- 具体数字:哪块板、哪个站点的哪条规则没跑(量出来的,不是推的) ----
+    {
+        const QString dir =
+            "E:/qianwie/00study/OpenCV/W6_PCB_DefectProject/images/complex/";
+        struct Expect { const char* recipe; const char* file; const char* keys; };
+        const Expect exp[] = {
+            {"demo.json",   "baseline.png",        ""},
+            {"mcu.json",    "mcu_baseline.png",    "U1/insufficient Y1/insufficient Y2/insufficient"},
+            {"power.json",  "power_baseline.png",  "U1/insufficient"},
+            {"signal.json", "signal_baseline.png", "U1/insufficient U2/insufficient"},
+        };
+        for (const auto& e : exp) {
+            RunResult r = runBoard(QString::fromUtf8(e.recipe),
+                                   dir + QString::fromUtf8(e.file));
+            QStringList got;
+            for (const auto& s : r.judgeOut.value("skipped").toArray()) {
+                const QJsonObject so = s.toObject();
+                got << so.value("component").toString() + "/"
+                     + so.value("rule").toString();
+            }
+            QStringList want;
+            const QString ws = QString::fromUtf8(e.keys);
+            if (!ws.isEmpty())
+                for (const auto& k : ws.split(' ', Qt::SkipEmptyParts))
+                    want << k;
+            want.sort();
+            got.sort();
+            check(got == want,
+                  QString("%1 被跳过的规则 = {%2}(实际 {%3})")
+                      .arg(QString::fromUtf8(e.file),
+                           want.isEmpty() ? QString("(无)") : want.join(" "),
+                           got.isEmpty() ? QString("(无)") : got.join(" ")));
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");   // headless
     // Windows 控制台默认 GBK,中文断言信息会乱码。强制 UTF-8
@@ -1404,6 +1555,7 @@ int main(int argc, char* argv[]) {
     test_board_switch_good_boards_clean();
     test_board_switch_defect_boards();
     test_cap_missing_uses_body_pct();
+    test_skipped_rules_are_reported();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;

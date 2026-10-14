@@ -473,6 +473,12 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     }
     // 只覆盖一部分:必须说清楚覆盖了多少,
     // 否则"合格"会被当成整板都查过了。
+    //
+    // ⚠ 这个统计数的是**配方里配了规则的元件**,不是**真的跑过的规则**。
+    //   两者不等:规则可能在拿到读数之前就被守卫挡掉(见下面 skipped)。
+    //   实测 mcu/power/signal 三块板按这个数算都是"全覆盖",
+    //   而 insufficient 在 6 个站点上一次都没跑过。所以覆盖度只说明
+    //   "配方写了什么",真正的执行情况看 skipped。
     if (withRules < comps.size()) {
         output["warning"] = QString(
             "%1 个元件里只有 %2 个配了判定规则,另外 %3 个未判定 —— "
@@ -583,6 +589,45 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     QJsonArray defects;
     QJsonArray metrics;
     cv::Mat marked = img.clone();
+
+    // ============================================================
+    // 被守卫跳过的规则 —— 必须报出来,不能默默不跑
+    // ============================================================
+    //
+    // 有些规则在拿到读数之前就被守卫挡掉了(样本不够 / 掩膜空 / 数不出
+    // 中位数)。这时候既没有 metric 也没有 defect,整块板照样输出 PASS,
+    // 看上去就是"查过了,没问题"。而上面那个覆盖度统计(withRules)是
+    // **按配方里写了什么**算的,不是按真的跑了什么 —— 于是这种静默跳过
+    // 连告警都发不出来:配方点名要查 insufficient,实际一次没跑,
+    // 覆盖度报告还写"已覆盖"。
+    //
+    // 实测(2026-10-14,insufficient,四块板的**好板**,出厂参数):
+    //
+    //     板型/站点        金层连通域   insufficient 跑了吗
+    //     demo  U1  IC            13          跑(6 次模糊档全跑)
+    //     mcu   U1  QFP64          3          **没跑**
+    //     mcu   Y1/Y2 XTAL         3 / 3      **没跑**
+    //     power U1  TO220          2          **没跑**
+    //     signal U1/U2 SOIC8      0 / 0      **没跑**
+    //
+    // (连通域数是把算子的开运算掩膜重数一遍得到的,并与算子自己的输出
+    //  交叉验证过:7 个站点里 7 个一致。判"跑没跑"则是直接读算子吐的
+    //  metric,不依赖重算。)
+    //
+    // 为什么 complex 三块板凑不出 4 个:金层掩膜的开运算核跟着图缩放
+    // (kernelScale=min(W/1000,H/700),1200x900 -> 3*1.2=3.6 -> 取 5x5),
+    // 而 W6 生成器画焊盘的像素尺寸是写死的。核变大、焊盘不变,
+    // 小焊盘被开运算吃光,剩下几根粗走线各自算一个连通域。
+    //
+    // ⚠ 要真正修好,得改 W6 生成器的焊盘尺寸/间距 —— 那是**改测试数据**,
+    //   9 张图全部要重量一遍,本轮不做。这里只把静默变成响亮。
+    // ============================================================
+    QJsonArray skipped;
+    auto noteSkip = [&skipped](const QString& label, const QString& rule,
+                                const QString& reason) {
+        skipped.append(QJsonObject{
+            {"component", label}, {"rule", rule}, {"reason", reason}});
+    };
 
     // 全板 body_pct 的中位数 —— 归一化判据的分母。
     //
@@ -800,7 +845,9 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
             cv::Moments m = cv::moments(whiteMask, true);
             const double whitePct = 100.0 * m.m00 / roiArea;
             // 白色占比不够时这条规则**不判定** —— 这是第三种状态:
-            // 既没报缺陷,也没说"查过了"。记一笔,免得看起来像合格。
+            // 既没报缺陷,也没说"查过了"。必须记一笔,免得看起来像合格。
+            // (原来这里只有一句注释说"记一笔",实际什么也没记 ——
+            //  注释承诺了一件代码没做的事,和"字段算出来没人读"同一类。)
             if (whitePct >= whiteMinPct) {   // 白色太少不判定
                 double cx = m.m00 > 0 ? m.m10 / m.m00 : 0.0;
                 const double cxPct = roi.width > 0
@@ -813,6 +860,11 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
                               .arg((int)cx).arg(polarityRatio));
                     cv::rectangle(marked, roi, cv::Scalar(255, 0, 255), 3);
                 }
+            } else {
+                noteSkip(label, recipe_rule::kPolarity,
+                         QString("白色丝印只占 %1% < 门槛 %2%,读不到极性条,"
+                                 "本规则不判定")
+                             .arg(whitePct, 0, 'f', 2).arg(whiteMinPct));
             }
         }
 
@@ -966,6 +1018,14 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
                               .arg(padDropPct));
                     cv::rectangle(marked, roi, cv::Scalar(255, 200, 0), 3);
                 }
+            } else {
+                // 配方点名要查,但这块 ROI 的金层凑不出 4 个连通域,
+                // 取不了中位数 -> 规则**整条没跑**,却照样 PASS。
+                // 见上面 skipped 那段的实测表(complex 三块板全中)。
+                noteSkip(label, recipe_rule::kInsufficient,
+                         QString("金层连通域只有 %1 个(< 4),取不了焊盘中位数,"
+                                 "本规则不判定")
+                             .arg(areas.size()));
             }
         }
 
@@ -1006,6 +1066,14 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
                               .arg((int)tolX).arg((int)tolY));
                     cv::rectangle(marked, roi, cv::Scalar(0, 255, 255), 3);
                 }
+            } else {
+                // "没本体就交给 missing 判"是对的(m 本体都不在,
+                // 算质心没有意义),但**这条规则确实没跑**,仍然要报出来。
+                // 否则"交给 missing"就变成了静默跳过的借口。
+                noteSkip(label, recipe_rule::kShifted,
+                         QString("ROI 里暗像素只占 %1%(低于 %2%),没有本体可算质心,"
+                                 "本规则不判定(缺件由 missing 负责)")
+                             .arg(darkPct, 0, 'f', 2).arg(darkMinPct));
             }
         }
     }
@@ -1081,6 +1149,18 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     // 每条跑过的规则都记了实测值(含没触发的)。调阈值时看这个:
     // 只看 defects 的话,好板上那一堆"离阈值还差多少"全是隐形的。
     output["metrics"]       = metrics;
+    // 被守卫跳过的规则。**和 defects 分开报** —— 混进去就成了"查出来有
+    // 问题",而实际上是没查。报告里两个都得看得见。
+    output["skipped"]       = skipped;
+    output["skipped_count"] = skipped.size();
+    if (!skipped.isEmpty()) {
+        QString w = output.contains("warning")
+                  ? output.value("warning").toString() + QString(" ")
+                  : QString();
+        output["warning"] = w + QString(
+            "另有 %1 条规则被守卫跳过(见 skipped),这些**没查**——"
+            "不等于合格。").arg(skipped.size());
+    }
     output["defect_count"]  = defects.size();
     output["component_count"] = comps.size();
     output["result"]        = defects.isEmpty() ? "PASS" : "FAIL";
