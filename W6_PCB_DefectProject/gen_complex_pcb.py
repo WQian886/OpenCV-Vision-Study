@@ -76,13 +76,77 @@ def silk(d, text, cx, cy, color=WHITE, font=FONT_S):
     d.text((cx - tw//2, cy - th//2), text, fill=color, font=font)
 
 
+# ============================================================
+# 元件本体登记表(走线要避让的东西)
+# ============================================================
+#
+# 为什么需要这个:
+#   真实 PCB 上,元件本体坐在铜层**之上**。一条走线从元件底下穿过去,
+#   从相机看到的是"看不见",不是"金线压在黑壳上"。
+#
+#   这个生成器以前是先画元件、再画走线(Power L279~L313 元件 / L315~L337
+#   走线,signal 和 mcu 同),于是走线直接盖在黑色本体上。后果不是不好看,
+#   是**基线图本身就是废的**:signal_baseline.png 上 R3(720,450) 被
+#   L516/L517 两条走线在几何中心接成一条贯穿本体的金线,两个焊盘被连成
+#   同一块 —— 电阻短路了,而这张图被标成 PASS。
+#
+#   W7 那边为了压住这个假象,把 bridge 阈值从 40 抬到 60,
+#   治标没治本;判据本身的注释(pcb_defect_judge.cpp bridge 段)记着这件事。
+#
+# 所以这里记一份"不透明矩形",由每个 draw_* 在画本体时顺手登记 ——
+# **不复写一遍几何**:本体的 w/h 只在 draw_* 里算一次,
+# 抄第二份的账这个项目已经吃过好几次(kOffColorMul、EXPECTS、lo[0] 守卫)。
+_BODIES = []
+
+
+def opaque(cx, cy, w, h):
+    """登记一个不透明本体矩形(居中 w×h)。画本体时调用。"""
+    _BODIES.append((cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2))
+
+
+def _hidden(pt):
+    x, y = int(pt[0]), int(pt[1])
+    for x0, y0, x1, y1 in _BODIES:
+        if x0 <= x <= x1 and y0 <= y <= y1:
+            return True
+    return False
+
+
 def trace(d, points, color=GOLD, width=4, layer="top"):
-    """画一条折线走线,points=[(x,y),...]"""
-    for i in range(len(points)-1):
-        d.line([points[i], points[i+1]], fill=color, width=width)
-    # 在拐点画小圆(模拟过孔)
+    """画一条折线走线,points=[(x,y),...]
+
+    落在元件本体里的那段不画 —— 本体在铜之上,那一段是被盖住的。
+    用 1px 步长切出可见段,再按原样连成折线,所以没被挡住的
+    部分渲染结果和以前逐像素一致。
+    """
+    if not _BODIES:
+        for i in range(len(points) - 1):
+            d.line([points[i], points[i + 1]], fill=color, width=width)
+    else:
+        for i in range(len(points) - 1):
+            p0, p1 = points[i], points[i + 1]
+            n = max(abs(p1[0] - p0[0]), abs(p1[1] - p0[1]))
+            if n == 0:
+                if not _hidden(p0):
+                    d.ellipse([p0[0] - 2, p0[1] - 2, p0[0] + 2, p0[1] + 2], fill=color)
+                continue
+            run = []
+            for s in range(n + 1):
+                p = (p0[0] + (p1[0] - p0[0]) * s / n,
+                     p0[1] + (p1[1] - p0[1]) * s / n)
+                if _hidden(p):
+                    if len(run) > 1:
+                        d.line(run, fill=color, width=width)
+                    run = []
+                else:
+                    run.append(p)
+            if len(run) > 1:
+                d.line(run, fill=color, width=width)
+    # 在拐点画小圆(模拟过孔)。拐点被本体盖住就同样不画 ——
+    # 焊盘上打的过孔是能看见的,黑壳底下的看不见。
     for p in points[1:-1]:
-        d.ellipse([p[0]-2, p[1]-2, p[0]+2, p[1]+2], fill=color)
+        if not _hidden(p):
+            d.ellipse([p[0] - 2, p[1] - 2, p[0] + 2, p[1] + 2], fill=color)
 
 
 def pad(d, cx, cy, size=10, color=GOLD):
@@ -108,6 +172,7 @@ def draw_resistor_small(d, cx, cy, w=44, h=16):
     pad(d, cx-w//2-6, cy)
     pad(d, cx+w//2+6, cy)
     d.rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=BLACK)
+    opaque(cx, cy, w, h)
     for i, c in enumerate([(40,40,180),(40,180,40),(180,40,40),(180,180,40)]):
         x = cx-w//2+8 + i*(w-16)//4
         d.line([(x, cy-h//2+2),(x, cy+h//2-2)], fill=c, width=2)
@@ -120,6 +185,7 @@ def draw_cap_small(d, cx, cy, w=36, h=18, color=YELLOW, polarity=False):
     d.rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=color, outline=BLACK)
     if polarity:
         d.rectangle([cx-w//2+2, cy-h//2+2, cx-w//2+6, cy+h//2-2], fill=WHITE)
+    opaque(cx, cy, w, h)
 
 
 def draw_cap_big(d, cx, cy, r=20, polarity=True):
@@ -128,6 +194,7 @@ def draw_cap_big(d, cx, cy, r=20, polarity=True):
     pad_round(d, cx, cy-r-6, r=8)
     pad_round(d, cx, cy+r+6, r=8)
     d.ellipse([cx-r, cy-r, cx+r, cy+r], fill=(60,60,60), outline=(5,5,5))
+    opaque(cx, cy, r * 2, r * 2)
     # 顶部十字 + 极性条
     d.line([(cx-r+4, cy),(cx+r-4, cy)], fill=(180,180,180), width=1)
     d.line([(cx, cy-r+4),(cx, cy+r-4)], fill=(180,180,180), width=1)
@@ -144,6 +211,7 @@ def draw_inductor(d, cx, cy, w=50, h=24):
     # 内部圆点模拟绕线
     for i, x in enumerate([cx-w//2+10, cx, cx+w//2-10]):
         d.ellipse([x-4, cy-4, x+4, cy+4], fill=(150,150,170))
+    opaque(cx, cy, w, h)
 
 
 def draw_diode(d, cx, cy, w=40, h=14):
@@ -156,6 +224,7 @@ def draw_diode(d, cx, cy, w=40, h=14):
     d.rectangle([cx+2, cy-h//2+2, cx+6, cy+h//2-2], fill=WHITE)
     # 二极管符号
     d.line([(cx-12, cy),(cx+12, cy)], fill=WHITE, width=1)
+    opaque(cx, cy, w, h)
 
 
 def draw_to220(d, cx, cy, label="U?"):
@@ -171,6 +240,7 @@ def draw_to220(d, cx, cy, label="U?"):
     pad(d, cx,    cy+h//2+12, size=8)
     pad(d, cx+20, cy+h//2+12, size=8)
     silk(d, label, cx, cy-h//2-12, font=FONT_S)
+    opaque(cx, cy, w, h)
 
 
 def draw_qfp64(d, cx, cy, label="U?"):
@@ -195,6 +265,7 @@ def draw_qfp64(d, cx, cy, label="U?"):
         # 下
         pad(d, cx - body//2 + pitch*(i+1), cy + body//2 + 12, size=5)
     silk(d, label, cx, cy+body//2+24, font=FONT_M)
+    opaque(cx, cy, body, body)
 
 
 def draw_soic8(d, cx, cy, label="U?"):
@@ -211,6 +282,7 @@ def draw_soic8(d, cx, cy, label="U?"):
         pad(d, cx-w//2-10, y, size=4)
         pad(d, cx+w//2+10, y, size=4)
     silk(d, label, cx, cy+h//2+14, font=FONT_S)
+    opaque(cx, cy, w, h)
 
 
 def draw_button(d, cx, cy, size=24):
@@ -221,6 +293,7 @@ def draw_button(d, cx, cy, size=24):
     pad_round(d, cx+size+4, cy-size-4, r=5)
     pad_round(d, cx-size-4, cy+size+4, r=5)
     pad_round(d, cx+size+4, cy+size+4, r=5)
+    opaque(cx, cy, size * 2, size * 2)
 
 
 def draw_led(d, cx, cy, r=8, color=ORANGE_LED):
@@ -230,6 +303,7 @@ def draw_led(d, cx, cy, r=8, color=ORANGE_LED):
     d.ellipse([cx-r, cy-r, cx+r, cy+r], fill=color, outline=(200,200,200))
     # 极性平边
     d.line([(cx-r+2, cy-r+2),(cx-r+2, cy-r+6)], fill=BLACK, width=2)
+    opaque(cx, cy, r * 2, r * 2)
 
 
 def draw_crystal(d, cx, cy, w=50, h=22):
@@ -240,6 +314,7 @@ def draw_crystal(d, cx, cy, w=50, h=22):
     d.rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2],
                 fill=(180,180,200), outline=BLACK)
     d.text((cx-12, cy-6), "XTAL", fill=BLACK, font=FONT_XS)
+    opaque(cx, cy, w, h)
 
 
 def draw_terminal(d, cx, cy, n=3):
@@ -251,6 +326,7 @@ def draw_terminal(d, cx, cy, n=3):
         x = cx - w//2 + 8 + i*12
         d.ellipse([x-3, cy-3, x+3, cy+3], fill=(220,220,220))
         pad_round(d, x, cy+h//2+6, r=4)
+    opaque(cx, cy, w, h)
 
 
 def draw_qr(d, img, data, size=110, pos=None):
@@ -270,6 +346,7 @@ def draw_qr(d, img, data, size=110, pos=None):
 # 板 1:电源稳压板（LM2596 风格）
 # ============================================================
 def build_power_baseline():
+    _BODIES.clear()
     img = Image.new("RGB", (W, H), GREEN_PCB)
     draw_pcb_base(img, "Power Supply v1 — LM2596 Buck")
     d = ImageDraw.Draw(img)
@@ -367,6 +444,7 @@ def defect_power_missing(base, layout):
 # 板 2:MCU 最小系统（STM32 QFP-64 风格）
 # ============================================================
 def build_mcu_baseline():
+    _BODIES.clear()
     img = Image.new("RGB", (W, H), GREEN_PCB)
     draw_pcb_base(img, "MCU Core v1 — STM32F103 QFP-64")
     d = ImageDraw.Draw(img)
@@ -465,6 +543,7 @@ def defect_mcu_bridge(base, layout):
 # 板 3:双运放信号链
 # ============================================================
 def build_signal_baseline():
+    _BODIES.clear()
     img = Image.new("RGB", (W, H), GREEN_PCB)
     draw_pcb_base(img, "Signal Chain v1 — Dual Op-Amp Filter")
     d = ImageDraw.Draw(img)
@@ -509,14 +588,22 @@ def build_signal_baseline():
 
     # === 走线 ===
     # 信号链:J1 → R1 → C1 → U1.in → ... → U2.out → J2
-    trace(d, [(80, 438), (220, 438), (220, 450)], width=4)
-    trace(d, [(220, 462), (340, 462), (340, 450)], width=4)
-    trace(d, [(340, 450), (480, 450)], width=4)
-    trace(d, [(480, 450), (620, 450)], width=4)
-    trace(d, [(620, 450), (720, 450)], width=4)
-    trace(d, [(720, 450), (860, 450)], width=4)
-    trace(d, [(860, 450), (1020, 450)], width=4)
-    trace(d, [(1020, 450), (1140, 450)], width=4)
+    #
+    # 端点一律落在**焊盘**上,不走元件几何中心(以前的写法)。
+    # 走线焊点坐标就是各 draw_* 里 pad()/引脚的实际位置:
+    #   RES w=44      → 焊盘 cx±28      CAP_SMALL w=36 → 焊盘 cx±24
+    #   SOIC8 w=80    → 引脚 cx±50,y=cy-17/-9/-1/+7
+    #   TERMINAL n=2  → 本体在 cx±16,接线柱在本体下沿
+    # 端点落在中心的后果不是"接线画得丑",是金线压在黑色本体上 ——
+    # 见文件头 _BODIES 那段,实测 R3 会因此在好板上就短路。
+    trace(d, [(96, 450), (192, 450)], width=4)      # J1 右沿 → R1 左焊盘
+    trace(d, [(248, 450), (316, 450)], width=4)     # R1 右焊盘 → C1 左焊盘
+    trace(d, [(364, 450), (430, 449)], width=4)     # C1 右焊盘 → U1 左脚
+    trace(d, [(530, 449), (596, 450)], width=4)     # U1 右脚 → C3 左焊盘
+    trace(d, [(644, 450), (692, 450)], width=4)     # C3 右焊盘 → R3 左焊盘
+    trace(d, [(748, 450), (810, 449)], width=4)     # R3 右焊盘 → U2 左脚
+    trace(d, [(910, 449), (996, 450)], width=4)     # U2 右脚 → C4 左焊盘
+    trace(d, [(1044, 450), (1124, 450)], width=4)   # C4 右焊盘 → J2 左沿
 
     # 反馈 (顶层)
     trace(d, [(480, 350), (480, 425)], width=3)

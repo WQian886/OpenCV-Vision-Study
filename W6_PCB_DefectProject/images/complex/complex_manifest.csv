@@ -2,9 +2,9 @@ file,kind,components,size,filesize_kb,expected
 power_baseline.png,power,16,1200x900,21,PASS
 power_short.png,power,16,1200x900,22,FAIL:short
 power_missing.png,power,16,1200x900,21,FAIL:missing
-mcu_baseline.png,mcu,22,1200x900,26,PASS
-mcu_wrong.png,mcu,22,1200x900,26,FAIL:wrong
-mcu_bridge.png,mcu,22,1200x900,27,FAIL:bridge
+mcu_baseline.png,mcu,22,1200x900,25,PASS
+mcu_wrong.png,mcu,22,1200x900,25,FAIL:wrong
+mcu_bridge.png,mcu,22,1200x900,25,FAIL:bridge
 signal_baseline.png,signal,18,1200x900,16,PASS
 signal_polarity.png,signal,18,1200x900,16,FAIL:polarity
 signal_shifted.png,signal,18,1200x900,16,FAIL:shifted
