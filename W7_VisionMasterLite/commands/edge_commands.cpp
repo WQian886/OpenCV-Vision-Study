@@ -46,8 +46,10 @@ QString AddEdgeCmd::desc() const {
 // ============================================================
 // RemoveEdgeCmd
 // ============================================================
-RemoveEdgeCmd::RemoveEdgeCmd(PipelineView* canvas, const QUuid& fromId, const QUuid& toId)
-    : m_canvas(canvas), m_fromId(fromId), m_toId(toId) {}
+RemoveEdgeCmd::RemoveEdgeCmd(PipelineView* canvas, const QUuid& fromId, const QUuid& toId,
+                             OperatorNode::PortSide fromSide, OperatorNode::PortSide toSide)
+    : m_canvas(canvas), m_fromId(fromId), m_toId(toId),
+      m_fromSide(fromSide), m_toSide(toSide) {}   // === M7: 记下方向,undo 才还原得回去 ===
 
 void RemoveEdgeCmd::exec() {
     if (!m_canvas) return;
@@ -61,7 +63,9 @@ void RemoveEdgeCmd::undo() {
     OperatorNode* from = m_canvas->findNodeByUuid(m_fromId);
     OperatorNode* to   = m_canvas->findNodeByUuid(m_toId);
     if (!from || !to) return;
-    m_canvas->addConnection(from, to);
+    // === M7: 还原 side —— 原来写的是 addConnection(from, to),
+    //   方向全走默认值,竖线撤销回来就躺下了 ===
+    m_canvas->addConnection(from, to, m_fromSide, m_toSide);
 }
 
 void RemoveEdgeCmd::redo() {

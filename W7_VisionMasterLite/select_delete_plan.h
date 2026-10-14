@@ -45,6 +45,11 @@ namespace w7 {
 struct EdgeEndpoint {
     QUuid from;
     QUuid to;
+    // === M7: 连线的两端方向也要一起带走 ===
+    // RemoveEdgeCmd 的 undo 靠这两个字段还原;不带走就还原不回去,
+    // 竖线会静默变成横线(连线关系还在,所以不报错)。
+    OperatorNode::PortSide fromSide = OperatorNode::PortSide::Right;
+    OperatorNode::PortSide toSide   = OperatorNode::PortSide::Left;
     bool operator==(const EdgeEndpoint& o) const { return from == o.from && to == o.to; }
 };
 
@@ -91,7 +96,8 @@ inline SelectDeletePlan planSelectDelete(const QList<OperatorNode*>&   selectedN
     for (auto* line : selectedLines) {
         if (!line || doomedLines.contains(line)) continue;
         if (!line->fromNode() || !line->toNode()) continue;
-        plan.edges.append(EdgeEndpoint{line->fromNode()->uuid(), line->toNode()->uuid()});
+        plan.edges.append(EdgeEndpoint{line->fromNode()->uuid(), line->toNode()->uuid(),
+                                       line->fromSide(), line->toSide()});
     }
     return plan;
 }

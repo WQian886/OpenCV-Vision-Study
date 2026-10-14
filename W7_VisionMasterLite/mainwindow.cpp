@@ -1539,7 +1539,7 @@ void MainWindow::deleteSelectedItems() {
         if (OperatorNode* n = m_canvas->findNodeByUuid(id)) doDeleteNode(n);
     }
     for (const auto& e : plan.edges) {
-        execCommand(new w7::RemoveEdgeCmd(m_canvas, e.from, e.to));
+        execCommand(new w7::RemoveEdgeCmd(m_canvas, e.from, e.to, e.fromSide, e.toSide));
     }
     appendLog(tr("[Delete] 删除 %1 个节点,%2 条连线").arg(delNodes).arg(delConns));
 }

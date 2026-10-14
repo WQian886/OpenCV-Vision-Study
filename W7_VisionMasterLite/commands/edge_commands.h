@@ -45,10 +45,16 @@ private:
 
 // ============================================================
 // RemoveEdgeCmd — 单独删除一条连线(选中连线按 Delete)
+// === M7: 也要携带 fromSide / toSide ===
+//   和 AddEdgeCmd 成对:那条是"新建时记下来",这条是"删掉时记下来",
+//   undo 才还原得回去。少记一个字段,撤销回来就变成默认方向 ——
+//   一条竖线静默变成横线,连线关系还在,所以没有任何报错。
 // ============================================================
 class RemoveEdgeCmd : public Command {
 public:
-    RemoveEdgeCmd(PipelineView* canvas, const QUuid& fromId, const QUuid& toId);
+    RemoveEdgeCmd(PipelineView* canvas, const QUuid& fromId, const QUuid& toId,
+                  OperatorNode::PortSide fromSide = OperatorNode::PortSide::Right,
+                  OperatorNode::PortSide toSide   = OperatorNode::PortSide::Left);
     void exec() override;
     void undo() override;
     void redo() override;
@@ -57,6 +63,8 @@ private:
     PipelineView* m_canvas;
     QUuid m_fromId;
     QUuid m_toId;
+    OperatorNode::PortSide m_fromSide;   // === M7 ===
+    OperatorNode::PortSide m_toSide;     // === M7 ===
 };
 
 } // namespace w7

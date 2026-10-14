@@ -264,6 +264,107 @@ static void test_remove_edge_roundtrip() {
     checkEq(cv.connections().size(), 1, "undo 后连线恢复");
 }
 
+// 7b. 单独删连线后撤销:端口方向必须还原
+//
+// 这组用例锁的缺陷:
+//   M7 把"从哪个口拉出来的"存进了 AddEdgeCmd 和 DeleteNodeCmd,
+//   但**漏了 RemoveEdgeCmd** —— 它的构造函数只收两个 UUID,
+//   undo() 调的是 addConnection(from, to),方向全走默认值。
+//
+//   于是用户从 A 的**下边**拉出去、接到 B 的**上边**画的那条竖线,
+//   单独选中按 Delete、Ctrl+Z 撤销回来,就变成一条横线了。
+//
+// 为什么这类 bug 特别难靠肉眼发现:
+//   和存盘方向丢失(用例 16-19)是同一个毛病 —— 线还在、节点还在、
+//   连线关系还在,只有走向变了。对照着截图一像素一像素比才看得出来。
+//   而"删除一条线再撤销"这个操作序列,正常使用时谁会去多撤销一次?
+//
+// 这一条直接构造命令,测 RemoveEdgeCmd 自己;
+// 方向是从 planSelectDelete 带过来的(7c 测那条链),所以这里显式传。
+static void test_remove_edge_undo_restores_sides() {
+    beginCase("7b. 单独删连线后撤销:竖线不能变成横线");
+    PipelineView cv;
+    History h;
+
+    auto* a = addPlain(&cv, "image_source_dir", {0, 0});
+    auto* b = addPlain(&cv, "color_segment",    {100, 300});   // B 在 A 正下方
+
+    const auto Bottom = OperatorNode::PortSide::Bottom;
+    const auto Top    = OperatorNode::PortSide::Top;
+
+    // 用户从 A 的下端口拉出、接到 B 的上端口 —— 一条竖线
+    ConnectionLine* line = cv.addConnection(a, b, Bottom, Top);
+    check(line != nullptr, "竖线建出来了");
+    checkEq(int(line ? line->fromSide() : Bottom), int(Bottom), "建线时起点是 Bottom");
+    checkEq(int(line ? line->toSide()   : Top),    int(Top),    "建线时终点是 Top");
+
+    h.exec(new RemoveEdgeCmd(&cv, a->uuid(), b->uuid(), Bottom, Top));
+    checkEq(cv.connections().size(), 0, "单独删掉这条线");
+
+    h.undo();
+    checkEq(cv.connections().size(), 1, "撤销后连线回来了");
+
+    // 光看"回来了"不够 —— 一条横线也是"回来了"。
+    // 必须断言它是原来那条竖线,而不是默认方向的新线。
+    ConnectionLine* back = cv.connections().isEmpty() ? nullptr : cv.connections().first();
+    check(back != nullptr, "拿得回撤销后那条线");
+    if (back) {
+        checkEq(int(back->fromSide()), int(Bottom),
+                "撤销后起点仍是 Bottom(丢了就说明 undo 走了默认方向)");
+        checkEq(int(back->toSide()),   int(Top),
+                "撤销后终点仍是 Top(丢了就说明 undo 走了默认方向)");
+    }
+}
+
+// 7c. 同一条链,走真实删除路径
+//
+// 7b 直接 new 命令,绕开了 MainWindow 真正会走的那条链:
+//     框选线 -> planSelectDelete -> EdgeEndpoint -> RemoveEdgeCmd -> undo
+//
+// 方向要走过 **planSelectDelete 里的 EdgeEndpoint** 才到得了命令。
+// 上一版缺陷其实是两处:
+//     EdgeEndpoint 根本没带 side  /  RemoveEdgeCmd 根本没存 side
+// 只测 RemoveEdgeCmd 会漏掉前一处,所以这条按真实路径再走一遍。
+static void applyPlan(PipelineView* cv, History* h,
+                      const w7::SelectDeletePlan& plan);   // 定义在下面,这里先要得到
+
+static void test_remove_edge_undo_restores_sides_via_plan() {
+    beginCase("7c. 走真实删除路径:竖线撤销回来还是竖线");
+    PipelineView cv;
+    History h;
+
+    auto* a = addPlain(&cv, "image_source_dir", {0, 0});
+    auto* b = addPlain(&cv, "color_segment",    {100, 300});
+
+    const auto Bottom = OperatorNode::PortSide::Bottom;
+    const auto Top    = OperatorNode::PortSide::Top;
+
+    ConnectionLine* line = cv.addConnection(a, b, Bottom, Top);
+    check(line != nullptr, "竖线建出来了");
+
+    // 只框选线,不框节点 —— 这是"单独删一条连线"的用户动作
+    const auto plan = w7::planSelectDelete({}, {line}, cv.connections());
+    checkEq(plan.nodes.size(),  0, "没有待删节点");
+    checkEq(plan.edges.size(),  1, "这条线走独立记账");
+
+    // 方向必须被计划带走,否则后面还原不回去
+    checkEq(int(plan.edges.first().fromSide), int(Bottom), "计划里带走了 Bottom");
+    checkEq(int(plan.edges.first().toSide),   int(Top),    "计划里带走了 Top");
+
+    applyPlan(&cv, &h, plan);
+    checkEq(cv.connections().size(), 0, "删掉了");
+
+    h.undo();
+    checkEq(cv.connections().size(), 1, "撤销后回来了");
+
+    ConnectionLine* back = cv.connections().isEmpty() ? nullptr : cv.connections().first();
+    check(back != nullptr, "拿得回撤销后那条线");
+    if (back) {
+        checkEq(int(back->fromSide()), int(Bottom), "整条链走完,起点仍是 Bottom");
+        checkEq(int(back->toSide()),   int(Top),    "整条链走完,终点仍是 Top");
+    }
+}
+
 // 8. 新操作应清空 redo 栈(标准 Command 语义)
 static void test_redo_cleared_by_new_op() {
     beginCase("8. 新操作清空 redo 栈");
@@ -474,7 +575,7 @@ static void applyPlan(PipelineView* cv, History* h,
             h->exec(new DeleteNodeCmd(cv, n));
     }
     for (const auto& e : plan.edges)
-        h->exec(new RemoveEdgeCmd(cv, e.from, e.to));
+        h->exec(new RemoveEdgeCmd(cv, e.from, e.to, e.fromSide, e.toSide));
 }
 
 static void test_delete_plan_classifies_edges() {
@@ -908,6 +1009,8 @@ int main(int argc, char* argv[]) {
     test_move_then_delete_then_undo();
     test_edge_roundtrip();
     test_remove_edge_roundtrip();
+    test_remove_edge_undo_restores_sides();
+    test_remove_edge_undo_restores_sides_via_plan();
     test_redo_cleared_by_new_op();
     test_command_survives_missing_node();
     test_uuids_unique();
