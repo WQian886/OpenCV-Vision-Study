@@ -134,6 +134,98 @@ static RunResult runPipelineWith(const QString& fileName,
 }
 
 // ------------------------------------------------------------
+// 用例清单从 images/manifest.csv 读,不再在代码里抄一份
+// ------------------------------------------------------------
+// 为什么:这份 CSV **原来一个代码都不读**(2026-10-14 之前),
+// 用例列表是 tests 里手抄的一份 C++ 数组。两份会漂,而且漂了没人知道 ——
+// 往 images/ 里加一张新缺陷图、改了 CSV,测试照样全绿。
+//
+// 这就是本项目记过两笔的"抄副本",只是这次抄的是**用例清单**而不是阈值。
+// 现在 CSV 成了唯一入口,用例列表从它生成。
+//
+// 顺带钉一条反向不变式:images/ 里每一张图都必须在 CSV 里登记过。
+// 只做"从 CSV 生成用例"是不够的 —— 那只能保证 CSV 里的都跑了,
+// 仍然漏掉"多了一张图、没人知道它该判什么"。两张方向都要钉。
+struct ManifestRow {
+    QString file;
+    QString defect;    // "none" 表示好板
+    QString expected;  // PASS / FAIL
+    QString note;
+};
+
+// images/ 下这些是别的用例跑出来的中间产物,不是测试图,
+// 不该要求它们登记在册。(它们该待在别处是另一回事,不在本轮。)
+static bool isScratchImage(const QString& name) {
+    return name.startsWith("w7_") || name.startsWith("_srcframe_");
+}
+
+static QList<ManifestRow> readManifest(const QString& path, QString* err) {
+    QList<ManifestRow> rows;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        *err = "打不开 " + path;
+        return rows;
+    }
+    const QString text = QString::fromUtf8(f.readAll());
+    const QStringList lines = text.split(QRegularExpression("\r?\n"),
+                                         Qt::SkipEmptyParts);
+    for (const QString& line : lines) {
+        const QStringList cols = line.split(',');
+        if (cols.size() < 3) continue;
+        const QString c0 = cols[0].trimmed();
+        if (c0 == "file" || c0.startsWith('#')) continue;   // 表头/注释
+        ManifestRow r;
+        r.file     = c0;
+        r.defect   = cols[1].trimmed();
+        r.expected = cols[2].trimmed();
+        if (cols.size() > 3) r.note = cols[3].trimmed();
+        rows << r;
+    }
+    if (rows.isEmpty()) *err = path + " 里没读到任何一行";
+    return rows;
+}
+
+static void test_manifest_is_the_single_source() {
+    beginCase("images/manifest.csv 是用例清单的唯一来源,且覆盖 images/ 下每一张图");
+    QString err;
+    const QList<ManifestRow> rows =
+        readManifest("images/manifest.csv", &err);
+    check(err.isEmpty(), QString("能读出用例清单(%1)").arg(err));
+    if (rows.isEmpty()) return;
+
+    // ① CSV 里的每一行都必须真的跑得起来(不是死条目)
+    for (const auto& r : rows) {
+        check(QFile::exists("images/" + r.file),
+              QString("清单里的 %1 真的存在").arg(r.file));
+    }
+
+    // ② 反向:images/ 下没登记过的图要报出来。
+    //    只有 ① 的话,"多了一张图没人知道该判什么"这条路是漏的 ——
+    //    而那恰好是加新缺陷样本时最容易发生的事。
+    QSet<QString> listed;
+    for (const auto& r : rows) listed << r.file;
+    QStringList unlisted;
+    QDir d("images");
+    for (const QString& name : d.entryList(QStringList{"*.png"}, QDir::Files)) {
+        if (isScratchImage(name)) continue;
+        if (!listed.contains(name)) unlisted << name;
+    }
+    check(unlisted.isEmpty(),
+          QString("images/ 下没有漏登记的图(漏了:%1)")
+              .arg(unlisted.isEmpty() ? QString("(无)") : unlisted.join(" ")));
+
+    // ③ 好板/废板两类都得有,否则这份清单学不到东西
+    int pass = 0, fail = 0;
+    for (const auto& r : rows) {
+        if (r.expected == "PASS") ++pass;
+        else if (r.expected == "FAIL") ++fail;
+    }
+    check(pass >= 1 && fail >= 1,
+          QString("清单里两类都要有(好板 %1 张,废板 %2 张)")
+              .arg(pass).arg(fail));
+}
+
+// ------------------------------------------------------------
 // 用例 1:baseline 必须零缺陷
 // 这是最重要的回归锚 —— 只要有一类判定在正常板子上误报,
 // 后面 7 个用例的 FAIL 就全都不足为凭了。
@@ -162,25 +254,31 @@ static void test_baseline_clean() {
 // 这里变成可重复的断言 —— 改阈值时能立刻知道踩没踩到别的图。
 // ------------------------------------------------------------
 static void test_each_defect_detected() {
-    struct Case { const char* file; const char* type; };
-    const Case cases[] = {
-        {"missing.png",       "missing"},
-        {"wrong.png",         "wrong"},
-        {"polarity.png",      "polarity"},
-        {"bridge.png",        "bridge"},
-        {"insufficient.png",  "insufficient"},
-        {"shifted.png",       "shifted"},
-        {"short.png",         "short"},
-    };
-    for (const auto& c : cases) {
-        beginCase(QString("%1 必须判出 %2").arg(c.file, c.type));
+    QString err;
+    const QList<ManifestRow> rows = readManifest("images/manifest.csv", &err);
+    if (rows.isEmpty()) {
+        check(false, QString("用例清单读不出来(%1)").arg(err));
+        return;
+    }
+    // 清单里 expected=FAIL 的行才是缺陷样本。
+    // 原来这里是手抄的一份 7 行数组 —— 和 CSV 内容一样,但没有任何机制
+    // 保证它们一直一样。
+    int cases = 0;
+    for (const auto& c : rows) {
+        if (c.expected != "FAIL") continue;
+        ++cases;
+        beginCase(QString("%1 必须判出 %2").arg(c.file, c.defect));
         RunResult r = runPipeline(c.file);
         check(r.judgeOut.value("result").toString() == "FAIL",
               "结论 FAIL");
-        check(r.defectTypes.contains(c.type),
+        check(r.defectTypes.contains(c.defect),
               QString("命中缺陷类型 %1  (实际:%2)")
-                  .arg(c.type).arg(r.defectTypes.values().join(",")));
+                  .arg(c.defect).arg(r.defectTypes.values().join(",")));
     }
+    // 少一行用例,这个函数就少跑一张图,而上面还是全绿。
+    check(cases >= 7,
+          QString("缺陷样本不能少于 7 张(实际 %1 张 —— 是清单被改小了,还是用例漏了?)")
+              .arg(cases));
 }
 
 // ------------------------------------------------------------
@@ -1556,6 +1654,7 @@ int main(int argc, char* argv[]) {
     test_board_switch_defect_boards();
     test_cap_missing_uses_body_pct();
     test_skipped_rules_are_reported();
+    test_manifest_is_the_single_source();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;
