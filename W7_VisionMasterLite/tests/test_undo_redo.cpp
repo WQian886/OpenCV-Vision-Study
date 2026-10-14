@@ -549,6 +549,22 @@ static void test_delete_plan_roundtrip() {
     auto* ab = cv.addConnection(a, b);
     auto* cd = cv.addConnection(c, d);
 
+    // UUID 必须在**删除之前**抓下来。
+    //
+    // 这里原来写的是撤销到底之后才 `a->uuid()` —— 而 a 早就被
+    // removeNode() delete 掉了,那是货真价实的 use-after-free。
+    // 后果不是崩,是**测试自己偶发红**:实测 300 次里 24 次(8%)
+    // 读到的 uuid 和真值不同(同一个二进制里两种读法对照,正确的 0/300,
+    // 已释放的 24/300,数字完全对上)。
+    //
+    // 为什么偶发:分配器是否把 A 那块已释放内存复用给撤销时新建的节点,
+    // 取决于当次的堆布局 —— 复用到了(92%)读到的还是对的,
+    // 没复用(8%)就是别的内容。
+    //
+    // 所以这条断言挂的从来不是撤销逻辑的锅:**撤销每次都精确还原了**,
+    // 节点 4 个、连线 2 条、uuid 逐字吻合。是尺子自己在漂。
+    const QUuid au = a->uuid(), bu = b->uuid(), cu = c->uuid(), du = d->uuid();
+
     // 框选 A、B,连带框到 A→B 那条线
     const auto plan = w7::planSelectDelete({a, b}, {ab, cd}, cv.connections());
     applyPlan(&cv, &h, plan);
@@ -572,7 +588,6 @@ static void test_delete_plan_roundtrip() {
 
     // 对照组:用 UUID 逐条核对,不是只数个数 ——
     // "3 条线里有 2 条重复"和"2 条线"个数一样,前者不会挂在上面那条。
-    const QUuid au = a->uuid(), bu = b->uuid(), cu = c->uuid(), du = d->uuid();
     check(cv.findNodeByUuid(au) != nullptr, "对照:A 回来了");
     check(cv.findNodeByUuid(cu) != nullptr, "对照:C 回来了");
     check(cv.findConnection(au, bu) != nullptr, "对照:A→B 回来了");
