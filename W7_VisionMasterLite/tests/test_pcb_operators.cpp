@@ -38,6 +38,7 @@
 #include <windows.h>   // SetConsoleOutputCP
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "operators/pcb_inspect.h"
 #include "operators/pcb_defect_judge.h"
@@ -1202,6 +1203,104 @@ static void test_board_switch_defect_boards() {
     }
 }
 
+// ============================================================
+// 彩色本体(CAP*)的 missing 必须问 body_pct,不能问暗像素
+//
+// 背景在 operators/pcb_defect_judge.cpp 的 missingAsksBodyPresence()。
+// 这里钉的不是"某个阈值是多少"(那是标定值,会随板子变),而是
+// **电容走的是哪条判据** —— 这条一旦被改回去,症状是好板在
+// σ=图宽千分之一就集体误报缺件,而现有 12 套件全绿,因为
+// k=0 时两条判据的结论恰好一样。
+//
+// 所以本用例必须做两件事:
+//   1. 断言 CAP 站点的 missing 读数**等于 body_pct**(量纲能对上,
+//      说明问的确实是"框里有没有东西");
+//   2. 把 body_min_pct 推到两个极端,证明这个旋钮是活的 ——
+//      只测"默认值下结论对"会退化成"这个参数根本没人看",
+//      gold_px 和 body_pct 都是这么潜伏了很久的。
+// ============================================================
+static void test_cap_missing_uses_body_pct() {
+    const QString dir =
+        "E:/qianwie/00study/OpenCV/W6_PCB_DefectProject/images/complex/";
+
+    // 从 metrics 里取出某个站点某条规则的读数;找不到返回 NaN。
+    auto metricOf = [](const QJsonObject& judgeOut, const QString& label,
+                       const QString& rule) {
+        for (const auto& m : judgeOut.value("metrics").toArray()) {
+            const QJsonObject mo = m.toObject();
+            if (mo.value("component").toString() == label
+                && mo.value("rule").toString() == rule)
+                return mo.value("value").toDouble();
+        }
+        return std::numeric_limits<double>::quiet_NaN();
+    };
+    auto bodyOf = [](const QJsonObject& inspectOut, const QString& label) {
+        for (const auto& c : inspectOut.value("components").toArray()) {
+            const QJsonObject co = c.toObject();
+            if (co.value("label").toString() == label)
+                return co.value("body_pct").toDouble();
+        }
+        return std::numeric_limits<double>::quiet_NaN();
+    };
+
+    RunResult good = runBoard("power.json", dir + "power_baseline.png");
+    check(good.judgeOut.value("result").toString() == "PASS",
+          QString("power 好板零缺陷 (实际 %1,命中:%2)")
+              .arg(good.judgeOut.value("result").toString(),
+                   good.defectTypes.values().join(",")));
+
+    // C2 是 CAP_BIG,好板上它必须有本体。对不上就是判据又退回暗像素了。
+    const double bodyC2 = bodyOf(good.inspectOut, "C2");
+    const double missC2 = metricOf(good.judgeOut, "C2", "missing");
+    check(qAbs(missC2 - bodyC2) < 0.01,
+          QString("C2 的 missing 读数应等于 body_pct(实测 missing=%1, body_pct=%2)")
+              .arg(missC2, 0, 'f', 2).arg(bodyC2, 0, 'f', 2));
+
+    // 暗像素那条读数仍然要单独记着 —— 换判据不等于把诊断信息扔了。
+    const double darkC2 = metricOf(good.judgeOut, "C2", "dark_pct");
+    check(darkC2 > 0.0 && qAbs(darkC2 - missC2) > 0.01,
+          QString("C2 的暗像素读数应另记一条且与 missing 不同"
+                  "(实测 dark_pct=%1, missing=%2)")
+              .arg(darkC2, 0, 'f', 2).arg(missC2, 0, 'f', 2));
+
+    // 黑本体那边必须**不受影响**:R1 是 RES,still 走暗像素。
+    const double missR1 = metricOf(good.judgeOut, "R1", "missing");
+    const double bodyR1 = bodyOf(good.inspectOut, "R1");
+    check(qAbs(missR1 - bodyR1) > 0.01,
+          QString("R1(RES)仍应走暗像素判据,不该等于 body_pct"
+                  "(实测 missing=%1, body_pct=%2)")
+              .arg(missR1, 0, 'f', 2).arg(bodyR1, 0, 'f', 2));
+
+    // 旋钮是活的吗?放宽到 0:全板不再报缺件。
+    {
+        PcbInspect inspect;
+        QJsonObject ip = inspect.defaultParams();
+        ip["recipe"] = "recipes/power.json";
+        const QJsonObject io = inspect.run(
+            ip, QJsonObject{{"image_path", dir + "power_missing.png"}});
+        PcbDefectJudge judge;
+        QJsonObject jp = judge.defaultParams();
+        jp["body_min_pct"] = 0;                 // 放宽:彩色本体永远有"东西"
+        const QJsonObject jo = judge.run(jp, io);
+        bool stillMissing = false;
+        for (const auto& d : jo.value("defects").toArray())
+            if (d.toObject().value("type").toString() == "missing")
+                stillMissing = true;
+        check(!stillMissing, "body_min_pct=0 时不再判缺件");
+
+        // 反向:收紧到 100,连好板上的电容也该被判掉 ——
+        // 只测"变了一定没事"的话,这参数删掉测试照样绿。
+        QJsonObject jp2 = judge.defaultParams();
+        jp2["body_min_pct"] = 100;
+        const QJsonObject jo2 = judge.run(
+            jp2, inspect.run(ip, QJsonObject{{"image_path",
+                                              dir + "power_baseline.png"}}));
+        check(jo2.value("result").toString() == "FAIL",
+              QString("body_min_pct=100 时好板也应 FAIL(证明阈值生效,实际 %1)")
+                  .arg(jo2.value("result").toString()));
+    }
+}
+
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");   // headless
     // Windows 控制台默认 GBK,中文断言信息会乱码。强制 UTF-8
@@ -1227,6 +1326,7 @@ int main(int argc, char* argv[]) {
     test_auto_contour_scale_stable();
     test_board_switch_good_boards_clean();
     test_board_switch_defect_boards();
+    test_cap_missing_uses_body_pct();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;

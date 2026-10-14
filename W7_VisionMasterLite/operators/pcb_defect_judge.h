@@ -15,7 +15,12 @@
 // params: thresholds(各判定的阈值,全部可调)
 //
 // === 7 类缺陷(与 W6 一致) ===
-//   missing      缺件     R2 ROI 暗像素过少(元件被擦除)
+//   missing      缺件     ROI 里"没有元件"。
+//                          黑本体(RES/DIODE/TO220/QFP64/SOIC8)问暗像素占比,
+//                          彩色本体(CAP*)问 body_pct(非板面像素占比)——
+//                          后者是 2026-10-14 加的,原因见 .cpp 的
+//                          missingAsksBodyPresence():电容的暗像素只剩 1px 描边,
+//                          图宽千分之一的模糊就归零,好板集体误报。
 //   wrong        错件     R3 本体变成浅黄而非黑
 //   polarity     极性反   C1 白色极性条质心偏右
 //   bridge       焊桥     R1 焊盘间金条连成一片
@@ -81,7 +86,8 @@ protected:
 private:
     // 全是百分比(用 QDoubleSpinBox,不是整数 SpinBox):
     // 短路圆环的面积只占全图的 0.01%~0.04%,整数表达不了。
-    QDoubleSpinBox* m_darkMinPct   = nullptr;  // missing: 暗像素占 ROI 面积下限
+    QDoubleSpinBox* m_darkMinPct   = nullptr;  // missing(黑本体): 暗像素占 ROI 面积下限
+    QDoubleSpinBox* m_bodyMinPct   = nullptr;  // missing(彩色本体): 非板面像素占 ROI 面积下限
     QDoubleSpinBox* m_yellowMinPct = nullptr;  // wrong:   浅黄占 ROI 面积下限
     QDoubleSpinBox* m_polarityR    = nullptr;  // polarity:白条质心 x 占 ROI 宽 %
     QDoubleSpinBox* m_whiteMinPct  = nullptr;  // polarity:白色像素占 ROI 面积下限

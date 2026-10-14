@@ -86,6 +86,46 @@ QStringList knownRulesForKind(const QString& kind) {
 }
 
 // ============================================================
+// missing 规则该问哪个问题:"本体够不够暗",还是"框里有没有东西"?
+//
+// 这不是风格选择,是两种**物理事实**,实测差别极大(2026-10-14):
+//
+//   黑本体(RES/DIODE/TO220/QFP64/SOIC8):暗像素就是本体本身,
+//     实测 power 好板 RES 28.69% -> 模糊到 k=6 仍 19.18%,
+//     TO220 57.03% -> 55.81%,几乎不动。余量 20 倍以上。
+//
+//   彩色/灰色本体(CAP*):**暗像素只剩那一圈 1px 黑色描边**。
+//     实测 power 好板 CAP_SMALL 5.08%,而 σ 只有图宽千分之一(k=1)
+//     就掉到 **0.00%** —— 一步归零,不是斜坡。
+//     好板/废板之间根本不存在可放阈值的窗口:任何 dark_min_pct
+//     都救不了,因为被模糊毁掉的是信号本身,不是它的余量。
+//
+// 换成"框里有没有非板面像素"(inspect 已经算好的 body_pct)之后,
+// 同一批图实测(power C2 缺件 / 好板,body_pct%):
+//     k=0  7.7 / 49.2      k=3  22.2 / 89.9
+//     k=1 13.2 / 73.1      k=6  36.5 / 97.6
+// 40px 的圆盘在同样大小的模糊下几乎无损 —— 差的不是阈值,是问的问题。
+//
+// ⚠ 只对实测过的封装生效。LED / HEADER / INDUCTOR / TERMINAL / BUTTON
+//   同样不是黑本体(dark 实测 0.00~4.77%),**但没有缺件真值图**,
+//   改它们等于凭空改判据,所以这里一律不改 —— 见 pcb_defect_judge.h
+//   的"尚未处理"。已知的坑记在 knownRulesForKind() 里:
+//   那几种封装**绝不能配 missing**。
+//
+// ⚠ DIODE 是**半坏**的,这里也没改:它的本体确实是黑的(dark 实测
+//   26.47%),所以走暗像素判据没错,但 σ 到图宽千分之五时同样归零
+//   (26.47 -> 19.51 -> 15.34 -> ... -> 0.00),power / signal 两块板
+//   在 k=4 被 shifted、k=5 起被 missing 误报。结构上和电容同类,
+//   只是塌得晚一些。**同样因为没有二极管缺件真值图,没有阈值可标** ——
+//   与其凭空定一个,不如留着这两张假阳当作"必须补真值图"的证据。
+// ============================================================
+bool missingAsksBodyPresence(const QString& kind) {
+    const QString k = kind.toUpper();
+    return k == QLatin1String("C") || k == QLatin1String("CAP")
+        || k == QLatin1String("CAP_SMALL") || k == QLatin1String("CAP_BIG");
+}
+
+// ============================================================
 // 这个元件跑哪些规则 —— **判定"配方说了算"的唯一入口**
 //
 // ⚠ "checks 字段不存在"和"checks 是空数组"是**两件不同的事**,
@@ -175,6 +215,23 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     // CAP_SMALL 4.4 倍。代价是 LED(0.77)/HEADER(0.00)离 1% 太近 ——
     // 所以**这两种封装绝不能配 missing**,见 tools/export_recipes.py 的 CHECKS 表。
     p["dark_min_pct"]    = 1.0;
+    // 彩色本体(CAP*)的 missing 判据:ROI 里"不像板面"的像素占比下限。
+    //
+    // body_pct 由 pcb_inspect 产出(逐通道差 >12),一直只被"配方跟图
+    // 对不对得上"那道闸读过,**没有任何判据消费过它** —— 和当初的
+    // gold_px 一个毛病:字段在,没人读,所以没人发现判据缺了这一半。
+    //
+    // 42.0 是实测出来的(2026-10-14,四块板 x k=0..6 全部站点):
+    //   缺件侧最大 41.5(demo R2 @k=3;power C2 @k=6 是 36.5)
+    //   好板侧最小 49.2(power C2 @k=0)
+    // 窗口 (41.5, 49.2),几何中点 sqrt(41.5*49.2)=45.2,取 42 偏向下沿
+    // —— 下沿买的是"缺件别漏",上沿买的余量(49.2-42=7.2 个点)已经够。
+    //
+    // ⚠ 这个窗口会随模糊整体上滑(blur 把"不像板面"的判据吹大),
+    //   所以 42 只保证到 k≈3;k>=4 缺件会漏。不是阈值调错了,
+    //   是"逐通道差 >12"这个绝对判据本身对模糊不免疫 —— 要根治得把
+    //   body_pct 也做去绝对化,那是下一轮的事。
+    p["body_min_pct"]    = 42.0;
     // R3 错色像素占 ROI 的百分比。**四块板一起量**(2026-10-10),
     // 因为这个阈值原来只在 demo 一块板上标定过:
     //     demo   R3 好  3.40   废(wrong.png)     44.77
@@ -438,6 +495,7 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     // 读不到就等于没传,退回下面这些新默认值 —— 宁可阈值不准,
     // 也不能让用户以为是自己配的数在起作用。
     const double darkMinPct   = params.value("dark_min_pct").toDouble(1.0);
+    const double bodyMinPct   = params.value("body_min_pct").toDouble(42.0);
     // yellow_min_pct:实测四块板(2026-10-10),同一封装"好板"与"错色废板"
     // 的错色像素占比:
     //     demo  R3  好  3.40   废(wrong.png) 44.77
@@ -535,19 +593,42 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
             });
         }
 
-        // ---------- missing: 本体暗像素过少 ----------
+        // ---------- missing: 框里没有元件 ----------
+        //
+        // 问哪个问题由 missingAsksBodyPresence() 决定 —— 黑本体问暗像素,
+        // 彩色本体问 body_pct。两边的实测依据都写在那个函数的注释里。
+        //
+        // 两个读数**都记进 metrics**,不管这次用哪个:调阈值的人需要看到
+        // "好板上是多少、废板上是多少",而不是只看到一个判完的结果。
         if (rules.contains(QString::fromUtf8(recipe_rule::kMissing))) {
             const double darkCount = cv::countNonZero(darkMask);
             const double darkPct   = 100.0 * darkCount / roiArea;
+            const bool   byBody    = missingAsksBodyPresence(c.value("kind").toString());
+            const double bodyPct   = c.value("body_pct").toDouble(0.0);
+            // 上游没给 body_pct(老存档 / auto_contour 产物)时不能当成 0 ——
+            // 0 的意思是"框里空空的",会把整个元件误判成缺件。
+            // 这种情况退回暗像素判据,和上游缺字段时的其它处理一个口径。
+            const bool haveBodyPct = c.contains("body_pct");
+            const bool useBody     = byBody && haveBodyPct;
+            const double value     = useBody ? bodyPct : darkPct;
+            const double threshold = useBody ? bodyMinPct : darkMinPct;
+
+            addMetric(metrics, label, "dark_pct",  darkPct, darkMinPct, "% ROI");
             addMetric(metrics, label, recipe_rule::kMissing,
-                      darkPct, darkMinPct, "% ROI");
-            if (darkPct < darkMinPct) {
+                      value, threshold, useBody ? "% ROI(非板面)" : "% ROI(暗)");
+            if (value < threshold) {
                 addDefect(defects, label, "missing",
-                          QString("暗像素 %1(占 ROI %2%)< 阈值 %3%(元件疑似被擦除;"
-                          "暗 = V < %4 x 板面V,板面 BGR %5,%6,%7)")
-                          .arg((int)darkCount).arg(darkPct, 0, 'f', 2).arg(darkMinPct)
-                          .arg(darkVMul, 0, 'f', 2)
-                          .arg(boardBase[0]).arg(boardBase[1]).arg(boardBase[2]));
+                          useBody
+                            ? QString("框内非板面像素占 ROI %1% < 阈值 %2%"
+                                      "(本体疑似被擦除;body_pct = 与板面基色的"
+                                      "逐通道差 >12 的像素占比)")
+                                .arg(value, 0, 'f', 2).arg(threshold, 0, 'f', 2)
+                            : QString("暗像素 %1(占 ROI %2%)< 阈值 %3%(元件疑似被擦除;"
+                                      "暗 = V < %4 x 板面V,板面 BGR %5,%6,%7)")
+                                .arg((int)darkCount).arg(value, 0, 'f', 2)
+                                .arg(threshold, 0, 'f', 2)
+                                .arg(darkVMul, 0, 'f', 2)
+                                .arg(boardBase[0]).arg(boardBase[1]).arg(boardBase[2]));
                 cv::rectangle(marked, roi, cv::Scalar(0, 0, 255), 3);
             }
         }
@@ -934,11 +1015,33 @@ void PcbDefectJudgeForm::buildUI() {
         s->setValue(val);
         return s;
     };
-    m_darkMinPct   = mk(2.0,   2);
-    m_yellowMinPct = mk(12.0,  2);
-    m_polarityR    = mk(60.0,  2);
-    m_whiteMinPct  = mk(0.5,   2);
-    m_bridgeMinPct = mk(40.0,  2);
+    // 这里的初值**不再各写一份** —— 全部取自 defaultParams()。
+    //
+    // 以前是每个框手敲一个数,于是默认值的"第二份账"和第一份漂开了
+    // (实测 2026-10-14,三处):
+    //     dark_min_pct    JSON 1.0  vs 框里 2.0
+    //     bridge_min_pct  JSON 60.0 vs 框里 40.0
+    //     yellow_min_pct  JSON 32.0 vs 框里 12.0
+    // 后果不是"显示不准":collect() 把框里的值写回 params,
+    // 所以**只要有人在面板上点一下保存,阈值就被静默改回旧值**。
+    // bridge 那条尤其难受 —— 60 正是这个项目花两个 commit 调出来的,
+    // 面板会把它退回 40,正好放行好板上的 44.90。
+    // 12 套件 559 条断言一直绿着,因为测试只走 defaultParams(),
+    // 从不经过面板的 collect() —— 又一次"验证不等于验证"。
+    //
+    // 改法不是把三个数字手工改对(那只是把漂移推迟到下一个参数),
+    // 是**让框里没有数字可写**:唯一入口是 defaultParams()。
+    const QJsonObject d0 = PcbDefectJudge().defaultParams();
+    auto dflt = [&d0](const char* key, double fallback) {
+        return d0.contains(QLatin1String(key))
+             ? d0.value(QLatin1String(key)).toDouble() : fallback;
+    };
+    m_darkMinPct   = mk(dflt("dark_min_pct",   1.0),   2);
+    m_bodyMinPct   = mk(dflt("body_min_pct",  42.0),   2);
+    m_yellowMinPct = mk(dflt("yellow_min_pct", 32.0),  2);
+    m_polarityR    = mk(dflt("polarity_ratio", 60.0), 2);
+    m_whiteMinPct  = mk(dflt("white_min_pct",  0.5),   2);
+    m_bridgeMinPct = mk(dflt("bridge_min_pct", 60.0),  2);
     m_padMinPct    = mk(0.46,  2);
     m_padDropPct   = mk(33.0,  2);
     m_shiftXPct    = mk(8.0,   2);
@@ -956,7 +1059,8 @@ void PcbDefectJudgeForm::buildUI() {
     m_offColorRMax  = mkMul(pcbcolor::kOffColorRMax);
     m_maskVMul      = mkMul(pcbcolor::kMaskVMul);
 
-    m_layout->addRow(tr("缺件:暗像素占 ROI 下限 %"),   m_darkMinPct);
+    m_layout->addRow(tr("缺件(黑本体):暗像素占 ROI 下限 %"), m_darkMinPct);
+    m_layout->addRow(tr("缺件(彩色本体):非板面占 ROI 下限 %"), m_bodyMinPct);
     m_layout->addRow(tr("错件:浅黄占 ROI 下限 %"),     m_yellowMinPct);
     m_layout->addRow(tr("极性:白条质心 占 ROI 宽 %"), m_polarityR);
     m_layout->addRow(tr("极性:白色像素占 ROI 下限 %"), m_whiteMinPct);
@@ -993,6 +1097,7 @@ void PcbDefectJudgeForm::setParams(const QJsonObject& params) {
     // 这已是同一个数在本文件里第三份副本(第四份在 run() 的 toDouble 里)。
     const QJsonObject d = PcbDefectJudge().defaultParams();
     m_darkMinPct->setValue(params.value("dark_min_pct").toDouble(d.value("dark_min_pct").toDouble()));
+    m_bodyMinPct->setValue(params.value("body_min_pct").toDouble(d.value("body_min_pct").toDouble()));
     m_yellowMinPct->setValue(params.value("yellow_min_pct").toDouble(d.value("yellow_min_pct").toDouble()));
     m_polarityR->setValue(params.value("polarity_ratio").toDouble(d.value("polarity_ratio").toDouble()));
     m_whiteMinPct->setValue(params.value("white_min_pct").toDouble(d.value("white_min_pct").toDouble()));
@@ -1001,12 +1106,14 @@ void PcbDefectJudgeForm::setParams(const QJsonObject& params) {
     m_padDropPct->setValue(params.value("pad_drop_pct").toDouble(d.value("pad_drop_pct").toDouble()));
     m_shiftXPct->setValue(params.value("shift_x_pct").toDouble(d.value("shift_x_pct").toDouble()));
     m_shiftYPct->setValue(params.value("shift_y_pct").toDouble(d.value("shift_y_pct").toDouble()));
-    m_shortMinPct->setValue(params.value("short_min_pct").toDouble(0.021));
-    m_shortMaxPct->setValue(params.value("short_max_pct").toDouble(0.08));
-    m_shortWMinPct->setValue(params.value("short_w_min_pct").toDouble(1.1));
-    m_shortWMaxPct->setValue(params.value("short_w_max_pct").toDouble(8.0));
-    m_shortHMinPct->setValue(params.value("short_h_min_pct").toDouble(1.0));
-    m_shortHMaxPct->setValue(params.value("short_h_max_pct").toDouble(6.0));
+    // short_* 这六个原来各自带一个手写的兜底默认值 —— 同样是抄的第二份账。
+    // 这里也统一走 d(唯一入口),不然 defaultParams() 改了这六个不会跟着动。
+    m_shortMinPct->setValue(params.value("short_min_pct").toDouble(d.value("short_min_pct").toDouble()));
+    m_shortMaxPct->setValue(params.value("short_max_pct").toDouble(d.value("short_max_pct").toDouble()));
+    m_shortWMinPct->setValue(params.value("short_w_min_pct").toDouble(d.value("short_w_min_pct").toDouble()));
+    m_shortWMaxPct->setValue(params.value("short_w_max_pct").toDouble(d.value("short_w_max_pct").toDouble()));
+    m_shortHMinPct->setValue(params.value("short_h_min_pct").toDouble(d.value("short_h_min_pct").toDouble()));
+    m_shortHMaxPct->setValue(params.value("short_h_max_pct").toDouble(d.value("short_h_max_pct").toDouble()));
 m_darkVMul->setValue(params.value("dark_v_mul").toDouble(pcbcolor::kDarkMul));
 m_brightVMul->setValue(params.value("bright_v_mul").toDouble(pcbcolor::kBrightMul));
 m_neutralMax->setValue(params.value("neutral_max").toDouble(pcbcolor::kNeutralMax));
@@ -1018,6 +1125,7 @@ m_maskVMul->setValue(params.value("mask_v_mul").toDouble(pcbcolor::kMaskVMul));
 QJsonObject PcbDefectJudgeForm::collect() const {
     QJsonObject p;
     p["dark_min_pct"]    = m_darkMinPct->value();
+    p["body_min_pct"]    = m_bodyMinPct->value();
     p["yellow_min_pct"]  = m_yellowMinPct->value();
     p["polarity_ratio"]  = m_polarityR->value();
     p["white_min_pct"]   = m_whiteMinPct->value();
