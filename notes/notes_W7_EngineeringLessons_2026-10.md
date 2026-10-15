@@ -702,9 +702,9 @@ M1 两边都杀(末端坏了,整条链都坏)。
 eac00b3 fix(W7 undo): 单独删一条连线再撤销,竖线会静默变成横线
 ```
 
-本轮新增 atomic 笔记(2 条):
+本轮新增 atomic 笔记(2 条,已入「工控」KB `rYMokbJN`):
 
-| 卡片 | 文件 | 入库 note id |
+| 卡片 | 文件 | note id |
 |---|---|---|
-| 测试自己 UB 会伪装成产品的偶发 bug | `atomic/at-test-self-ub-looks-like-flake.md` | 待回填 |
-| 只测末端,会漏掉传递链上的中段 | `atomic/at-only-test-the-tail-misses-the-middle.md` | 待回填 |
+| 测试自己 UB 会伪装成产品的偶发 bug | `atomic/at-test-self-ub-looks-like-flake.md` | 1924174990324804160 |
+| 只测末端,会漏掉传递链上的中段 | `atomic/at-only-test-the-tail-misses-the-middle.md` | 1924174999988478752 |
