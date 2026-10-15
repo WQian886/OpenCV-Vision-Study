@@ -537,7 +537,13 @@ if(MSVC)
     target_compile_options(w7_run_test PRIVATE /utf-8)
 endif()
 
-add_test(NAME run_policy COMMAND w7_run_test)
+# WORKING_DIRECTORY 必须显式给:run_policy 里有一条**源码级守卫**
+# (test_mainwindow_records_every_frame)要读 mainwindow.cpp 源码。
+# 不给的话 ctest 会在 build/ 下跑,找不到文件 —— 而那条守卫
+# 第一版写成了"打不开就 return",于是它变成**恒真的空断言**:
+# 测试绿着,而守卫根本没生效。这正是"看着在验证其实没验证"。
+add_test(NAME run_policy COMMAND w7_run_test
+         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # ============================================================
 # === 检测类算子 回归测试 (color_segment / blob_count / count_check)

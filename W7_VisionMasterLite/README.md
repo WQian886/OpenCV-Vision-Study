@@ -46,7 +46,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 12 个无头回归测试(602 断言)
+├── tests/                      # 12 个无头回归测试(853 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -319,7 +319,7 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,602 断言 / 12 个套件)
+## 🧪 回归测试(无头,853 断言 / 12 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
@@ -343,15 +343,15 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 
 | 套件 | 断言 | 测什么 | 需要 |
 |---|---|---|---|
-| `undo_redo` | 133 | 增删改节点/连线的往返、参数保留、同名节点 UUID 精确指认、节点消失后命令静默 no-op、**连线 payload 编解码**、**批量删除的记账分类**、**撤销栈里不许有空命令**、**竖线存一次再打开还是竖的**、**老文件没有方向字段时退回默认** | Qt(不链 OpenCV) |
-| `pcb_operators` | 43 | **W6 那 8 张样本图**:baseline 零缺陷,7 张缺陷图各自命中自己那类、**没有判定依据时拒绝判定而不是报 PASS** | OpenCV |
+| `undo_redo` | 151 | 增删改节点/连线的往返、参数保留、同名节点 UUID 精确指认、节点消失后命令静默 no-op、**连线 payload 编解码**、**批量删除的记账分类**、**撤销栈里不许有空命令**、**竖线存一次再打开还是竖的**、**老文件没有方向字段时退回默认** | Qt(不链 OpenCV) |
+| `pcb_operators` | 215 | **W6 那 8 张样本图**:baseline 零缺陷,7 张缺陷图各自命中自己那类、**没有判定依据时拒绝判定而不是报 PASS** | OpenCV |
 | `dl_postprocess` | 49 | letterbox 补边/缩放、NMS 阈值、YOLOv5-v8 布局解析、退化输入不越界 | OpenCV |
 | `image_sources` | 20 | 帧循环契约(按 frame_index 真的换帧/换张)、坏输入不崩 | OpenCV |
 | `step_result` | 37 | 状态点判定边界、每步缓存用 UUID 做 key、**boundingRect 圈住端口圆**、**拖线时节点不跟着跑**、**endConnectionDrag 之后移动锁还锁着**、**release 时把跑偏的节点拉回来** | Qt |
 | `pin_and_recent` | 59 | 该拦的拦/不该拦的放行、**同一输入口接第二条线必须拦**(且提示要点名是哪两条 + 说清根因 + 给出路)、路径归一化、已删条目剔除 | QtCore |
 | `line_fit` | 24 | 长度/角度算术、**角度 0~180 的约定**、两点重合不报错、没图照样能算 | OpenCV |
 | `measurement` | 59 | 圆度阈值真在滤方块、周长 0 不除零、**量的是垂直距离不是直线距离**、A/B 重合退化、**夹角退化为 0 而不是假角度** | OpenCV |
-| `run_policy` | 71 | **帧数封顶 / 抽帧限频 / 取消+禁重入**、日志行数封顶、封顶后重绘代价不暴涨、**单步范围 = 拓扑序前缀(含自己)**、**范围找不到 target 要报错不能静默跑全链**、**被打乱的顺序必须被自检揪出来** | Qt |
+| `run_policy` | 132 | **帧数封顶 / 抽帧限频 / 取消+禁重入**、日志行数封顶、封顶后重绘代价不暴涨、**单步范围 = 拓扑序前缀(含自己)**、**范围找不到 target 要报错不能静默跑全链**、**被打乱的顺序必须被自检揪出来**、**多帧缓存:全帧留数字 / 撞上限要报出来 / 图没了不许拿别的帧顶替** | Qt |
 | `template_match` | 28 | **三种匹配方法的相似度方向统一**、模板比原图大、纯色模板、非法 method、阈值真的在控 | OpenCV |
 | `detection_operators` | 42 | **HSV 数组残缺不越界**、**两个实例的 mask 不互相覆盖**、面积阈值用 `>=`、**阈值填反要说人话而不是静默全判废** | OpenCV |
 | `operator_library` | 37 | **没有算子会从算子库里消失**、旧实现确实丢了 `dl_infer`、没见过的分类也现建分组、分组不重不乱序 | QtCore |
@@ -378,10 +378,102 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 修法是让 Run 引擎把 `inputs["node_uuid"]` 注入下去(见 `MainWindow::onRunClicked`),
 文件名变成 `w7_seg_<uuid前8位>_f<帧号>.png`。
 
+### 多帧缓存:数字全留,图不全留(图没了必须明说)
+
+以前每步结果只有一份,而且只写最后一帧:
+
+```cpp
+if (frame == totalFrames - 1 || totalFrames == 1) {
+    m_stepOutputs[n->uuid()] = out;
+}
+```
+
+30 帧里第 7 帧判 FAIL,数字只在日志里;右键回看只能看到末帧 ——
+**末帧恰好 PASS 时,"回看"这个动作反而掩盖了要查的那一帧。**
+
+中间产物的图上一轮已经按帧分开命名了(`artifact_path.h`),这一层
+(`step_frame_cache.h`)解决剩下两件事:数字变成"每节点 × 每帧"一份;
+某一帧的图被覆盖时**明说图没了**。
+
+**为什么数字全留、图不全留** —— 两个数都是实测的:
+
+| | 2000 帧 × 8 节点 | 每条 |
+|---|---|---|
+| 数字(QJsonObject) | 119 MB(put 全程 438 ms) | 7.6 KB / 27 us |
+| 图(PNG 落盘) | ≈480 MB | ≈27 KB/张 |
+
+119 MB 换 480 MB,内存比磁盘便宜 —— 所以数字全留。
+(这一节我第一版写的是"约 30~60 MB",拍脑袋估的,实测 119 MB,差 2~4 倍。
+估的数字写进注释里,下一个照着它做决定的人就被带偏了。)
+
+`kStepCacheMaxFrames` 现在是个**保险丝**:它等于 `kMaxRunFrames`,正常单次
+Run 打不到;哪天帧数上限调高,内存不会无声地涨,而是明确丢最早的帧、
+并且调用方**被要求把丢弃这件事打进日志**(返回被丢帧数而不是 `void`,
+就是为了让调用方没法装作没看见)。
+
+**"图没了"为什么必须判据可测** —— 最危险的不是图没了,是**假装图还在**:
+
+- `renderOutputToResultPanel` 的 fallback 分支拿工具栏那张原图兜底。
+  工具栏是用户手填的静态图,和任何一帧都没有关系 —— 拿它配第 7 帧的数字,
+  屏幕上是一张"看起来很正常"的图。
+- 缓存里存一个 `imageAvailable` 标志。文件在运行期间被删(用户清 `images/`、
+  换工程、磁盘满)标志不会变,于是继续显示一张早就没了的图,或者反过来。
+
+所以判据是**每次问的时候去看磁盘**,不是一个存下来的标志:
+
+```cpp
+FrameImageState imageState(const QString& nodeId, int frameIndex,
+                           const ExistsFn& exists) const;   // 生产传 &w7::fileExists
+```
+
+`exists` 是注入进来的,单测传一个假的就能造出"文件已删"的世界,
+而判据和事实之间没有缓存层。
+
+#### 这层测试测不到什么(变异跑出来的,不是推测)
+
+跑了 4 次变异,前 3 次被杀,**第 4 次活了** —— 而第 4 次恰好就是这个改动
+本身要修的那个 bug:
+
+| # | 改法 | 结果 |
+|---|---|---|
+| M4 | 把 `put()` 调用重新包回 `if (frame == totalFrames - 1 \|\| totalFrames == 1)`(改回改动前的样子) | **12/12 全绿,活了** |
+
+原因很直白:`step_frame_cache.h` 的断言测的是**这个类的行为**,而
+"主窗口每帧都调一次 `put`"是**接线**,它在 `mainwindow.cpp` 里 ——
+而 `mainwindow.cpp` 根本不在任何测试目标里(它要真窗口 + 全部算子,
+无头构造不了)。
+
+现在的能力边界:
+
+- ✓ 判据对不对、保留策略对不对、文案说不说 —— 测到了
+- △ 主窗口有没有真的每帧都喂进来 —— 只由一条**源码级 lint** 兜着
+  (`test_mainwindow_records_every_frame`)。它能杀掉 M4,但换个等价写法就
+  看不见 —— **它是 lint 不是行为测试,别把它当成"测过了"**
+- ✗ 主窗口真跑一遍之后缓存里有什么 —— 没测到,也测不了
+
+写这一段是因为:不写下来,下一个人会以为"132 条断言全绿"就等于
+"多帧缓存这层没问题"。它不是。它等于"这个类没问题,接线只被一条 lint 看着"。
+这两句话的差别,就是出事故时的差别。
+
+> 顺带记一个被这条 lint 逮到的自坑:它第一版搜 `totalFrames - 1`,
+> 结果匹配到了**我自己写的、解释这个 bug 为什么被删掉的注释** ——
+> 一条会对着自己的文档叫的守卫,迟早被人删掉。现在搜索前先
+> `stripLineComments()`(而且这个剥离器要认字符串字面量,
+> 否则 `D://path` 里的 `//` 会被当成注释起点)。
+
+> 还有一条:`add_test(NAME run_policy COMMAND w7_run_test)` 当时**没给
+> `WORKING_DIRECTORY`**,ctest 就在 `build/` 下跑,找不到 `mainwindow.cpp`;
+> 而守卫写成"打不开就 return",于是它变成一条**恒真的空断言** ——
+> 报绿,其实什么都没查。表现是直接跑 exe `pass=132 fail=0`,
+> 走 ctest 却是 `fail=1`。两处都改了:CMakeLists 补上
+> `WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}`,守卫改成 `check(false, ...)`
+> 并在消息里点名 CMake 那一侧,让配置缺口当场暴露而不是静默。
+
 ### 单步执行的 5 次变异(以及一个把我骗了的假红)
 
 单步执行是纯逻辑,所以适合一条一条地把实现改坏,看测试红不红。
-全部 5 个变异都被杀掉,基线 71 断言:
+全部 5 个变异都被杀掉,当时的基线是 `run_policy` 的 71 断言
+(该套件后来又加了多帧缓存的断言,现在是 132):
 
 | # | 改法(故意的 bug) | 结果 | 说明 |
 |---|---|---|---|
@@ -751,7 +843,7 @@ struct OpDefaults {
 单独跑一个:
 ```powershell
 $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
-# 期望末行:SUMMARY: pass=72 fail=0   RESULT=PASS(退出码 0)
+# 期望末行:SUMMARY: pass=151 fail=0   RESULT=PASS(退出码 0)
 ```
 
 > `pcb_operators` / `image_sources` 会在 `images/` 下写标注图和临时素材,
@@ -795,7 +887,12 @@ $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
    然后更新 `test_pcb_operators.cpp` 里那条特征测试
 3. **多前驱合并策略**:现在多个前驱的 output 是"后写覆盖"简单合并,
    改成按字段优先级或让用户在连线上标顺序
-4. **把帧循环的结果也缓存下来**:现在只留最后一帧,想看第 7 帧得重跑
+4. ~~**把帧循环的结果也缓存下来**~~ **已做**(`step_frame_cache.h`):
+   数字全帧留、图只留最近 N 帧、图没了明说不顶替。
+   剩下的一半:**帧选择器 UI** —— 右键回看目前还固定看最后一帧,
+   数字虽然都在缓存里,但用户还没法选第 7 帧去看。
+   顺带一个已知的债:因为 `mainwindow.cpp` 没有任何测试目标,
+   "主窗口每帧都喂进来"这条**接线**只有一条源码级 lint 看着。
 5. **子图 / 分支复用**:同一个子流水线被两条支路引用(需要拓扑排序支持)
 
 ## 🎓 回顾:这个项目真正教我的东西

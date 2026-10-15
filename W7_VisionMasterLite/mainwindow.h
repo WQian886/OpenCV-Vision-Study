@@ -19,6 +19,7 @@
 #include "commands/command.h"
 #include "recent_files.h"
 #include "run_policy.h"
+#include "step_frame_cache.h"
 
 class QTextEdit;
 class QPlainTextEdit;
@@ -112,6 +113,14 @@ private:
     //
     // 现在 Run 时把每个节点的 output 都缓存下来(按 QUuid 索引,
     // 不用裸指针:节点删了重建会换地址),右键节点即可回看。
+    //
+    // 再往前一版改成"每节点一份",但仍然只写**最后一帧**
+    // (`frame == totalFrames - 1` 才进缓存)。于是 30 帧里第 7 帧判 FAIL,
+    // 右键回看只能看到末帧 —— 末帧 PASS 时,回看这个动作反而
+    // **掩盖**了要查的那一帧。
+    //
+    // 现在按"节点 × 帧"存(见 step_frame_cache.h)。改动之后右键默认
+    // 看的仍然是最后一帧,所以用户看到的内容不变;帧选择器是下一轮的事。
     // ============================================================
 
     // 把一个 output 渲染到结果区(挑合适的图 + 写详情文本)
@@ -119,7 +128,9 @@ private:
     // 两处各写一份的话,加一种新输出类型就必然只改一处,两处会跑偏。
     bool renderOutputToResultPanel(const QJsonObject& out,
                                    const QString& fallbackPath,
-                                   const QString& title);
+                                   const QString& title,
+                                   w7::FrameImageState imgState =
+                                       w7::FrameImageState::Available);
     // 把 output 的全部字段按 类型 = 值 写进详情框
     void showStepDetail(const QString& title, const QJsonObject& out);
     // 节点被删 / 流水线被改动 → 缓存失效
@@ -177,12 +188,14 @@ private:
     QPlainTextEdit*  m_stepDetail  = nullptr;   // === 每步结果查看:该步全部输出字段 ===
     QLineEdit*       m_imagePathEdit = nullptr;
 
-    // === 每步结果查看:上次 Run 每个节点的输出 ===
-    // 用 QUuid 索引而不是 OperatorNode* —— 节点删掉重建后地址会变,
-    // 裸指针做 key 会留下指向已释放内存的 key,清缓存时直接崩。
-    QHash<QUuid, QJsonObject> m_stepOutputs;
-    QHash<QUuid, QString>     m_stepLabels;   // "第 3 步 · 颜色分割"
-    int m_stepCacheFrame = 0;                // 这些结果来自第几帧(多帧时要说清)
+    // === 每步结果查看:上次 Run 每个节点 × 每一帧的输出 ===
+    // 底层结构(step_frame_cache.h)按 uuid 索引而不是 OperatorNode* ——
+    // 节点删掉重建后地址会变,裸指针做 key 会留下指向已释放内存的 key,
+    // 清缓存时直接崩。
+    //
+    // 数字全帧留,图只留最近若干帧:被覆盖的帧仍然能看数字,但界面
+    // **必须明说图没了**(见 renderOutputToResultPanel 的 imgState)。
+    w7::StepFrameCache m_stepCache;
 
     // === M6: 工具栏 Undo / Redo 按钮 ===
     QAction* m_undoAction = nullptr;

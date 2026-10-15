@@ -26,11 +26,13 @@
 #include <QRegularExpression>
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QFile>
 #include <windows.h>
 
 #include "run_policy.h"
 #include "step_scope.h"
 #include "artifact_path.h"
+#include "step_frame_cache.h"
 
 using namespace w7;
 
@@ -588,6 +590,346 @@ static void test_artifact_keep_window() {
     check(!artifactFrameIsKept(0, 0), "窗口为 0 -> 连帧 0 也不留");
 }
 
+// ============================================================
+// === 多帧缓存 (step_frame_cache.h)
+// ============================================================
+// 这一层最贵的不是"存多份",而是**被覆盖的那一帧不许拿别的帧顶替**。
+// 顶替了不会崩、不会报错、界面还挺好看的 —— 用户只会得出一个错的结论。
+// 所以下面的用例重心不在"能不能存下来",而在"状态判得对不对、
+// 以及丢掉的时候说不说"。
+// ============================================================
+
+// 造一条输出。只给几个典型字段,够用来测主图路径的优先级。
+static QJsonObject fakeOutput(const QString& imagePath, const QString& maskPath = {}) {
+    QJsonObject o;
+    o["result"] = "PASS";
+    o["score"]  = 0.87;
+    if (!imagePath.isEmpty()) o["image_path"] = imagePath;
+    if (!maskPath.isEmpty())  o["mask_path"]  = maskPath;
+    return o;
+}
+
+// ------------------------------------------------------------
+// 用例:每帧一份,而不是只留最后一帧
+//
+// 这是这次改动的**全部意义**。改动前 30 帧里第 7 帧判 FAIL,
+// 右键回看只能看到末帧 —— 而末帧 PASS 时,回看反而掩盖了要找的那一帧。
+// ------------------------------------------------------------
+static void test_cache_keeps_every_frame() {
+    beginCase("多帧缓存:每个帧号各存一份");
+
+    StepFrameCache cache;
+    const QString node = "aaaaaaaa-0000-0000-0000-000000000001";
+    for (int f = 0; f < 12; ++f) {
+        QJsonObject o = fakeOutput(QString("images/src_f%1.png").arg(f));
+        o["count"] = 10 + f;   // 每帧一个能认出来的数
+        cache.put(node, f, o, QString("第 3 步 · 颜色分割"));
+    }
+
+    check(cache.hasNode(node), "缓存里有这个节点");
+    check(cache.framesOf(node).size() == 12, "12 帧存了 12 份(不是 1 份)");
+
+    // 逐帧取值:每一帧的数必须是她自己那一帧的,不能串。
+    // 这条是"回看不再掩盖问题"的判据。
+    bool allDistinct = true;
+    for (int f = 0; f < 12; ++f) {
+        if (cache.at(node, f).output.value("count").toInt() != 10 + f) allDistinct = false;
+    }
+    check(allDistinct, "逐帧取值,每帧拿到的是自己那一帧的数(没串)");
+
+    // 帧号必须升序 —— 帧选择器(下一轮做)按这个列表画下拉框
+    const QList<int> ks = cache.framesOf(node);
+    bool ascending = true;
+    for (int i = 1; i < ks.size(); ++i) if (ks[i] <= ks[i-1]) ascending = false;
+    check(ascending, "帧号列表升序(帧选择器要靠它)");
+
+    // 默认回看仍是最后一帧:这次改动**不改变**用户看到的默认内容,
+    // 只是底下的数据从一份变成 N 份。所以 latestFrameOf 必须还是 11。
+    check(cache.latestFrameOf(node) == 11, "latestFrameOf = 11(默认仍看最后一帧)");
+    check(cache.latestFrame() == 11, "全局 latestFrame = 11");
+
+    // 没缓存过的帧号:at() 返回空,hasFrame() 报 false。
+    // 两者必须能区分 —— "没有这一帧"和"这一帧确实没有输出"是两回事,
+    // 混起来的话界面会给一个空的详情框,用户以为是算子没跑。
+    check(!cache.hasFrame(node, 99), "没存过的帧号 hasFrame=false");
+    check(cache.at(node, 99).output.isEmpty(), "没存过的帧号 at() 返回空记录");
+    check(cache.latestFrameOf("不存在的节点") == -1, "陌生节点 latestFrameOf=-1");
+}
+
+// ------------------------------------------------------------
+// 用例:图没了必须判出来,而且**不许**由别的路径顶替
+//
+// 注入假的 exists 谓词来构造"文件已被覆盖"的世界 —— 真去建文件再删
+// 也能造,但那样测的就变成了文件系统,而不是判据本身。
+// ------------------------------------------------------------
+static void test_cache_reports_missing_image() {
+    beginCase("多帧缓存:图被覆盖时要判出来,不能顶替");
+
+    StepFrameCache cache;
+    const QString node = "aaaaaaaa-0000-0000-0000-000000000002";
+
+    // 三种帧各来一份:
+    //   0 -> 有图,且文件在
+    //   1 -> 有图,但文件已经不在(被后来的运行覆盖了)
+    //   2 -> 纯数值算子,本来就不产图
+    cache.put(node, 0, fakeOutput("images/w7_line_fit_x_f0000.png"),
+              QString("第 3 步 · 直线拟合"));
+    cache.put(node, 1, fakeOutput("images/w7_line_fit_x_f0001.png"),
+              QString("第 3 步 · 直线拟合"));
+    cache.put(node, 2, fakeOutput(QString()), QString("第 4 步 · 计数"));
+
+    // 只有 f0000 还在(模拟"跑完下一批,老文件被同名覆盖掉了")
+    const ExistsFn onDisk = [](const QString& p) {
+        return p.endsWith("_f0000.png");
+    };
+
+    check(cache.imageState(node, 0, onDisk) == FrameImageState::Available,
+          "帧 0:文件在 -> Available");
+    check(cache.imageState(node, 1, onDisk) == FrameImageState::Dropped,
+          "帧 1:文件不在 -> Dropped(不许显示别的帧的图)");
+    check(cache.imageState(node, 2, onDisk) == FrameImageState::NoImage,
+          "帧 2:本来就不产图 -> NoImage(不是 Dropped)");
+    check(cache.imageState(node, 99, onDisk) == FrameImageState::Dropped,
+          "帧 99:数字都没了 -> Dropped");
+
+    // 三种状态给用户看的话必须**不一样**,尤其 Dropped 那句
+    // 必须明说"没有配图"。写成空串 = 界面什么都不说 =
+    // 用户以为图还在。Available 才是空串(有图,无需解释)。
+    const QString sAvail = StepFrameCache::describeImageState(
+        FrameImageState::Available, 0);
+    const QString sNoImg = StepFrameCache::describeImageState(
+        FrameImageState::NoImage, 2);
+    const QString sDrop  = StepFrameCache::describeImageState(
+        FrameImageState::Dropped, 1);
+
+    check(sAvail.isEmpty(), "Available 不加任何解释句");
+    check(!sNoImg.isEmpty() && !sDrop.isEmpty(), "NoImage / Dropped 都有话说");
+    check(sNoImg != sDrop, "NoImage 和 Dropped 的文案不同(不能共用一句)");
+    check(sDrop.contains("2") && sDrop.contains("覆盖"),
+          QString("Dropped 文案说清是第 2 帧、且说了原因: %1").arg(sDrop));
+    check(!sNoImg.contains("覆盖"), "NoImage 不该说'被覆盖' —— 它压根没产过图");
+
+    // 帧号文案走重载传进来,而不是让调用方拿正则去改字符串。
+    // 第二版实现就是在 mainwindow 里 .replace("^第 1 帧", "这一帧") ——
+    // 那种改法一改文案就静默失配,而失配的表现是"看起来正常,
+    // 只是帧号又对不上了"。所以这条钉住文案是**原样**用进去的。
+    const QString sDropCustom = StepFrameCache::describeImageState(
+        FrameImageState::Dropped, QStringLiteral("这一帧"));
+    check(sDropCustom.contains("这一帧") && !sDropCustom.contains("第 1 帧"),
+          QString("文案原样传入,不被改写: %1").arg(sDropCustom));
+
+    // 判据必须**每次现场问**,不能是 put 时存下来的标志。
+    // 这一条专门钉住:如果哪天改成 put 时算一次存进 StepFrameResult,
+    // 下面这两行会立刻分出胜负(第一次查时文件还在,第二次被删)。
+    check(cache.imageState(node, 0, onDisk) == FrameImageState::Available,
+          "第一次查:帧 0 文件在");
+    const ExistsFn gone = [](const QString&) { return false; };
+    check(cache.imageState(node, 0, gone) == FrameImageState::Dropped,
+          "同一帧换个 exists 就报 Dropped -> 判据是现场的,不是缓存的");
+}
+
+// ------------------------------------------------------------
+// 用例:主图路径的优先级
+//
+// 和 renderOutputToResultPanel 的显示顺序必须一致。两份各写一份的话,
+// 会出现"判据说 A 图在、界面显示 B 图",而 B 可能已经被覆盖了 ——
+// 于是图没了却不报。这正是要防的方向。
+// ------------------------------------------------------------
+static void test_primary_image_path_priority() {
+    beginCase("多帧缓存:主图路径优先级");
+
+    check(stepPrimaryImagePath(fakeOutput("images/x.png", "images/m.png"))
+              == "images/m.png",
+          "mask_path 优先于 image_path(颜色分割)");
+
+    QJsonObject marked;
+    marked["marked_path"] = "images/marked.png";
+    marked["image_path"]  = "images/raw.png";
+    check(stepPrimaryImagePath(marked) == "images/marked.png",
+          "marked_path 优先于 image_path(pcb/dl 的标注图)");
+
+    check(stepPrimaryImagePath(fakeOutput("images/x.png")) == "images/x.png",
+          "只有 image_path 时用它");
+    check(stepPrimaryImagePath(QJsonObject()).isEmpty(),
+          "什么都没有 -> 空串(= NoImage,不是 Available)");
+}
+
+// ------------------------------------------------------------
+// 用例:上限是保险丝,触发了必须报
+//
+// kStepCacheMaxFrames == kMaxRunFrames,正常单次 Run 打不到。
+// 这里用小的 maxFrames 强制触发,验的是"触发了会怎样",
+// 不是"默认上限是多少"。
+// ------------------------------------------------------------
+static void test_cache_frame_cap_reports() {
+    beginCase("多帧缓存:撞上限丢最早的帧,而且要报出来");
+
+    StepFrameCache cache;
+    const QString node = "aaaaaaaa-0000-0000-0000-000000000003";
+
+    int evicted = 0;
+    for (int f = 0; f < 5; ++f) {
+        evicted += cache.put(node, f, fakeOutput(QString("images/x_f%1.png").arg(f)),
+                             QString("第 3 步"), /*maxFrames=*/3);
+    }
+    check(evicted == 2, QString("5 帧进 3 帧的窗口 -> 丢了 2 帧(实际 %1)").arg(evicted));
+    check(cache.evictedCount() == 2, "evictedCount 累计=2(调用方据此打日志)");
+    check(cache.framesOf(node).size() == 3, "缓存里剩 3 帧");
+
+    // 丢的是**最早**的两帧,不是最新 —— Run 是流式的,
+    // 用户早就看过前面那些帧的日志了;而且丢最新会让末帧的回看变空。
+    check(!cache.hasFrame(node, 0), "帧 0 已被丢弃");
+    check(!cache.hasFrame(node, 1), "帧 1 已被丢弃");
+    check(cache.hasFrame(node, 4),  "帧 4(最后一帧)还在");
+
+    // 重复写同一帧**不算**新增:重跑同一帧不该把上限撑爆。
+    // 源越界时会一直停在最后一张,没这条的话一个 3 帧窗口会被
+    // 最后一帧自己撑掉另外两帧。
+    StepFrameCache c2;
+    int e2 = 0;
+    for (int i = 0; i < 10; ++i) {
+        e2 += c2.put(node, 2, fakeOutput("images/x.png"), QString("第 3 步"), 3);
+    }
+    check(e2 == 0, "同一帧重复写 10 次不触发上限");
+    check(c2.framesOf(node).size() == 1, "重复写同一帧只占 1 个位置");
+
+    // 上限 0:什么都不留,而且必须报出来(不能装作成功)。
+    // 这里最容易写出"看着在验证其实没验证"的断言 ——
+    // 第一版写的是 size()==1 || isEmpty(),两个都过,等于没验。
+    StepFrameCache c3;
+    const int e3 = c3.put(node, 0, fakeOutput("images/x.png"), QString("第 3 步"), 0);
+    check(e3 == 1, "上限 0 -> 这一次就是丢弃,put 返回 1");
+    check(!c3.hasFrame(node, 0), "上限 0 -> 帧 0 没存进去");
+    check(c3.framesOf(node).isEmpty(), "上限 0 -> 这个节点一条都没留下");
+
+    // 非法输入直接拒掉,不留半截
+    StepFrameCache c4;
+    check(c4.put(node, -1, fakeOutput("images/x.png"), QString()) == 0,
+          "负帧号被拒,且不计入丢弃");
+    check(c4.put(QString(), 0, fakeOutput("images/x.png"), QString()) == 0,
+          "空节点 id 被拒");
+    check(c4.nodeCount() == 0, "被拒的两次没有建出节点条目");
+
+    // 两个上限必须绑定:帧循环最多跑 kMaxRunFrames 帧,
+    // 缓存留 kStepCacheMaxFrames 帧。后者 >= 前者时上限打不到。
+    // 两个数分开写却不绑定,迟早有人只改其中一个 —— 那时
+    // 单次 Run 就会静默丢帧,而界面什么都不说。
+    check(kStepCacheMaxFrames >= kMaxRunFrames,
+          QString("缓存上限 %1 >= 帧循环上限 %2(否则单次 Run 就撞上限)")
+              .arg(kStepCacheMaxFrames).arg(kMaxRunFrames));
+
+    // 清缓存要把累计丢弃数一起归零 —— 否则下一次 Run 会
+    // 报一个属于上一次的丢弃数
+    cache.clear();
+    check(cache.evictedCount() == 0, "clear() 后 evictedCount 归零");
+    check(cache.nodeCount() == 0, "clear() 后节点条目清空");
+}
+
+// ============================================================
+// 用例:mainwindow 每帧都要喂缓存(源码级守卫)
+//
+// ------------------------------------------------------------
+// 先说清楚这条测的是什么、以及**不**是什么
+// ------------------------------------------------------------
+// 变异 M4 把 mainwindow.cpp 里的 m_stepCache.put() 重新包回
+//     if (frame == totalFrames - 1 || totalFrames == 1)
+// ——也就是把代码改回这次改动之前的样子。跑完整套:**12/12 全绿**。
+//
+// 原因:mainwindow.cpp 不在任何测试目标里(它要真窗口 + 全部算子,
+// 无头构造不了),所以上面 128 条断言一条都没碰到这段代码。
+// 这类"改回去也没人发现"正是本项目记过的第 12 条教训
+// (见 memory/feedback-verification-doesnt-verify.md 第 12 条)。
+//
+// 这条守卫是唯一能机械拦住它的办法,但它的能力**很有限**,别夸大:
+//   ✓ 认得 "totalFrames - 1" 这种 last-frame-only 的写法
+//   ✗ 换成 latestFrameOf(...) 提前 return —— 它就看不见了
+//   ✗ 换成任何别的等价写法 —— 同样看不见
+//
+// 所以它是一条 **lint**,不是行为测试。放进测试套件是因为
+// 放进来至少比不放强,并且能让人在改坏的那天立刻看见 ——
+// 但它**不能**被当作"接线已经验证过了"的证据。
+// 想真正验证接线,得能无头构造 MainWindow,那是另一件事。
+// ------------------------------------------------------------
+// 去掉 C++ 行注释,但**保留字符串字面量里的内容**。
+//
+// 为什么必须去注释:守卫要找的 `totalFrames - 1` 这行,恰好
+// 也被我写在了"这里以前有个 last-frame-only 判断"的说明注释里
+// (记录为什么改是必要的)。不去注释的话守卫第一天就误报 ——
+// 而一个对自身文档误报的守卫,下一个人只会把它删掉。
+//
+// 为什么要区分字符串:src 里可能有 "D://xxx" 这种路径,
+// 按行 naively 地切 // 会把后面真代码一起切掉。
+static QString stripLineComments(const QString& src) {
+    QString out;
+    out.reserve(src.size());
+    bool inStr = false;
+    for (int i = 0; i < src.size(); ++i) {
+        const QChar c = src[i];
+        if (inStr) {
+            if (c == QLatin1Char('\\')) {           // 转义,跳过下一个字符
+                out += c;
+                if (i + 1 < src.size()) out += src[++i];
+                continue;
+            }
+            if (c == QLatin1Char('"')) inStr = false;
+            out += c;
+            continue;
+        }
+        if (c == QLatin1Char('"')) { inStr = true; out += c; continue; }
+        if (c == QLatin1Char('/') && i + 1 < src.size() &&
+            src[i + 1] == QLatin1Char('/')) {
+            while (i < src.size() && src[i] != QLatin1Char('\n')) ++i;
+            if (i < src.size()) out += QLatin1Char('\n');
+            continue;
+        }
+        out += c;
+    }
+    return out;
+}
+
+static void test_mainwindow_records_every_frame() {
+    beginCase("源码守卫:mainwindow 不能退回只缓存最后一帧");
+
+    QFile f(QStringLiteral("mainwindow.cpp"));
+    const bool opened = f.open(QIODevice::ReadOnly | QIODevice::Text);
+    // 打不开文件**必须报红**,不能 return 了事。
+    // 第一版写的是 "if (!opened) return;" —— 而 CMake 里
+    // add_test(run_policy) 没给 WORKING_DIRECTORY,ctest 在 build/ 下跑,
+    // 找不到 mainwindow.cpp,于是这条守卫每次都提前 return,
+    // 一条断言都没跑,测试照样全绿。
+    //
+    // 那是"恒真的空断言":比没有守卫更坏,因为它让人以为守卫在生效。
+    // 所以这里 check 的是 false 分支,让配置漏了 WORKING_DIRECTORY
+    // 立刻暴露。
+    check(opened,
+          "能打开 mainwindow.cpp —— 打不开说明 run_policy 的 "
+          "add_test 缺 WORKING_DIRECTORY(见 CMakeLists.txt 里的说明),"
+          "这条源码守卫会变成恒真的空断言");
+    if (!opened) return;
+    const QString src = stripLineComments(QString::fromUtf8(f.readAll()));
+    f.close();
+
+    // 锚点:多帧缓存真正落地的那次 put 调用
+    const int putAt = src.indexOf(QStringLiteral("m_stepCache.put("));
+    check(putAt >= 0, "mainwindow.cpp 里有 m_stepCache.put() 调用");
+
+    // 老 bug 的判据。改动前这行就在 put 调用正上方,
+    // 把每一次 put 都关在"只留最后一帧"的条件里。
+    const int stale = src.indexOf(QStringLiteral("totalFrames - 1"));
+    check(stale < 0,
+          QString("mainwindow.cpp 代码里没有 'totalFrames - 1' 这个 "
+                  "last-frame-only 判据(它会把 put 关成只缓存最后一帧 —— "
+                  "实测把它加回去,12 个套件全绿,没有任何行为测试会发现)"
+                  "(已剔除注释,所以本文件里记录这段历史的那段说明不会误报)"));
+
+    // 反向自查:不能把老判据整个字符串换成别的写法后,
+    // 这条守卫就变成"查一个没人写的字符串"—— 那种断言恒真,
+    // 比没有还坏。所以这里确认锚点本身还在,证明守卫没落空。
+    check(src.contains(QStringLiteral("m_stepCache.imageState(")),
+          "onViewStepResultRequested 里有 imageState() 调用"
+          "(守卫本身没落空的反向自查)");
+}
+
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     SetConsoleOutputCP(CP_UTF8);
@@ -611,6 +953,12 @@ int main(int argc, char* argv[]) {
     test_artifact_path_separates_node_and_frame();
     test_artifact_path_falls_back_without_uuid();
     test_artifact_keep_window();
+
+    test_cache_keeps_every_frame();
+    test_cache_reports_missing_image();
+    test_primary_image_path_priority();
+    test_cache_frame_cap_reports();
+    test_mainwindow_records_every_frame();
 
     qInfo().noquote() << QString("\n========================================");
     qInfo().noquote() << QString("pass=%1  fail=%2").arg(g_pass).arg(g_fail);

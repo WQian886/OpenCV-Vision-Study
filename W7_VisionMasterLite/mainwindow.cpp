@@ -586,8 +586,7 @@ void MainWindow::updateParamPanelForNode(w7::OperatorNode* node) {
                     // 不清的话用户调完阈值右键回看,看到的还是调参之前的
                     // output,还会以为"改了没生效"。宁可看不到,别给旧的。
                     const QUuid id = m_currentParamNode->uuid();
-                    m_stepOutputs.remove(id);
-                    m_stepLabels.remove(id);
+                    m_stepCache.removeNode(id.toString(QUuid::WithoutBraces));
                     m_currentParamNode->setHasCachedResult(false);
                     appendLog(tr("[参数应用] %1 → %2 个字段")
                         .arg(m_currentParamNode->opName())
@@ -1058,18 +1057,34 @@ void MainWindow::runPipeline(OperatorNode* target) {
         if (out.contains("result")) frameResult = out;
 
         // ============================================================
-        // === 每步结果查看:把这一步的输出留下 ===
+        // === 每步结果查看:把这一步**这一帧**的输出留下 ===
         //
-        // 只留最后一帧。多帧时中间帧的结果没有保留价值 ——
-        // 用户右键要回答的是"这条流水线现在为什么这么判",
-        // 而末帧就是流水线当前的产出;m_stepCacheFrame 记着来自第几帧。
+        // 以前这里有个 `if (frame == totalFrames - 1 || totalFrames == 1)`,
+        // 只写最后一帧。理由写的是"中间帧的结果没有保留价值"——
+        // 而真实理由是"没想过要怎么处理",因为当时根本没有多帧回看这回事。
+        //
+        // 代价很具体:30 帧里第 7 帧判 FAIL,右键回看只能看到末帧。
+        // 末帧 PASS 时用户看到一张绿图,**回看这个动作反而掩盖了
+        // 要查的那一帧** —— 一个专门用来查错的入口,成了掩盖错误的入口。
+        //
+        // 现在每帧都存(数字很便宜,见 step_frame_cache.h 开头实测)。
+        // setHasCachedResult 每帧都置位是刻意的:哪怕单步执行只跑到
+        // 前 3 步,那 3 步在**每一帧**上都有缓存,右键都能回看。
         // ============================================================
-        if (frame == totalFrames - 1 || totalFrames == 1) {
-            m_stepOutputs[n->uuid()] = out;
-            m_stepLabels[n->uuid()]  = tr("第 %1 步 · %2")
-                                        .arg(step + 1).arg(n->displayName());
-            n->setHasCachedResult(true);
+        {
+            const QString id = n->uuid().toString(QUuid::WithoutBraces);
+            const int dropped = m_stepCache.put(
+                id, frame, out,
+                tr("第 %1 步 · %2").arg(step + 1).arg(n->displayName()));
+            // 撞上限必须报出来 —— 静默丢帧的话,界面一切正常,
+            // 只是用户要查的那一帧的数字**不在了**,而他不知道。
+            if (dropped > 0) {
+                appendLog(tr("  ⚠️ 每步结果缓存已满(%1 帧/节点),丢弃了最早的 %2 帧"
+                             "的数字 —— 这些帧还能看日志,但回看不到了")
+                    .arg(w7::kStepCacheMaxFrames).arg(m_stepCache.evictedCount()));
+            }
         }
+        n->setHasCachedResult(true);
 
         // 画布状态点:有 error 是橙,result 是 FAIL/OK 是红/绿,
         // 中间算子(分割/计数)没有 result 字段,只要没 error 就是绿的
@@ -1131,8 +1146,11 @@ void MainWindow::runPipeline(OperatorNode* target) {
         }
     }   // ← 帧循环结束
 
-    // 记下缓存来自第几帧,右键回看时标题里要能说清
-    m_stepCacheFrame = frameDone;
+    // 缓存里记着每一帧是哪一帧(见 m_stepCache),不需要额外的
+    // "来自第几帧"计数器。以前那个计数器还有一个隐患:
+    // 存的是 frameDone(跑完的帧数),不是"这些结果来自第几帧" ——
+    // 中途 Stop 时两者差一帧,标题会写"第 7 帧"而缓存里其实是第 6 帧。
+    // 现在标题的帧号直接来自缓存的 key,不存在这种对不上的可能。
 
     // === 多帧汇总 ===
     // 只看最后一帧的 PASS/FAIL 是不够的:抽检 30 帧里 1 帧有问题,
@@ -1200,33 +1218,46 @@ void MainWindow::runPipeline(OperatorNode* target) {
 // ============================================================
 
 void MainWindow::clearStepCache() {
-    m_stepOutputs.clear();
-    m_stepLabels.clear();
-    m_stepCacheFrame = 0;
+    m_stepCache.clear();
 }
 
 void MainWindow::onViewStepResultRequested(OperatorNode* node) {
     if (!node) return;
-    const QUuid id = node->uuid();
-    if (!m_stepOutputs.contains(id)) {
+    const QString id = node->uuid().toString(QUuid::WithoutBraces);
+    if (!m_stepCache.hasNode(id)) {
         // 理论上右键菜单已经置灰了,这里再兜一次 ——
         // 菜单和信号之间隔着事件循环,中间状态可能已经变了
         appendLog(tr("[每步] %1 没有缓存结果,请先 Run").arg(node->displayName()));
         return;
     }
-    QString title = m_stepLabels.value(id, node->displayName());
-    // 多帧时必须标出这是第几帧的结果,否则用户会以为是第一帧
-    if (m_stepCacheFrame > 1) {
-        title += tr("  (第 %1/%2 帧)").arg(m_stepCacheFrame);
+    // 回看默认仍是**最后一帧** —— 帧选择器是下一轮的事。
+    // 这次改动不改变用户右键看到的内容,只是底下的数据从一份变成 N 份。
+    const int frame = m_stepCache.latestFrameOf(id);
+    const w7::StepFrameResult rec = m_stepCache.at(id, frame);
+
+    QString title = rec.label.isEmpty() ? node->displayName() : rec.label;
+    const int totalCached = m_stepCache.latestFrame() + 1;
+    if (totalCached > 1) {
+        title += tr("  (第 %1/%2 帧)").arg(frame + 1).arg(totalCached);
     }
-    renderOutputToResultPanel(m_stepOutputs.value(id), m_imagePathEdit->text(), title);
+
+    // 图在不在**现场查磁盘**,不用 put 时存下来的标志:
+    // 标志会在文件被人删掉/被下一轮覆盖之后继续说"有",
+    // 于是界面显示一张早就没了的图。
+    const w7::FrameImageState st =
+        m_stepCache.imageState(id, frame, &w7::fileExists);
+
+    renderOutputToResultPanel(rec.output, m_imagePathEdit->text(), title, st);
     appendLog(tr("[每步] 查看 %1").arg(title));
+    const QString note = w7::StepFrameCache::describeImageState(st, frame);
+    if (!note.isEmpty()) appendLog(tr("[每步] %1").arg(note));
 }
 
 // 把 output 渲染到结果区:挑一张最能说明问题的图 + 写全部字段
 bool MainWindow::renderOutputToResultPanel(const QJsonObject& out,
                                            const QString& fallbackPath,
-                                           const QString& title) {
+                                           const QString& title,
+                                           w7::FrameImageState imgState) {
     m_resultTitle->setText(title);
     showStepDetail(title, out);
 
@@ -1236,6 +1267,34 @@ bool MainWindow::renderOutputToResultPanel(const QJsonObject& out,
     if (out.contains("error")) {
         m_resultImg->setPixmap(QPixmap());
         m_resultImg->setText(tr("⚠️ 该步执行失败\n\n%1").arg(out.value("error").toString()));
+        return false;
+    }
+
+    // ============================================================
+    // === 图没了:只给数字,并把这件事说出来 ===
+    //
+    // 这一段是"不撒谎"的最后一道闸。它必须**在任何取图逻辑之前**,
+    // 因为下面每一条取图路径都有机会拿到一张"看起来很正常但不是
+    // 这一帧"的图:
+    //
+    //   · 分支 3/4 的 fallback 是工具栏那张原图 —— 用户手填的静态图,
+    //     和任何一帧都没有关系。拿它配这一帧的数字,屏幕上是一张
+    //     正常图,数字也正常,唯独**对应关系是假的**。
+    //   · 中间产物的文件名按"算子+节点+帧"生成(见 artifact_path.h),
+    //     但跑完下一批之后同名文件会被覆盖 —— 路径还在,内容换了帧。
+    //
+    // 两种情况都不会崩、不报错、界面还挺好看。用户唯一的线索就是
+    // "这张图怎么和我记得的不一样",而他多半会怀疑自己记错了。
+    //
+    // 所以这里宁可空着,并把原因写出来。用户看到"图没了"会去看日志;
+    // 看到一张别的帧的图,他只会得出一个错的结论。
+    // ============================================================
+    if (imgState == w7::FrameImageState::Dropped) {
+        m_resultImg->setPixmap(QPixmap());
+        // 这里用"这一帧"而不是具体帧号:标题里已经写了第几帧,
+        // 图区再重复一遍反而挤。而 Dropped 那句的重点是"图没了"。
+        m_resultImg->setText(w7::StepFrameCache::describeImageState(
+            imgState, QStringLiteral("这一帧")));
         return false;
     }
 
@@ -1561,7 +1620,7 @@ void MainWindow::onNodeDeleteRequested(w7::OperatorNode* node) {
     // === 每步结果查看:顺手把这一步的缓存摘掉 ===
     // 不摘也不会有人点到(uuid 唯一,菜单走的是活节点),
     // 但留着就是个永远查不到的条目,工程反复删了几十次会攒不少。
-    m_stepOutputs.remove(id);
+    m_stepCache.removeNode(id.toString(QUuid::WithoutBraces));
 }
 
 // ============================================================
