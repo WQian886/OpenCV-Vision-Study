@@ -26,6 +26,7 @@ class QPlainTextEdit;
 class QLabel;
 class QMenu;
 class QPushButton;
+class QSpinBox;
 class QStackedWidget;
 class QLineEdit;
 class QSpinBox;
@@ -135,6 +136,40 @@ private:
     void showStepDetail(const QString& title, const QJsonObject& out);
     // 节点被删 / 流水线被改动 → 缓存失效
     void clearStepCache();
+
+    // ============================================================
+    // === 帧选择器 ===
+    //
+    // 右键 → 显示某一帧;标题条上的 [◀][spin][▶] → 在同一节点内翻帧。
+    // 两个入口走**同一个函数**,和"单步执行"用 runPipeline(target)
+    // 共用实现是同一个理由:两份各写一份,改一处就有一处不跟着改。
+    //
+    // 帧号用「spin 的序号」还是「真实帧号」,这里选了前者 ——
+    // 撞上限丢过帧之后缓存里的帧号是不连续的,直接拿帧号当 spin 值
+    // 会指向一个不存在的条目。所以 spin 走 framesOf() 的位置,
+    // 标题里显示的仍然是**真实帧号**。两者不一致只可能发生在真的
+    // 丢过帧的时候,而那时候缓存至少已经报过一次警。
+    // ============================================================
+    void showStepFrame(const QString& nodeId, int frameIndex);
+    // spin/按钮那一排的显示与可用状态(看最终结果时整排隐藏)
+    void updateFrameBar();
+
+    // 帧选择器控件
+    QWidget*    m_frameBar  = nullptr;
+    QSpinBox*   m_frameSpin = nullptr;
+    QPushButton* m_framePrev = nullptr;
+    QPushButton* m_frameNext = nullptr;
+    QPushButton* m_frameLast = nullptr;
+    // 现在结果区显示的是哪个节点的哪一帧(空 = 显示最终结果)
+    QString m_viewNodeId;
+    int     m_viewFrame = -1;
+
+    // 「图区上一次是用哪一份输出 + 哪个 fallbackPath + 哪种图状态画出来的」。
+    // 三样都一样就跳过重画。**比整个 out 而不是挑字段**,理由见
+    // renderOutputToResultPanel 里那个 description/pcb_defect_judge 的坑。
+    QJsonObject m_lastImgOut;
+    QString     m_lastImgFallback;
+    w7::FrameImageState m_lastImgState = w7::FrameImageState::Available;
 
     // 工具函数
     void appendLog(const QString& msg);

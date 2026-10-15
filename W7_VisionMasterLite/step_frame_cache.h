@@ -261,6 +261,20 @@ public:
         return ks.isEmpty() ? -1 : ks.last();
     }
 
+    // --------------------------------------------------------
+    // 要不要显示帧选择器
+    //
+    // 只有一帧时藏掉:两个方向的"首尾"按钮都按不动,spin 只有一个值,
+    // 留着它只会让人以为右边那几个按钮坏了。
+    //
+    // 这条判据放在**这里**而不是 updateFrameBar() 里,是因为它纯逻辑、
+    // 无头可测,而 updateFrameBar 动的是 widget —— 头文件里不动 widget
+    // 那个约定(见本文件开头的说明)就是为这种时候准备的。
+    // --------------------------------------------------------
+    bool showFrameSelector(const QString& nodeId) const {
+        return framesOf(nodeId).size() > 1;
+    }
+
     // 全部节点里最大的帧号(没有则 -1)—— 用来在标题里说"共 M 帧"
     int latestFrame() const {
         int best = -1;

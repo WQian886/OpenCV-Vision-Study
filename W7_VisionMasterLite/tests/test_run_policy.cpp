@@ -826,6 +826,69 @@ static void test_cache_frame_cap_reports() {
 }
 
 // ============================================================
+// 用例:帧选择器 —— spin 的序号 ↔ 真实帧号
+//
+// ------------------------------------------------------------
+// 为什么这条要单独测
+// ------------------------------------------------------------
+// 帧选择器(spin)显示的是「第几个**已缓存**的帧」,标题里显示的是
+// **真实帧号**。两者只在丢过帧的时候才不一样 —— 而丢帧是上限撞满才
+// 发生,平时根本看不见,所以最容易在这里写出一个"平时对、炸了才错"的
+// 映射。测试必须**故意造出丢帧**,让那条例外路径每天都被走到。
+//
+// 这也正是这次 UI 设计里被特意避开的东西:如果拿真实帧号直接当
+// spin 的值,丢帧之后 spin 会指向一个已经不存在的条目 ——
+// 界面显示「第 3 帧」,用户以为看的是第 3 帧,其实那是第 5 帧的内容。
+// ============================================================
+static void test_frame_selector_positions() {
+    beginCase("帧选择器:序号映射 + 什么时候藏起来");
+
+    StepFrameCache cache;
+    const QString node = "aaaaaaaa-0000-0000-0000-000000000003";
+
+    check(!cache.showFrameSelector(node), "没跑过 -> 不显示选择器");
+
+    cache.put(node, 0, fakeOutput("images/x_f0.png"), QString("第 3 步"), 3);
+    check(!cache.showFrameSelector(node),
+          "只缓存了 1 帧 -> 不显示选择器(两个方向的按钮都按不动,留着像坏了)");
+
+    // 正常情况(没撞上限):序号和真实帧号一一对应
+    cache.put(node, 1, fakeOutput("images/x_f1.png"), QString("第 3 步"), 3);
+    cache.put(node, 2, fakeOutput("images/x_f2.png"), QString("第 3 步"), 3);
+    check(cache.showFrameSelector(node), "缓存了 3 帧 -> 显示选择器");
+
+    QList<int> ks = cache.framesOf(node);
+    check(ks.size() == 3 && ks.at(0) == 0 && ks.at(1) == 1 && ks.at(2) == 2,
+          "没撞上限时:序号 n 就是真实帧号 n-1");
+
+    // 撞上限之后 —— 这条是本用例的重点。
+    // 再塞一帧把帧 0 挤掉,于是真实帧号变成 {1,2,3}。
+    cache.put(node, 3, fakeOutput("images/x_f3.png"), QString("第 3 步"), 3);
+    ks = cache.framesOf(node);
+    check(ks.size() == 3, "撞上限后仍是 3 帧");
+    check(ks.at(0) == 1 && ks.at(1) == 2 && ks.at(2) == 3,
+          QString("撞上限后真实帧号是 1,2,3(实际 %1,%2,%3)")
+              .arg(ks.at(0)).arg(ks.at(1)).arg(ks.at(2)));
+    // 序号 1 指的是**真实帧 1**,不是真实帧 0(已经被丢了)。
+    // 这里写成查表而不是 "-1",因为查表才是 UI 实际做的事。
+    check(ks.indexOf(0) == -1,
+          "丢掉的帧 0 在位置表里查不到 -> spin 永远不会指向它");
+    check(ks.indexOf(2) == 1, "真实帧 2 在第 2 个位置(1-based)");
+    check(cache.latestFrameOf(node) == 3,
+          "末帧是真实帧 3,不是位置 3 恰好撞上");
+
+    // 换节点互不影响 —— UI 的 m_viewNodeId 是全局一份,
+    // 万一按错了节点,不能把上一个节点的选择器状态带过来。
+    const QString other = "bbbbbbbb-0000-0000-0000-000000000004";
+    cache.put(other, 9, fakeOutput("images/y_f9.png"), QString("第 5 步"), 10);
+    check(!cache.showFrameSelector(other), "另一个节点只有 1 帧 -> 它的选择器也不显示");
+    check(cache.showFrameSelector(node), "上一个节点的选择器状态没被带偏");
+
+    cache.clear();
+    check(!cache.showFrameSelector(node), "clear() 之后不再显示选择器");
+}
+
+// ============================================================
 // 用例:mainwindow 每帧都要喂缓存(源码级守卫)
 //
 // ------------------------------------------------------------
@@ -930,6 +993,53 @@ static void test_mainwindow_records_every_frame() {
           "(守卫本身没落空的反向自查)");
 }
 
+// ------------------------------------------------------------
+// 同一条 lint 的第二个锚点:帧选择器必须走 framesOf 的位置表
+//
+// ------------------------------------------------------------
+// 变异 M5 把 spin 的回调从
+//     showStepFrame(m_viewNodeId, fs.at(pos - 1));
+// 改成
+//     showStepFrame(m_viewNodeId, pos - 1);        // 拿序号当帧号
+//
+// 平时**看不出任何区别** —— 没撞过上限时 pos-1 恰好就是帧号。
+// 只有真的丢过帧(上限 2000 撞满)之后,spin 的第 1 个位置会指向
+// 已经被丢掉的第 0 帧,于是 showStepFrame 走 hasFrame 失败那条路,
+// 用户点 [◀] 得到一行"[每步] 第 1 帧已经不在缓存里了",翻不动帧。
+//
+// 这条同样是 mainwindow.cpp,同样只能 lint。
+// 它的能力边界和上面那条一模一样:认得这一种写法,换个等价写法
+// 就看不见。别把它当成"帧选择器的映射已经验证过了"。
+// ------------------------------------------------------------
+static void test_mainwindow_frame_selector_maps_through_framesOf() {
+    beginCase("源码守卫:帧选择器必须经 framesOf 换算,不能拿序号当帧号");
+
+    QFile f(QStringLiteral("mainwindow.cpp"));
+    const bool opened = f.open(QIODevice::ReadOnly | QIODevice::Text);
+    check(opened,
+          "能打开 mainwindow.cpp —— 打不开说明 run_policy 的 "
+          "add_test 缺 WORKING_DIRECTORY,这条源码守卫会变成恒真的空断言");
+    if (!opened) return;
+    const QString src = stripLineComments(QString::fromUtf8(f.readAll()));
+    f.close();
+
+    // 正锚点:确实是从 framesOf() 的位置表里取的。
+    // 没有它,下面那条负向断言就可能只是在查一个根本不存在的写法
+    // —— 那种断言恒真,比没有还坏。
+    check(src.contains(QStringLiteral("m_stepCache.framesOf(")),
+          "mainwindow.cpp 里有 m_stepCache.framesOf() 调用"
+          "(负向断言的正锚点,证明它不是在校验一个没人写的字符串)");
+
+    // 负锚点:把 pos-1 直接当帧号传进去。
+    // 注意匹配的是 "showStepFrame(m_viewNodeId, pos - 1)" 这种
+    // **完整的调用形态**,不是裸的 "pos - 1" —— 后者在无关的地方
+    // 也会出现,守卫会开始误报,误报的守卫迟早被删。
+    check(!src.contains(QStringLiteral("showStepFrame(m_viewNodeId, pos - 1)")),
+          "帧选择器没有把 spin 的序号直接当帧号传给 showStepFrame —— "
+          "丢过帧之后序号和真实帧号会错开,那样翻帧会指向已丢弃的帧"
+          "(实测没有任何行为测试会发现:mainwindow.cpp 不在测试目标里)");
+}
+
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     SetConsoleOutputCP(CP_UTF8);
@@ -958,7 +1068,9 @@ int main(int argc, char* argv[]) {
     test_cache_reports_missing_image();
     test_primary_image_path_priority();
     test_cache_frame_cap_reports();
+    test_frame_selector_positions();
     test_mainwindow_records_every_frame();
+    test_mainwindow_frame_selector_maps_through_framesOf();
 
     qInfo().noquote() << QString("\n========================================");
     qInfo().noquote() << QString("pass=%1  fail=%2").arg(g_pass).arg(g_fail);

@@ -14,6 +14,9 @@
 #include <QTextEdit>
 #include <QPlainTextEdit>
 #include <QMenu>
+#include <QSpinBox>
+#include <QHBoxLayout>
+#include <QSignalBlocker>
 #include <QLabel>
 #include <QPushButton>
 #include <QLineEdit>
@@ -351,6 +354,67 @@ void MainWindow::setupResultPanel() {
     m_resultTitle = new QLabel(tr("最终结果"));
     m_resultTitle->setStyleSheet("font-weight:bold; color:#444; padding:2px;");
     layout->addWidget(m_resultTitle);
+
+    // ============================================================
+    // === 帧选择器 ===
+    //
+    // 放在标题条下面而不是**里面**,是因为标题条还要能显示"最终结果" ——
+    // 那时候没有"第几帧"这回事,整排必须能藏掉(见 updateFrameBar)。
+    //
+    // 用 spin 而不是 slider:翻帧是**定位**问题不是"大致浏览"问题。
+    // 用户来找第 7 帧的 FAIL,心里已经有数了,让他从 1 一步步按到 7
+    // 是白折磨 —— spin 可以直接敲。
+    // ============================================================
+    m_frameBar = new QWidget;
+    auto* fl = new QHBoxLayout(m_frameBar);
+    fl->setContentsMargins(2, 0, 2, 4);
+
+    m_framePrev = new QPushButton(tr("◀"));
+    m_framePrev->setToolTip(tr("上一帧"));
+    m_framePrev->setFixedWidth(30);
+
+    m_frameSpin = new QSpinBox;
+    m_frameSpin->setToolTip(
+        tr("第几个**已缓存**的帧。\n"
+           "标题里显示的是真实帧号 —— 两者只在真的丢过帧时才会不一致"));
+    m_frameSpin->setFixedWidth(64);
+
+    m_frameNext = new QPushButton(tr("▶"));
+    m_frameNext->setToolTip(tr("下一帧"));
+    m_frameNext->setFixedWidth(30);
+
+    m_frameLast = new QPushButton(tr("跳到末帧"));
+    m_frameLast->setToolTip(tr("回到最后一帧(和右键打开时的默认位置一致)"));
+
+    fl->addWidget(m_framePrev);
+    fl->addWidget(m_frameSpin);
+    fl->addWidget(m_frameNext);
+    fl->addWidget(m_frameLast);
+    fl->addStretch(1);
+    layout->addWidget(m_frameBar);
+
+    connect(m_framePrev, &QPushButton::clicked, this, [this] {
+        if (m_frameSpin->value() > m_frameSpin->minimum())
+            m_frameSpin->setValue(m_frameSpin->value() - 1);
+    });
+    connect(m_frameNext, &QPushButton::clicked, this, [this] {
+        if (m_frameSpin->value() < m_frameSpin->maximum())
+            m_frameSpin->setValue(m_frameSpin->value() + 1);
+    });
+    connect(m_frameLast, &QPushButton::clicked, this, [this] {
+        m_frameSpin->setValue(m_frameSpin->maximum());
+    });
+    // spin 的值变化 = 用户想看第几个已缓存的帧。
+    // **刻意不在这里写 m_viewNodeId**:节点从哪来只由右键决定,
+    // 让 spin 也能改节点就得再加一份"当前节点"状态,那是两处会漂的地方。
+    connect(m_frameSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [this](int pos) {
+        if (m_viewNodeId.isEmpty() || pos < 1) return;
+        const QList<int> fs = m_stepCache.framesOf(m_viewNodeId);
+        if (pos > fs.size()) return;
+        showStepFrame(m_viewNodeId, fs.at(pos - 1));
+    });
+    m_frameBar->setVisible(false);   // 初始是"最终结果",没有帧可选
 
     // 图像预览
     m_resultImg = new QLabel(tr("(运行后显示标注图)"));
@@ -1207,6 +1271,13 @@ void MainWindow::runPipeline(OperatorNode* target) {
     // === P3: 根据最后节点 output 决定显示什么 ===
     // 真正的挑选逻辑抽成了 renderOutputToResultPanel ——
     // 「查看该步输出」要显示的是同一套东西,两份各写一份必然跑偏。
+    //
+    // 先把帧选择器收起来:"最终结果"不属于任何一步的某一帧,
+    // 留着选择器的话,用户按一下 [◀] 会看到 m_viewNodeId 还指着
+    // 上一次右键的那一步 —— 标题说"最终结果",点一下变成别的步的图。
+    m_viewNodeId.clear();
+    m_viewFrame  = -1;
+    updateFrameBar();
     renderOutputToResultPanel(finalResult, fallbackPath, tr("最终结果"));
 
     appendLog("[Run] 完成");
@@ -1230,27 +1301,69 @@ void MainWindow::onViewStepResultRequested(OperatorNode* node) {
         appendLog(tr("[每步] %1 没有缓存结果,请先 Run").arg(node->displayName()));
         return;
     }
-    // 回看默认仍是**最后一帧** —— 帧选择器是下一轮的事。
-    // 这次改动不改变用户右键看到的内容,只是底下的数据从一份变成 N 份。
-    const int frame = m_stepCache.latestFrameOf(id);
-    const w7::StepFrameResult rec = m_stepCache.at(id, frame);
+    // 右键打开的默认位置仍是**最后一帧** —— 保持改动前用户看到的东西,
+    // 只是现在标题条上多了选择器,可以往回翻。
+    showStepFrame(id, m_stepCache.latestFrameOf(id));
+}
 
-    QString title = rec.label.isEmpty() ? node->displayName() : rec.label;
-    const int totalCached = m_stepCache.latestFrame() + 1;
-    if (totalCached > 1) {
-        title += tr("  (第 %1/%2 帧)").arg(frame + 1).arg(totalCached);
+// 右键打开 和 帧选择器 的共同实现。
+// 参数是 uuid 而不是 OperatorNode*:节点可能已经被删了(菜单和信号之间
+// 隔着事件循环),而缓存本来就是按 uuid 索引的,拿到 uuid 就够了。
+void MainWindow::showStepFrame(const QString& nodeId, int frameIndex) {
+    if (nodeId.isEmpty() || frameIndex < 0) return;
+    if (!m_stepCache.hasFrame(nodeId, frameIndex)) {
+        // 能走到这里只有一种情况:spin 里那个位置对应的帧刚被冲掉了。
+        // 不静默返回 —— 那正是"点了没反应"最难查的那种。
+        appendLog(tr("[每步] 第 %1 帧已经不在缓存里了(被上限冲掉的)")
+                      .arg(frameIndex + 1));
+        return;
     }
+    const w7::StepFrameResult rec = m_stepCache.at(nodeId, frameIndex);
+
+    const QList<int> cached = m_stepCache.framesOf(nodeId);
+    const int total = cached.size();
+
+    QString title = rec.label;
+    if (title.isEmpty()) title = tr("(该步)");
+    if (total > 1) {
+        title += tr("  (第 %1 帧 / 共 %2 帧)").arg(frameIndex + 1).arg(total);
+    }
+
+    m_viewNodeId = nodeId;
+    m_viewFrame  = frameIndex;
+    updateFrameBar();
 
     // 图在不在**现场查磁盘**,不用 put 时存下来的标志:
     // 标志会在文件被人删掉/被下一轮覆盖之后继续说"有",
     // 于是界面显示一张早就没了的图。
     const w7::FrameImageState st =
-        m_stepCache.imageState(id, frame, &w7::fileExists);
+        m_stepCache.imageState(nodeId, frameIndex, &w7::fileExists);
 
     renderOutputToResultPanel(rec.output, m_imagePathEdit->text(), title, st);
     appendLog(tr("[每步] 查看 %1").arg(title));
-    const QString note = w7::StepFrameCache::describeImageState(st, frame);
+    const QString note = w7::StepFrameCache::describeImageState(st, frameIndex);
     if (!note.isEmpty()) appendLog(tr("[每步] %1").arg(note));
+}
+
+void MainWindow::updateFrameBar() {
+    if (!m_frameBar) return;
+    const QList<int> cached = m_stepCache.framesOf(m_viewNodeId);
+    // 「要不要显示」和「范围是多少」都在缓存这一层算(可无头测),
+    // 这里只负责把结果摆到 widget 上。
+    if (!m_stepCache.showFrameSelector(m_viewNodeId)) {
+        m_frameBar->setVisible(false);
+        return;
+    }
+    m_frameBar->setVisible(true);
+
+    // 阻断信号:程序化设值不该回调 showStepFrame ——
+    // showStepFrame 里会再调一次 updateFrameBar,两边互相触发就是死循环。
+    const QSignalBlocker b1(m_frameSpin);
+    m_frameSpin->setRange(1, cached.size());
+    m_frameSpin->setValue(cached.indexOf(m_viewFrame) + 1);
+    m_framePrev->setEnabled(m_frameSpin->value() > m_frameSpin->minimum());
+    m_frameNext->setEnabled(m_frameSpin->value() < m_frameSpin->maximum());
+    m_frameLast->setEnabled(m_frameSpin->value() < m_frameSpin->maximum());
 }
 
 // 把 output 渲染到结果区:挑一张最能说明问题的图 + 写全部字段
@@ -1258,8 +1371,37 @@ bool MainWindow::renderOutputToResultPanel(const QJsonObject& out,
                                            const QString& fallbackPath,
                                            const QString& title,
                                            w7::FrameImageState imgState) {
+    // ============================================================
+    // 「图区上次是用同一份输出画出来的」—— 是就跳过重画
+    //
+    // 先说清楚这道闸**实际能省多少**,免得下一个人以为"翻 30 帧很快"
+    // 是因为它:它基本省不到什么。翻帧时每一次的 out **本来就不同**,
+    // 一张 PNG 该读还是要读(解码 + 缩放毫秒级,30 帧 300 ms)。
+    //
+    // 它拦住的只有真正的重复:同一帧被重画两次(单步重跑后又点回来看
+    // 同一帧、已经在末帧还按「跳到末帧」)。
+    //
+    // 判据是**整个 out 加上 fallbackPath 和 imgState**,不是挑几个字段
+    // 拼一把字符串 —— 第一版挑的是 imagePath + result + score,漏了
+    // `description`,而 description 是画在 PASS/FAIL 大字图上的。更要命
+    // 的是 pcb_defect_judge 的 image_path 是**源算子的输入图**,同一节点
+    // 的 30 帧全是同一个路径 —— 于是"两帧都 PASS、描述不同"会撞在一起,
+    // 第二帧就显示**第一帧**印在图上的字。静默地显示一张旧图,
+    // 比慢 10 ms 坏得多。
+    //
+    // 比整个 out 就没有这个坑:字段再加也只有"漏字段"一种错法,
+    // 而现在连漏都漏不掉。
+    // ============================================================
+    const bool sameAsLast = (out == m_lastImgOut)
+                         && (fallbackPath == m_lastImgFallback)
+                         && (imgState == m_lastImgState);
+
     m_resultTitle->setText(title);
     showStepDetail(title, out);
+    if (sameAsLast) return false;   // 图区不用动
+    m_lastImgOut      = out;
+    m_lastImgFallback = fallbackPath;
+    m_lastImgState    = imgState;
 
     // 算子自己报错了 —— 结果图没有意义,直接把错误摆出来。
     // (以前这种情况会掉到最后的 fallback 分支,显示一张原图,
