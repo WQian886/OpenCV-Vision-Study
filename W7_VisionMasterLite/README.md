@@ -257,8 +257,22 @@ CMake 会真实探测并在 configure 时打印结果:
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
 # 一次跑完全部 12 个套件
-cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build --output-on-failure'
+cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
+
+> ⚠️ **`-C Release` 不能省。** 生成器是 VS 多配置版，`CMAKE_CONFIGURATION_TYPES`
+> 里 Debug 和 Release 都在，而 ctest 不带 `-C` 时**默认按 Debug 找 exe**。
+> 只构建过 Release 的话，12 个套件会全部报 `Not Run`——
+> 报错长这样：
+>
+> ```
+> 0% tests passed, 12 tests failed out of 12
+> 	  1 - undo_redo (Not Run)
+> ```
+>
+> 很容易读成"代码全坏了"，其实一个测试都没跑。
+> `add_test(NAME x COMMAND x)` 传的是**目标名**不是路径，
+> 由 ctest 按配置去 `$<CONFIG>` 对应的目录里解析。
 
 | 套件 | 断言 | 测什么 | 需要 |
 |---|---|---|---|

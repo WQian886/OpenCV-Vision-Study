@@ -38,11 +38,21 @@
 
 ```powershell
 cd W7_VisionMasterLite
-cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build --output-on-failure'
+cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
 12 个套件 / 559 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试。
+
+> ⚠️ **`-C Release` 不能省。** 生成器是 VS 多配置版，`CMAKE_CONFIGURATION_TYPES`
+> 同时含 Debug 和 Release，而 ctest 不带 `-C` 时默认按 **Debug** 去找 exe。
+> 只构建过 Release 的话，12 个测试会全部报 `Not Run`：
+>
+> ```
+> 0% tests passed, 12 tests failed out of 12
+> ```
+>
+> 看着像代码全坏了，其实一个测试都没跑。
 
 > 测试失败时想看是哪条断言挂了，CMakeLists 里已经给 11 个套件都设了
 > `QT_FORCE_STDERR_LOGGING=1`。不加的话 Qt 6 在 Windows 上会把 `qInfo`
