@@ -1,5 +1,6 @@
 #include "color_segment.h"
 #include "hsv_params.h"
+#include "artifact_path.h"
 #include <QSpinBox>
 #include <QJsonArray>
 #include <QDir>
@@ -49,7 +50,7 @@ QJsonObject ColorSegment::run(const QJsonObject& params, const QJsonObject& inpu
     cv::morphologyEx(mask, mask, cv::MORPH_OPEN, kernel);
 
     // ============================================================
-    // mask 落盘的文件名必须**每个节点实例唯一**
+    // mask 落盘的文件名必须**每个节点实例 + 每帧唯一**
     //
     // Run 引擎只传字符串路径,所以算子之间靠"写文件 → 下游 imread"传数据。
     // 文件名写死成 w7_color_segment_mask.png 的话,一条流水线里放两个
@@ -59,15 +60,18 @@ QJsonObject ColorSegment::run(const QJsonObject& params, const QJsonObject& inpu
     // 结果:不崩、不报错、数出来的数就是错的。产线上这种错最难查 ——
     // 因为每一步都"成功"了。
     //
-    // node_uuid 由 Run 引擎注入(见 MainWindow 里 inputs["node_uuid"] 的赋值)。
-    // 缺它时退回旧的文件名,保证直接调 run() 的老路径不受影响。
+    // 命名规则已抽到 artifact_path.h,全项目只有那一个地方生成路径 ——
+    // 这里原来自己拼的 "w7_seg_..." 是当时就地发明的,
+    // 别的 9 个算子还各写各的固定名(见 artifact_path.h 的说明)。
+    //
+    // 保留历史文件名 images/w7_color_segment_mask.png:
+    // 有两条断言直接 imread 那个固定路径(见 test_detection_operators.cpp)。
     // ============================================================
     const QString nodeUuid = inputs.value("node_uuid").toString();
     const QString outPath = nodeUuid.isEmpty()
-        ? QString("images/w7_color_segment_mask.png")
-        : QString("images/w7_seg_%1_f%2.png")
-              .arg(nodeUuid.left(8))
-              .arg(inputs.value("frame_index").toInt(0), 4, 10, QChar('0'));
+        ? QString("images/w7_color_segment_mask.png")   // 测试路径:保持不变
+        : w7::artifactPath("color_segment", nodeUuid,
+                           inputs.value("frame_index").toInt(-1));
     QDir().mkpath(QFileInfo(outPath).absolutePath());
     if (!cv::imwrite(outPath.toStdString(), mask)) {
         output["error"] = QString("mask 写盘失败: %1").arg(outPath);

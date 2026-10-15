@@ -9,8 +9,10 @@
 
 #include "dl_infer.h"
 #include "dl_postprocess.h"
+#include "artifact_path.h"
 
 #include <QFileInfo>
+#include <QDir>
 #include <QLabel>
 #include <QLineEdit>
 #include <QSpinBox>
@@ -187,7 +189,13 @@ QJsonObject DlInfer::run(const QJsonObject& params, const QJsonObject& inputs) {
     dets = dl::nms(std::move(dets), iouThresh);
 
     cv::Mat marked = dl::drawDetections(img, dets, classNames);
-    const QString markedPath = "images/w7_dl_result.png";
+    // 路径一律走 artifactPath —— 固定名会让帧之间互相覆盖,
+    // 理由见 artifact_path.h 的说明。
+    const QString markedPath = w7::artifactPath(
+        "dl_infer",
+        inputs.value("node_uuid").toString(),
+        inputs.value("frame_index").toInt(-1));
+    QDir().mkpath(QFileInfo(markedPath).absolutePath());
     cv::imwrite(markedPath.toStdString(), marked);
 
     QJsonArray arr;

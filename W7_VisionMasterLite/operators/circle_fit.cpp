@@ -2,6 +2,9 @@
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QJsonArray>
+#include <QDir>
+#include <QFileInfo>
+#include "artifact_path.h"
 #include <opencv2/imgproc.hpp>
 
 namespace w7 {
@@ -100,7 +103,13 @@ QJsonObject CircleFit::run(const QJsonObject& params, const QJsonObject& inputs)
     }
 
     if (!canvas.empty()) {
-        const QString outPath = "images/w7_circle_fit.png";
+        // 路径一律走 artifactPath —— 固定名会让帧之间互相覆盖,
+        // 理由见 artifact_path.h 的说明。
+        const QString outPath = w7::artifactPath(
+            "circle_fit",
+            inputs.value("node_uuid").toString(),
+            inputs.value("frame_index").toInt(-1));
+        QDir().mkpath(QFileInfo(outPath).absolutePath());
         cv::imwrite(outPath.toStdString(), canvas);
         output["image_path"] = outPath;
     }

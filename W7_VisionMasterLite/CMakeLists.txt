@@ -526,7 +526,10 @@ qt_add_executable(w7_run_test
     tests/test_run_policy.cpp
 )
 
-target_include_directories(w7_run_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(w7_run_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/operators   # artifact_path.h(run_policy 也测它)
+)
 
 target_link_libraries(w7_run_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
 

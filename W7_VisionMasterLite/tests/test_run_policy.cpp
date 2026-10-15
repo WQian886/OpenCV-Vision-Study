@@ -23,12 +23,14 @@
 
 #include <QApplication>
 #include <QPlainTextEdit>
+#include <QRegularExpression>
 #include <QDebug>
 #include <QElapsedTimer>
 #include <windows.h>
 
 #include "run_policy.h"
 #include "step_scope.h"
+#include "artifact_path.h"
 
 using namespace w7;
 
@@ -476,6 +478,116 @@ static void test_step_scope_description() {
           "范围为空的说明里点出了节点名");
 }
 
+// ============================================================
+// === 中间产物落盘路径(artifact_path.h) ===
+//
+// 这个纯函数看着像"拼字符串",但它守的是本项目栽过两次的同一个坑:
+// 文件名写死 → 帧之间(或节点实例之间)互相覆盖 → 下游读到别人的数据
+// → **不崩、不报错、状态点全绿,只有数是错的**。
+//
+// 它必须同时区分三样东西,少一样就退回老坑:
+//   节点实例(node_uuid)、帧号(frame_index)、
+//   以及"没有 uuid 的测试路径"(十几条断言直接 imread 那个固定名)
+// ============================================================
+
+// 用例:命名必须同时区分节点实例和帧
+static void test_artifact_path_separates_node_and_frame() {
+    beginCase("落盘路径:节点实例和帧号都要进文件名");
+
+    const QString uuidA = "aaaaaaaa-0000-0000-0000-000000000001";
+    const QString uuidB = "bbbbbbbb-0000-0000-0000-000000000002";
+
+    // ① 同算子、同帧、不同节点 -> 必须不同。
+    //    这是 2026-10 修过的第一个坑(两个颜色分割互相覆盖)。
+    //    注意只断言"路径不同"**不够**:文件名不同但内容被覆盖一样坏。
+    //    真正兜住后果的那层在 test_detection_operators 用例 2 ——
+    //    它让下游 blob_count 真去读一次,比读回的像素数。
+    const QString a0 = artifactPath("color_segment", uuidA, 0);
+    const QString b0 = artifactPath("color_segment", uuidB, 0);
+    check(a0 != b0,
+          QString("同帧不同节点 -> 路径不同(A=%1 B=%2)").arg(a0, b0));
+
+    // ② 同算子、同节点、不同帧 -> 必须不同。
+    //    这是本轮要修的第二个坑(帧之间覆盖):
+    //    改造前 9 个算子写死 `images/w7_line_fit.png`,
+    //    12 帧跑完只剩最后一帧的图。
+    const QString a1 = artifactPath("color_segment", uuidA, 1);
+    const QString a7 = artifactPath("color_segment", uuidA, 7);
+    check(a0 != a1 && a1 != a7,
+          QString("同节点不同帧 -> 路径都不同(f0=%1 f1=%2 f7=%3)").arg(a0, a1, a7));
+
+    // ③ 帧号零填充到 4 位:文件名排序 == 帧序,定宽也让覆盖行为可预期
+    const QString f7 = artifactPath("line_fit", uuidA, 7);
+    const QString f123 = artifactPath("line_fit", uuidA, 123);
+    check(f7.contains("_f0007"),  QString("帧号 7 补成 _f0007(实际 %1)").arg(f7));
+    check(f123.contains("_f0123"), QString("帧号 123 补成 _f0123(实际 %1)").arg(f123));
+
+    // ④ 算子名要落在路径里 —— 否则两个算子写到同一个文件上,
+    //    等于把"节点实例覆盖"缩小成"算子覆盖"
+    check(artifactPath("line_fit", uuidA, 0) != artifactPath("circle_fit", uuidA, 0),
+          "不同算子 -> 路径不同");
+
+    // ⑤ 只取 uuid 前 8 位。这条不是审美问题:uuid 有 36 个字符,
+    //    全塞进文件名会在嵌套目录里先撞 Windows 的路径上限。
+    check(!artifactPath("line_fit", uuidA, 0).contains("-0000-"),
+          QString("只取 uuid 前 8 位(实际 %1)").arg(artifactPath("line_fit", uuidA, 0)));
+}
+
+// 用例:没有 node_uuid 时退回历史文件名
+//
+// 为什么这条必须钉住:单测直接调 op->run() 时没有 node_uuid,
+// 而十几条断言直接 imread 那个固定路径。哪天有人"顺手统一"成新命名,
+// 这些断言会全部变成"文件不存在" —— 报红的原因和真实缺陷无关,
+// 是最坏的一种红:它逼着人改测试,而不是去查命名。
+static void test_artifact_path_falls_back_without_uuid() {
+    beginCase("落盘路径:没有 uuid 时退回历史名(测试路径不受影响)");
+
+    // 现状实测:断言 imread 的就是 images/w7_color_segment_mask.png
+    // (test_detection_operators 用例 2)。这条守住它。
+    const QString legacy = artifactPath("line_fit", QString(), 0);
+    check(legacy == "images/w7_line_fit.png",
+          QString("无 uuid -> 退回 images/w7_line_fit.png(实际 %1)").arg(legacy));
+
+    // 无 uuid 时帧号**不**进名字。这条路只在测试里走,但必须钉住,
+    // 否则下一个人会以为"没 uuid 就等于单帧",再改动就把测试打挂了。
+    const QString legacy7 = artifactPath("line_fit", QString(), 7);
+    check(legacy7 == legacy,
+          QString("无 uuid 时忽略帧号(f0=%1 f7=%2)").arg(legacy, legacy7));
+
+    // 有 uuid 但没帧号(非 Run 引擎调用):仍要区分节点实例,
+    // 否则又退回"两个实例互相覆盖"。
+    //
+    // 注意断言怎么写:判"没有帧号"不能查 "_f" 子串 —— 算子名
+    // line_fit 自带一个 _f,那样断言恒假。第一版就是这么写错的,
+    // 报红的原因(断言写错)和被测行为(命名规则)毫无关系。
+    // 正确的判法是查帧号那一段:文件名以 "_f" + 4 位数字结尾。
+    const QString noFrame =
+        artifactPath("line_fit", "aaaaaaaa-0000-0000-0000-000000000001", -1);
+    static const QRegularExpression frameSuffix(R"(^_f\d{4}\.png$)");
+    check(noFrame.contains("aaaaaaaa") && !noFrame.contains(frameSuffix),
+          QString("有 uuid 无帧号 -> 只带实例不带帧(实际 %1)").arg(noFrame));
+}
+
+// 用例:保留窗口的判据
+//
+// 图只留最近 N 帧,更早的会被同名覆盖。被覆盖的帧**仍然有数字**,
+// 但图没了 —— 此时界面必须明说,不能拿后来的图顶替。
+// 拿错帧的图配这帧的数字,比完全没图更坏:用户会以为那就是这一帧。
+static void test_artifact_keep_window() {
+    beginCase("保留窗口:被覆盖的帧要能判出来");
+
+    check(artifactFrameIsKept(0, 50),   "帧 0 在窗口内");
+    check(artifactFrameIsKept(49, 50),  "帧 49(最后一个)在窗口内");
+    check(!artifactFrameIsKept(50, 50), "帧 50(第一个溢出)不在窗口内");
+    check(!artifactFrameIsKept(1200, 50), "帧 1200 不在窗口内");
+
+    // 负帧号 = 单帧调用(没有帧概念),不该被当成"第 0 帧"
+    check(!artifactFrameIsKept(-1, 50), "负帧号(单帧)不在多帧窗口内");
+
+    // 窗口配 0:什么都不留 —— 判据必须照实报,不能默认放行
+    check(!artifactFrameIsKept(0, 0), "窗口为 0 -> 连帧 0 也不留");
+}
+
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     SetConsoleOutputCP(CP_UTF8);
@@ -495,6 +607,10 @@ int main(int argc, char* argv[]) {
     test_step_scope_has_all_upstream();
     test_step_scope_diamond_graph();
     test_step_scope_description();
+
+    test_artifact_path_separates_node_and_frame();
+    test_artifact_path_falls_back_without_uuid();
+    test_artifact_keep_window();
 
     qInfo().noquote() << QString("\n========================================");
     qInfo().noquote() << QString("pass=%1  fail=%2").arg(g_pass).arg(g_fail);

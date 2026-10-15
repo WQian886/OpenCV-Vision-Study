@@ -1,6 +1,9 @@
 #include "line_fit.h"
 #include <QSpinBox>
 #include <cmath>
+#include <QDir>
+#include <QFileInfo>
+#include "artifact_path.h"
 #include <opencv2/imgproc.hpp>
 
 namespace w7 {
@@ -83,7 +86,13 @@ QJsonObject LineFit::run(const QJsonObject& params, const QJsonObject& inputs) {
                     QString("L=%.1f  A=%.1f deg").arg(length).arg(angle).toStdString(),
                     cv::Point(x1, std::max(0, y1 - 8)),
                     cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 200, 255), 1);
-        const QString outPath = "images/w7_line_fit.png";
+        // 路径一律走 artifactPath —— 固定名会让帧之间互相覆盖,
+        // 理由见 artifact_path.h 的说明。
+        const QString outPath = w7::artifactPath(
+            "line_fit",
+            inputs.value("node_uuid").toString(),
+            inputs.value("frame_index").toInt(-1));
+        QDir().mkpath(QFileInfo(outPath).absolutePath());
         cv::imwrite(outPath.toStdString(), img);
         output["image_path"] = outPath;
     }

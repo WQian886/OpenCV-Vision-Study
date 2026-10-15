@@ -6,6 +6,8 @@
 #include <QDoubleSpinBox>
 #include <QComboBox>
 #include <QFileInfo>
+#include <QDir>
+#include "artifact_path.h"
 #include <QJsonArray>
 #include <QStringList>
 #include <opencv2/opencv.hpp>
@@ -416,7 +418,13 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
         output["recipe"] = recipe.name;
     }
 
-    QString markedPath = "images/w7_pcb_inspect.png";
+    // 路径一律走 artifactPath —— 固定名会让帧之间互相覆盖,
+    // 理由见 artifact_path.h 的说明。
+    QString markedPath = w7::artifactPath(
+        "pcb_inspect",
+        inputs.value("node_uuid").toString(),
+        inputs.value("frame_index").toInt(-1));
+    QDir().mkpath(QFileInfo(markedPath).absolutePath());
     cv::imwrite(markedPath.toStdString(), marked);
 
     output["marked_path"] = markedPath;

@@ -1,6 +1,9 @@
 #include "caliper_dist.h"
 #include <QSpinBox>
 #include <cmath>
+#include <QDir>
+#include <QFileInfo>
+#include "artifact_path.h"
 #include <opencv2/imgproc.hpp>
 
 namespace w7 {
@@ -84,7 +87,13 @@ QJsonObject CaliperDist::run(const QJsonObject& params, const QJsonObject& input
                     QString("D=%.1f").arg(output.value("distance").toDouble()).toStdString(),
                     cv::Point(cvRound(cx) + 6, cvRound(cy) - 6),
                     cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 200, 255), 1);
-        const QString outPath = "images/w7_caliper_dist.png";
+        // 路径一律走 artifactPath —— 固定名会让帧之间互相覆盖,
+        // 理由见 artifact_path.h 的说明。
+        const QString outPath = w7::artifactPath(
+            "caliper_dist",
+            inputs.value("node_uuid").toString(),
+            inputs.value("frame_index").toInt(-1));
+        QDir().mkpath(QFileInfo(outPath).absolutePath());
         cv::imwrite(outPath.toStdString(), img);
         output["image_path"] = outPath;
     }

@@ -4,6 +4,9 @@
 #include <QDoubleSpinBox>
 #include <QLabel>
 #include <QJsonArray>
+#include <QDir>
+#include <QFileInfo>
+#include "artifact_path.h"
 #include <opencv2/opencv.hpp>
 #include <algorithm>
 #include <cmath>
@@ -1175,7 +1178,13 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
         }
     }
 
-    QString markedPath = "images/w7_pcb_defect.png";
+    // 路径一律走 artifactPath —— 固定名会让帧之间互相覆盖,
+    // 理由见 artifact_path.h 的说明。
+    QString markedPath = w7::artifactPath(
+        "pcb_defect_judge",
+        inputs.value("node_uuid").toString(),
+        inputs.value("frame_index").toInt(-1));
+    QDir().mkpath(QFileInfo(markedPath).absolutePath());
     cv::imwrite(markedPath.toStdString(), marked);
 
     output["marked_path"]   = markedPath;

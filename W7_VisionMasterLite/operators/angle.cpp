@@ -1,6 +1,9 @@
 #include "angle.h"
 #include <QSpinBox>
 #include <cmath>
+#include <QDir>
+#include <QFileInfo>
+#include "artifact_path.h"
 #include <opencv2/imgproc.hpp>
 
 namespace w7 {
@@ -105,7 +108,13 @@ QJsonObject Angle::run(const QJsonObject& params, const QJsonObject& inputs) {
                     QString("angle=%.1f deg").arg(diff).toStdString(),
                     mid,
                     cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 2);
-        const QString outPath = "images/w7_angle.png";
+        // 路径一律走 artifactPath —— 固定名会让帧之间互相覆盖,
+        // 理由见 artifact_path.h 的说明。
+        const QString outPath = w7::artifactPath(
+            "angle",
+            inputs.value("node_uuid").toString(),
+            inputs.value("frame_index").toInt(-1));
+        QDir().mkpath(QFileInfo(outPath).absolutePath());
         cv::imwrite(outPath.toStdString(), img);
         output["image_path"] = outPath;
     }
