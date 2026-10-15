@@ -84,6 +84,8 @@ signals:
                                 OperatorNode::PortSide toSide);
     // === 每步结果查看:节点请求显示该步输出(来自节点右键菜单) ===
     void nodeViewResultRequested(OperatorNode* node);
+    // === 单步执行:节点请求"只跑到我这里"(来自节点右键菜单) ===
+    void nodeSingleStepRequested(OperatorNode* node);
 
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;

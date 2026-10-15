@@ -28,6 +28,7 @@
 #include <windows.h>
 
 #include "run_policy.h"
+#include "step_scope.h"
 
 using namespace w7;
 
@@ -331,6 +332,150 @@ static void test_log_cost_stays_flat() {
     log.hide();
 }
 
+// ============================================================
+// 单步执行:范围计算
+//
+// 这组测的是 step_scope.h 里的"只跑到 target 为止"。
+//
+// 真正要钉的不是 stepScopePrefix 那一行(它只有两行,抄一遍就知道对不对),
+// 而是**它所依赖的那条推论**:
+//
+//     "拓扑序保证每个节点的全部上游都在它前面,
+//      所以前缀自动包含全部上游。"
+//
+// 这条推论如果错了,后果是静默的:范围内某节点的上游没跑,
+// 下游拿到空的 nodeOutputs,读到空值或上一帧的残留 ——
+// 不崩、不报错,只有结果悄悄错了。所以用 stepScopeHasAllUpstream
+// 把它变成可执行的检查:给一条**被打乱的顺序**进去,必须报 false。
+// ============================================================
+
+// 一条典型流水线:
+//   src -> seg -> blob -> chk        (线性 4 节点)
+//   src2 -> seg                       (多前驱测试用)
+static QList<QString> sampleOrder() {
+    return { "src", "seg", "blob", "chk" };
+}
+static QList<QPair<QString, QString>> sampleEdges() {
+    return { {"src", "seg"}, {"seg", "blob"}, {"blob", "chk"} };
+}
+
+static void test_step_scope_includes_target() {
+    beginCase("单步范围:必须含 target 本身");
+
+    const auto order = sampleOrder();
+
+    // 用户右键了 blob,就是要看它跑出来的结果 ——
+    // 停在它前面等于什么都没发生
+    const QList<int> s = stepScopePrefix(order, "blob");
+    check(!s.isEmpty(), "target 存在时范围非空");
+    check(s.contains(2), "范围包含 blob 自己在内的索引 2");
+    check(s.first() == 0, "范围从拓扑序开头开始(src 必须在里面)");
+    check(!s.contains(3), "范围不含 blob 后面的 chk");
+
+    // 最后一个节点单步 = 完整跑,这个必须如实说
+    const QList<int> last = stepScopePrefix(order, "chk");
+    check(last.size() == 4, "对最后一个节点单步,范围就是全链(4 个)");
+
+    // 第一个节点单步 = 只跑它自己
+    const QList<int> first = stepScopePrefix(order, "src");
+    check(first.size() == 1, "对第一个节点单步,范围只有 1 个");
+
+    // 同一节点反复单步,结果必须一样(幂等)
+    check(stepScopePrefix(order, "blob") == s, "同一目标重复调用结果一致");
+}
+
+static void test_step_scope_rejects_unknown_target() {
+    beginCase("单步范围:target 不在序里必须返回空");
+
+    const auto order = sampleOrder();
+    check(stepScopePrefix(order, "not_in_graph").isEmpty(),
+          "找不到的 target 返回空(调用方据此拒绝,而不是静默跑全链)");
+    check(stepScopePrefix({}, "src").isEmpty(), "空拓扑序返回空");
+}
+
+static void test_step_scope_has_all_upstream() {
+    beginCase("单步范围:前缀必须含全部上游");
+
+    const auto order = sampleOrder();
+    const auto edges = sampleEdges();
+
+    // 正例:真实拓扑序下,任何节点的前缀都该通过
+    for (const QString& tgt : order) {
+        const QList<int> s = stepScopePrefix(order, tgt);
+        check(stepScopeHasAllUpstream(order, s, edges),
+              QString("真实拓扑序下,单步「%1」的范围含全部上游").arg(tgt));
+    }
+
+    // 反例:把顺序打乱 —— blob 跑到 seg 前面了。
+    // 这是**唯一**能证伪那条推论的输入,必须有。
+    const QList<QString> shuffled = { "src", "blob", "seg", "chk" };
+    const QList<int> bad = stepScopePrefix(shuffled, "blob");
+    check(!bad.isEmpty(), "打乱后范围仍非空(否则测的不是范围而是空返回)");
+    check(!stepScopeHasAllUpstream(shuffled, bad, edges),
+          "顺序被打乱时必须报 false(前缀漏了 seg)");
+
+    // 只打乱一个不相干的节点,不该误报
+    const QList<QString> mostlyOk = { "src", "seg", "chk", "blob" };
+    check(!stepScopeHasAllUpstream(mostlyOk,
+                                   stepScopePrefix(mostlyOk, "chk"), edges),
+          "chk 跑到 blob 前面时必须报 false");
+}
+
+static void test_step_scope_diamond_graph() {
+    beginCase("单步范围:菱形图(多前驱)也要含全部上游");
+
+    //   src -> seg -> blob -> chk
+    //   src -> tpl -------^
+    // 单步 chk 时,seg 和 tpl 都必须跑到 ——
+    // 漏掉 tpl 就是最典型的"下游拿到空数据却不报错"
+    const QList<QString> order = { "src", "seg", "tpl", "blob", "chk" };
+    const QList<QPair<QString, QString>> edges = {
+        {"src", "seg"}, {"src", "tpl"}, {"seg", "blob"},
+        {"tpl", "blob"}, {"blob", "chk"} };
+
+    const QList<int> s = stepScopePrefix(order, "chk");
+    check(stepScopeHasAllUpstream(order, s, edges), "菱形图单步末节点通过");
+
+    // 单步 blob:tpl 也必须在范围内
+    const QList<int> mid = stepScopePrefix(order, "blob");
+    check(stepScopeHasAllUpstream(order, mid, edges), "单步中间节点通过");
+    check(mid.contains(order.indexOf("tpl")), "tpl(第二条支路)在范围内");
+
+    // 顺序被打乱:seg 和 tpl 换位,仍然都该在 blob 前面,检查必须仍通过
+    const QList<QString> swapped = { "src", "tpl", "seg", "blob", "chk" };
+    check(stepScopeHasAllUpstream(swapped,
+                                  stepScopePrefix(swapped, "blob"), edges),
+          "菱形图两条支路换序后仍通过(顺序不影响正确性)");
+
+    // 反例:tpl 被排到 blob 后面 —— 必须报 false
+    const QList<QString> broken = { "src", "seg", "blob", "tpl", "chk" };
+    check(!stepScopeHasAllUpstream(broken,
+                                   stepScopePrefix(broken, "blob"), edges),
+          "支路被排到下游之后时必须报 false");
+}
+
+static void test_step_scope_description() {
+    beginCase("单步范围:说明文字要能核对范围");
+
+    // 只给个数字没用 —— 用户要知道"跳过几个、总共几个"
+    const QString mid = describeStepScope("Blob 计数", 4, 2);
+    check(mid.contains("Blob 计数"), "说明里点了节点名");
+    check(mid.contains("2"),  "说明里给了跳过的节点数");
+    check(mid.contains("4"),  "说明里给了总节点数");
+    check(!mid.isEmpty(), "说明非空");
+
+    // 对最后一个节点要如实说"等于完整运行",不能报"跳过 0 个"糊弄
+    const QString full = describeStepScope("数量判定", 4, 4);
+    check(full.contains("完整") || full.contains("最后一个"),
+          QString("对末节点如实说明是完整运行: %1").arg(full));
+
+    // 找不到节点要说清楚,不能返回空串
+    check(!describeStepScope("幽灵节点", 4, 0).isEmpty(),
+          "范围为空时也要有说明(不能是空串)");
+    check(describeStepScope("幽灵节点", 4, 0).contains("幽灵节点"),
+          "范围为空的说明里点出了节点名");
+}
+
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     SetConsoleOutputCP(CP_UTF8);
@@ -344,6 +489,12 @@ int main(int argc, char* argv[]) {
     test_frame_loop_honours_policy();
     test_log_document_is_bounded();
     test_log_cost_stays_flat();
+
+    test_step_scope_includes_target();
+    test_step_scope_rejects_unknown_target();
+    test_step_scope_has_all_upstream();
+    test_step_scope_diamond_graph();
+    test_step_scope_description();
 
     qInfo().noquote() << QString("\n========================================");
     qInfo().noquote() << QString("pass=%1  fail=%2").arg(g_pass).arg(g_fail);

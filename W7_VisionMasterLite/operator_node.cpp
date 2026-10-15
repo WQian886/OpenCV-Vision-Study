@@ -432,11 +432,24 @@ void OperatorNode::contextMenuEvent(QGraphicsSceneContextMenuEvent* event) {
     if (m_hasCachedResult) {
         viewAct->setToolTip(QObject::tr("显示这一步上次运行时的输出图和全部字段"));
     }
+
+    // === 单步执行 ===
+    // 放在"查看该步输出"下面:两者是同一个问题的两半 ——
+    // 前者是"看上次跑到哪的结果",后者是"只重跑到这一步"。
+    // 调参数时这两个连着用,所以挨在一起放。
+    QAction* stepAct = menu.addAction(QObject::tr("单步运行到这里"));
+    stepAct->setToolTip(
+        QObject::tr("只运行本节点和它的全部上游,停在它这里。\n"
+                    "改完参数想看这一步的效果时用,不用等整条链跑完。"));
+
     menu.addSeparator();
     QAction* delAct = menu.addAction(QObject::tr("删除节点"));
     QAction* selected = menu.exec(event->screenPos());
     if (selected == viewAct) {
         emit viewStepResultRequested(this);
+        event->accept();
+    } else if (selected == stepAct) {
+        emit runSingleStepRequested(this);
         event->accept();
     } else if (selected == delAct) {
         // 只发请求,真正的销毁由 PipelineView::removeNode 统一负责

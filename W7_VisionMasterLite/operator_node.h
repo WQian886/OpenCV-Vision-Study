@@ -121,6 +121,10 @@ signals:
     // 只发请求,数据在 MainWindow 的缓存里 —— 节点自己不持有 output
     // (output 可能很大,每个节点存一份会让画布白白吃掉几百 MB)
     void viewStepResultRequested(OperatorNode* node);
+    // === 单步执行:右键"单步运行到这里" ===
+    // 只跑本节点及其全部上游,停在它这里。调参数时用得上 ——
+    // 改一个阈值不用等整条链跑完,也不用翻日志找是哪一步出的问题。
+    void runSingleStepRequested(OperatorNode* node);
 
 protected:
     void mousePressEvent(QGraphicsSceneMouseEvent* event) override;

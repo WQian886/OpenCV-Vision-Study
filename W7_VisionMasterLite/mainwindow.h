@@ -66,6 +66,14 @@ public:
 
 private slots:
     void onRunClicked();
+    // === 单步执行 ===
+    // target 为 nullptr 时是完整 Run;非空时只跑到它(含它)为止。
+    // 参数化而不是另写一个函数:两个入口必须共用同一套
+    // 重入防护 / 帧循环 / 状态点 / 缓存逻辑 ——
+    // 抄一份单步版就会出现"完整 Run 修了、单步没修"的分裂。
+    void onRunSingleStep(w7::OperatorNode* target);
+    // 单步和完整 Run 的共同实现。target 非空 = 只跑到它为止。
+    void runPipeline(w7::OperatorNode* target);
     void onLoadProject();
     void onSaveProject();
     void onOperatorSelected();

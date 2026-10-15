@@ -4,6 +4,7 @@
 #include "select_delete_plan.h"   // 批量删除的"计划"层(见头文件里的 use-after-free 说明)
 #include "operator_library_groups.h"   // 算子库分组:不变式是"没有算子会消失"
 #include "pipeline_serialize.h"   // 存盘/读盘(已搬出,无头测试直接用)
+#include "step_scope.h"   // 单步执行的"跑哪些节点"(纯逻辑,见头文件里的说明)
 
 #include <QDockWidget>
 #include <QToolBar>
@@ -111,6 +112,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // === 每步结果查看:节点右键 → 显示该步缓存的输出 ===
     connect(m_canvas, &w7::PipelineView::nodeViewResultRequested,
             this, &MainWindow::onViewStepResultRequested);
+
+    // === 单步执行:节点右键"单步运行到这里" → 只跑到该节点为止 ===
+    connect(m_canvas, &w7::PipelineView::nodeSingleStepRequested,
+            this, &MainWindow::onRunSingleStep);
 
     // === M6: 画布的"增节点/连线"请求 → 包成 Command ===
     connect(m_canvas, &w7::PipelineView::nodeAddRequested,
@@ -790,6 +795,20 @@ static QList<OperatorNode*> topoSort(PipelineView* canvas, bool* hasCycle) {
 
 
 void MainWindow::onRunClicked() {
+    runPipeline(nullptr);   // nullptr = 完整 Run
+}
+
+void MainWindow::onRunSingleStep(OperatorNode* target) {
+    if (!target) return;
+    runPipeline(target);
+}
+
+// target 为 nullptr 时完整跑;非空时只跑到它(含它)为止。
+//
+// 为什么单步不另写一套循环:重入防护、帧循环、UI 限频、状态点、
+// 每步缓存、取消 —— 这些逻辑每一处都出过 bug(见上面各处注释),
+// 抄一份单步版必然出现"完整 Run 修了、单步没修"的分裂。
+void MainWindow::runPipeline(OperatorNode* target) {
     // === 重入防护(第一道) ===
     // 这一句必须在最前面,连参数校验都不能做:Run 里的 processEvents()
     // 会把用户的第二次点击派发进来,重入一层就等于两个帧循环叠着跑,
@@ -865,6 +884,51 @@ void MainWindow::onRunClicked() {
     appendLog(tr("[Run] 拓扑序: %1 个节点,按图执行")
         .arg(order.size()));
 
+    // ============================================================
+    // === 单步执行:把 order 截断成前缀 ===
+    //
+    // 放在这里(QPointer 转换之前)是有意的:
+    // stepScopePrefix 用**索引**做接口,所以这里拿裸指针算完、
+    // 下面再照常转 QPointer —— UAF 防护那一层没有被绕过。
+    //
+    // 为什么前缀就是"全部上游":拓扑序的定义保证每个节点的所有上游
+    // 都在它前面。所以"跑到 target 为止"天然包含它们,不需要另写图遍历。
+    // 这条推论由 stepScopeHasAllUpstream 在测试里实测钉住,不是靠嘴说。
+    // ============================================================
+    int singleStepTargetIndex = -1;   // -1 = 完整 Run
+    if (target) {
+        QList<QString> idOrder;
+        idOrder.reserve(rawOrder.size());
+        for (OperatorNode* n : rawOrder) {
+            idOrder.append(n->uuid().toString(QUuid::WithoutBraces));
+        }
+        const QString targetId = target->uuid().toString(QUuid::WithoutBraces);
+        const QList<int> scope = w7::stepScopePrefix(idOrder, targetId);
+
+        if (scope.isEmpty()) {
+            // target 不在拓扑序里 —— 拒绝并说清,不要静默跑全链。
+            // "跑了全链"比"报错"危险得多:用户以为看到的是这一步的结果。
+            appendLog(tr("[Run] ❌ 节点「%1」不在当前拓扑序里,单步执行已取消")
+                .arg(target->displayName()));
+            statusBar()->showMessage(tr("❌ 单步执行失败:目标不在拓扑序里"), 5000);
+            return;
+        }
+
+        singleStepTargetIndex = scope.last();
+        const int skipped = order.size() - scope.size();
+        appendLog(w7::describeStepScope(target->displayName(),
+                                        order.size(), scope.size()));
+        if (skipped > 0) {
+            appendLog(tr("   跳过的节点状态点会清空,它们的结果不是本次的"));
+        }
+        // 范围外的节点不该留着上一次的绿灯 —— 那会让人以为它们刚跑过。
+        for (int i = singleStepTargetIndex + 1; i < order.size(); ++i) {
+            if (order[i]) {
+                order[i]->setStepStatus(OperatorNode::StepStatus::None);
+            }
+        }
+    }
+
     // === 帧循环 ===
     // 图像源可能有多帧(文件夹批量 / 视频)。两者本质是同一件事:
     // 「一个源产出 N 张图,流水线对每张跑一遍」。
@@ -921,6 +985,14 @@ void MainWindow::onRunClicked() {
                   .arg(frame + 1).arg(qMax(totalFrames, frame + 1)));
 
         for (int step = 0; step < order.size(); ++step) {
+        // === 单步执行:超出范围就停 ===
+        // 放在这里而不是 for 的条件里,是为了让"停在哪"能进日志 ——
+        // 用户看到"单步跑到第 3 步停下"才确认范围对不对。
+        if (singleStepTargetIndex >= 0 && step > singleStepTargetIndex) {
+            appendLog(tr("  ⏹ 单步执行到「%1」为止,后面的节点本次不跑")
+                .arg(order[step] ? order[step]->displayName() : QString("?")));
+            break;
+        }
         // 节点可能已经不在了(跑批期间右键删了/拖了/Load 了)。
         // QPointer 在这里自动变 null,跳过就行 —— 换成裸指针就是
         // 往已释放内存上写,堆一坏,表现是随机的卡死或闪退。

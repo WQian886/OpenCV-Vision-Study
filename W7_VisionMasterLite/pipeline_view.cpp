@@ -59,6 +59,9 @@ OperatorNode* PipelineView::addNode(const QString& opName,
     // === 每步结果查看:节点右键"查看该步输出" → 转发给 MainWindow ===
     connect(node, &OperatorNode::viewStepResultRequested,
             this, &PipelineView::nodeViewResultRequested);
+    // === 单步执行:节点右键"单步运行到这里" → 转发给 MainWindow ===
+    connect(node, &OperatorNode::runSingleStepRequested,
+            this, &PipelineView::nodeSingleStepRequested);
     // === pin 类型显示 ===
     // 图像源没有输入口,那一侧留空(节点上就不显示"入:")
     if (m_registry.contains(opName)) {
