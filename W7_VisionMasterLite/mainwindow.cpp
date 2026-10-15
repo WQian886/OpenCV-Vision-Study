@@ -1421,6 +1421,36 @@ void MainWindow::doConnect(w7::OperatorNode* from, w7::OperatorNode* to,
     delete fromOp;
     delete toOp;
 
+    // ============================================================
+    // === 多前驱冲突检查 ===
+    //
+    // Run 引擎合并前驱输出是"后写覆盖"(见下面 onRunClicked 的 inputs 构造),
+    // 所以同一个下游接第二条线时,谁赢取决于 connections() 的遍历顺序,
+    // 而不是"谁先连的"。实测(2026-10-15 探针):同一个下游,
+    // 顺序 [A,B] 拿到 B 的值,顺序 [B,A] 拿到 A 的值 —— 全绿、不报错。
+    //
+    // 和 pin 类型检查一样:只拦"用户主动连线",加载旧工程/撤销重做不拦。
+    // ============================================================
+    {
+        QString existingFrom;
+        for (const auto* c : m_canvas->connections()) {
+            if (c->toNode() == to) {
+                existingFrom = c->fromNode() ? c->fromNode()->displayName()
+                                             : QString();
+                break;
+            }
+        }
+        const QString whyMulti = w7::checkMultiplePredecessors(
+            to->displayName(), existingFrom, from->displayName());
+        if (!whyMulti.isEmpty()) {
+            QMessageBox::warning(this, tr("不能连线"), whyMulti);
+            appendLog(tr("[连线] ❌ 拒绝 %1 → %2: %3")
+                .arg(from->opName(), to->opName(),
+                     whyMulti.split('\n').value(0)));
+            return;
+        }
+    }
+
     // === M7: AddEdgeCmd 携带 fromSide/toSide ===
     execCommand(new w7::AddEdgeCmd(m_canvas, from->uuid(), to->uuid(),
                                    fromSide, toSide));

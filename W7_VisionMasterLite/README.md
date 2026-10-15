@@ -45,7 +45,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 12 个无头回归测试(559 断言)
+├── tests/                      # 12 个无头回归测试(574 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── README.md
 └── NOTES_W7.md
@@ -115,7 +115,28 @@ CMake 会真实探测并在 configure 时打印结果:
 | `Text` | 文本 | 数量判定 / QR 解码 / PCB 缺陷判定(吐 PASS/FAIL、文本、缺陷清单) |
 | `Any` | 任意 | 新算子没写声明时的默认值 = 不检查 |
 
-拦掉的情况:自环、往图像源上连(图像源没有输入口)、类型不符。
+拦掉的情况:自环、往图像源上连(图像源没有输入口)、类型不符、
+**同一输入口接第二条线**。
+
+> **多前驱冲突为什么必须拦**
+> Run 引擎合并多个前驱的输出时是「后写覆盖」,所以同一个下游接两条线时,
+> **谁赢取决于画布里连线的遍历顺序,而不是「谁先连的」**。
+> 实测(2026-10-15 一次性探针,照抄引擎的合并逻辑):
+>
+> | 连线遍历顺序 | 下游读到的 |
+> |---|---|
+> | `[A(红,10000px), B(蓝,5000px)]` | **B 的 blue / 5000** |
+> | `[B(蓝,5000px), A(红,10000px)]` | **A 的 red / 10000** |
+>
+> 注意第一行:`A` 在前却被 `B` 覆盖了 —— 连「先连线的赢」都不成立。
+> 而挪动一下节点的上下位置就可能翻转这个顺序。
+>
+> 最真实的场合就是「抓红 + 抓蓝」两条 `color_segment` 都接 `blob_count`。
+> 两个上游状态点都是**绿的**,不报错、不打日志,只有下游那个数悄悄变了 ——
+> 到产线上就是漏检或误判。
+>
+> 这里选择**直接拒绝**而不是做合并策略:合并意味着「下游读到什么取决于
+> 用户看不见的某个设置」,而 Run 引擎目前无状态,没地方存这个选择。
 
 > 最有价值的一条是「图像源 → 数量判定」:`count_check` 只读 `inputs["count"]`,
 > 接图像源时 count 拿不到 → actual=0 → **静默判 FAIL**,而日志上看不出任何异常。
@@ -252,7 +273,7 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,559 断言 / 12 个套件)
+## 🧪 回归测试(无头,574 断言 / 12 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
@@ -281,7 +302,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `dl_postprocess` | 49 | letterbox 补边/缩放、NMS 阈值、YOLOv5-v8 布局解析、退化输入不越界 | OpenCV |
 | `image_sources` | 20 | 帧循环契约(按 frame_index 真的换帧/换张)、坏输入不崩 | OpenCV |
 | `step_result` | 37 | 状态点判定边界、每步缓存用 UUID 做 key、**boundingRect 圈住端口圆**、**拖线时节点不跟着跑**、**endConnectionDrag 之后移动锁还锁着**、**release 时把跑偏的节点拉回来** | Qt |
-| `pin_and_recent` | 44 | 该拦的拦/不该拦的放行、路径归一化、已删条目剔除 | QtCore |
+| `pin_and_recent` | 59 | 该拦的拦/不该拦的放行、**同一输入口接第二条线必须拦**(且提示要点名是哪两条 + 说清根因 + 给出路)、路径归一化、已删条目剔除 | QtCore |
 | `line_fit` | 24 | 长度/角度算术、**角度 0~180 的约定**、两点重合不报错、没图照样能算 | OpenCV |
 | `measurement` | 59 | 圆度阈值真在滤方块、周长 0 不除零、**量的是垂直距离不是直线距离**、A/B 重合退化、**夹角退化为 0 而不是假角度** | OpenCV |
 | `run_policy` | 43 | **帧数封顶 / 抽帧限频 / 取消+禁重入**、日志行数封顶、封顶后重绘代价不暴涨 | Qt |

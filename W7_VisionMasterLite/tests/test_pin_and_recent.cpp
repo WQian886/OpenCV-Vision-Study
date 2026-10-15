@@ -156,6 +156,85 @@ static void test_pin_names() {
 }
 
 // ============================================================
+// === 多前驱冲突检查 ===
+//
+// 这组测的是一个**已实测复现**的静默失效(2026-10-15 一次性探针,
+// 照抄 mainwindow.cpp 的引擎合并逻辑跑出来的):
+//
+//   顺序 [A(红,10000px), B(蓝,5000px)] -> 下游拿到 blue / 5000
+//   顺序 [B(蓝,5000px), A(红,10000px)] -> 下游拿到 red  / 10000
+//
+// 两个上游状态点都是绿的、都不报错,只有下游那个数悄悄变了。
+// 注意连"先连线的赢"都不成立 —— A 在前却被 B 覆盖了,
+// 真正决定胜负的是 connections() 的遍历顺序。
+// ============================================================
+
+// 便捷封装:第一条线永远放行
+static QString chkMulti(const QString& toDisp,
+                        const QString& existingFrom,
+                        const QString& newFrom) {
+    return checkMultiplePredecessors(toDisp, existingFrom, newFrom);
+}
+
+static void test_multi_predecessor_allows_first_edge() {
+    beginCase("多前驱:第一条线必须放行");
+    // 没有前驱时,无论是谁来连都要放行
+    check(chkMulti("Blob 分析", "", "颜色分割").isEmpty(),
+          "空前驱 + 任意来源 = 放行(第一条线永远合法)");
+    check(chkMulti("Blob 分析", QString(), QString()).isEmpty(),
+          "两边都空 = 放行");
+}
+
+static void test_multi_predecessor_blocks_second_edge() {
+    beginCase("多前驱:第二条线必须拦住");
+
+    const QString why = chkMulti("Blob 分析", "颜色分割 A", "颜色分割 B");
+    check(!why.isEmpty(), "已有前驱时新增第二条线被拒绝");
+
+    // 提示必须**说清楚是哪两条**,否则用户不知道怎么改
+    check(why.contains("颜色分割 A"), "提示点名了已有的那条线");
+    check(why.contains("颜色分割 B"), "提示点名了新增的这条线");
+    check(why.contains("Blob 分析"),  "提示点名了下游算子");
+
+    // 必须解释**为什么**,不只是说"不行"
+    check(why.contains("后写覆盖"), "提示说明了根因是「后写覆盖」");
+    check(why.contains("后写"),     "提示包含「后写」这个关键词(解释覆盖方向)");
+
+    // 必须告诉用户怎么办 —— 只报错不给出路,等于把问题推给用户猜
+    check(why.contains("解决办法"), "提示给出了解决办法");
+    check(why.contains("支路") || why.contains("分支"),
+          "解决办法里提到了可行的布线方式");
+}
+
+static void test_multi_predecessor_same_op_name_still_blocked() {
+    beginCase("多前驱:同名算子接两条也要拦");
+
+    // 这是最真实的场合:抓红 + 抓蓝,两个都叫"颜色分割"。
+    // 显示名相同不代表是同一个节点,冲突照样成立。
+    const QString why = chkMulti("Blob 分析", "颜色分割", "颜色分割");
+    check(!why.isEmpty(), "两个同名算子接到同一下游,仍然被拒绝");
+
+    // 反向不变式:不能因为"看起来一样"就放行,
+    // 也不能因为提示里两个名字相同就误判成"没有冲突"
+    check(why.contains("颜色分割"), "提示仍点名了算子");
+}
+
+static void test_multi_predecessor_independent_nodes_never_conflict() {
+    beginCase("多前驱:不同下游互不影响");
+
+    // 每个下游各自记自己的前驱 —— 不能因为 A→B 连过,
+    // 就把 C→D 也拦掉。这是最容易写错的地方:
+    // 如果实现时不小心用了"全局已连线数"而不是"这个下游的前驱数",
+    // 这条就会红。
+    check(chkMulti("Blob 分析", "", "颜色分割").isEmpty(),
+          "Blob 分析 还没接,第一条放行");
+    check(chkMulti("数量判定", "", "Blob 计数").isEmpty(),
+          "数量判定 还没接,第一条也放行(不受上一个节点影响)");
+    check(!chkMulti("Blob 分析", "颜色分割", "模板匹配").isEmpty(),
+          "只有 Blob 分析 自己被拦,数量判定 不受影响");
+}
+
+// ============================================================
 // === 最近文件列表 ===
 // ============================================================
 static void test_recent_basics() {
@@ -272,6 +351,11 @@ int main(int argc, char* argv[]) {
     test_pin_blocks_mistakes();
     test_pin_any_never_blocks();
     test_pin_names();
+
+    test_multi_predecessor_allows_first_edge();
+    test_multi_predecessor_blocks_second_edge();
+    test_multi_predecessor_same_op_name_still_blocked();
+    test_multi_predecessor_independent_nodes_never_conflict();
 
     test_recent_basics();
     test_recent_normalize();

@@ -53,4 +53,27 @@ QString checkPinCompatibility(PinType outType, PinType inType,
                               const QString& toDisplay,
                               bool selfConnect);
 
+// === 多前驱冲突检查 ===
+//
+// 背景:Run 引擎合并前驱输出时是"后写覆盖"
+// (mainwindow.cpp 里 `inputs[it.key()] = it.value()`),
+// 所以同一个下游接两条线时,**谁赢取决于 connections() 的遍历顺序**,
+// 而遍历顺序和"用户先连的"无关 —— 挪一下节点的上下位置就可能翻转。
+//
+// 实测(2026-10-15 一次性探针,照抄引擎合并逻辑):
+//   顺序 [A(红,10000px), B(蓝,5000px)] -> 下游拿到 blue/5000
+//   顺序 [B(蓝,5000px), A(红,10000px)] -> 下游拿到 red/10000
+// 两个上游状态点都是绿的、都不报错,只有下游那个数悄悄变了。
+//
+// 真实场合最常见的就是"抓红 + 抓蓝"两条 color_segment 都接 blob_count。
+//
+// 返回空串 = 可以连;否则是拒绝理由。
+// 同样只在"用户主动连线"这条路上查(doConnect),
+// 不拦加载旧工程 / 撤销重做 —— 那些是恢复既有状态。
+//
+// existingFromDisplay:该下游**已经**接到的那条线的来源算子名(空=还没有前驱)
+QString checkMultiplePredecessors(const QString& toDisplay,
+                                  const QString& existingFromDisplay,
+                                  const QString& newFromDisplay);
+
 } // namespace w7
