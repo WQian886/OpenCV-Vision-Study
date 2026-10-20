@@ -46,8 +46,11 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 12 个无头回归测试(868 断言)
+├── tests/                      # 13 个无头回归测试(1046 断言)
 ├── images/                     # 测试图(复用 W6)
+├── recipes/                    # 板型配方 JSON(由 W6 的生成器导出,**与 W6 共用一份**)
+├── frame_record.h              # 帧接线:"记一笔" + 序号→帧号换算(可行为测试)
+├── ../common/pcb_core/         # ← 判定核心(W6/W7 共用,无 Qt 依赖)
 ├── README.md
 └── NOTES_W7.md
 ```
@@ -319,21 +322,21 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,868 断言 / 12 个套件)
+## 🧪 回归测试(无头,1046 断言 / 13 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
-# 一次跑完全部 12 个套件
+# 一次跑完全部 13 个套件
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
 > ⚠️ **`-C Release` 不能省。** 生成器是 VS 多配置版，`CMAKE_CONFIGURATION_TYPES`
 > 里 Debug 和 Release 都在，而 ctest 不带 `-C` 时**默认按 Debug 找 exe**。
-> 只构建过 Release 的话，12 个套件会全部报 `Not Run`——
+> 只构建过 Release 的话，13 个套件会全部报 `Not Run`——
 > 报错长这样：
 >
 > ```
-> 0% tests passed, 12 tests failed out of 12
+> 0% tests passed, 13 tests failed out of 13
 > 	  1 - undo_redo (Not Run)
 > ```
 >
@@ -343,6 +346,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 
 | 套件 | 断言 | 测什么 | 需要 |
 |---|---|---|---|
+| `pcb_core` | 163 | **共享判定核心自己的测试**:JSON 解析(拒绝前导零/截断/尾随逗号)、配方 6 类错误分支、**拿不到依据时拒绝判定而不是报 PASS**、端到端对照真值表 | OpenCV(**不依赖 Qt**) |
 | `undo_redo` | 151 | 增删改节点/连线的往返、参数保留、同名节点 UUID 精确指认、节点消失后命令静默 no-op、**连线 payload 编解码**、**批量删除的记账分类**、**撤销栈里不许有空命令**、**竖线存一次再打开还是竖的**、**老文件没有方向字段时退回默认** | Qt(不链 OpenCV) |
 | `pcb_operators` | 215 | **W6 那 8 张样本图**:baseline 零缺陷,7 张缺陷图各自命中自己那类、**没有判定依据时拒绝判定而不是报 PASS** | OpenCV |
 | `dl_postprocess` | 49 | letterbox 补边/缩放、NMS 阈值、YOLOv5-v8 布局解析、退化输入不越界 | OpenCV |
@@ -351,7 +355,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `pin_and_recent` | 59 | 该拦的拦/不该拦的放行、**同一输入口接第二条线必须拦**(且提示要点名是哪两条 + 说清根因 + 给出路)、路径归一化、已删条目剔除 | QtCore |
 | `line_fit` | 24 | 长度/角度算术、**角度 0~180 的约定**、两点重合不报错、没图照样能算 | OpenCV |
 | `measurement` | 59 | 圆度阈值真在滤方块、周长 0 不除零、**量的是垂直距离不是直线距离**、A/B 重合退化、**夹角退化为 0 而不是假角度** | OpenCV |
-| `run_policy` | 147 | **帧数封顶 / 抽帧限频 / 取消+禁重入**、日志行数封顶、封顶后重绘代价不暴涨、**单步范围 = 拓扑序前缀(含自己)**、**范围找不到 target 要报错不能静默跑全链**、**被打乱的顺序必须被自检揪出来**、**多帧缓存:全帧留数字 / 撞上限要报出来 / 图没了不许拿别的帧顶替**、**帧选择器序号↔真实帧号的映射(丢过帧之后也对得上)** | Qt |
+| `run_policy` | 162 | **帧数封顶 / 抽帧限频 / 取消+禁重入**、日志行数封顶、封顶后重绘代价不暴涨、**单步范围 = 拓扑序前缀(含自己)**、**范围找不到 target 要报错不能静默跑全链**、**被打乱的顺序必须被自检揪出来**、**多帧缓存:全帧留数字 / 撞上限要报出来 / 图没了不许拿别的帧顶替**、**帧选择器序号↔真实帧号的映射(丢过帧之后也对得上)**、**帧接线:每帧都记一笔 / 序号换算成真实帧号** | Qt |
 | `template_match` | 28 | **三种匹配方法的相似度方向统一**、模板比原图大、纯色模板、非法 method、阈值真的在控 | OpenCV |
 | `detection_operators` | 42 | **HSV 数组残缺不越界**、**两个实例的 mask 不互相覆盖**、面积阈值用 `>=`、**阈值填反要说人话而不是静默全判废** | OpenCV |
 | `operator_library` | 37 | **没有算子会从算子库里消失**、旧实现确实丢了 `dl_infer`、没见过的分类也现建分组、分组不重不乱序 | QtCore |
@@ -874,7 +878,7 @@ struct OpDefaults {
 
 存盘模块从此**不认识算子**,只认名字和标签。
 
-> 现有 12 个套件里,`w7_undo_test` 是唯一承诺"零 OpenCV、1 秒跑完"的那个,
+> 现有 13 个套件里,`w7_undo_test` 是唯一承诺"零 OpenCV、1 秒跑完"的那个,
 > 这个属性值得用一次签名改动保住。
 
 ### 三个测量算子的测试为什么长这样
@@ -926,6 +930,34 @@ $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
 - **只在 Windows + MSVC + Release 验证过**。Linux/macOS 移植没做:
   `CMakeLists.txt` 里 Qt/OpenCV 路径是硬编码的,测试文件里有
   `windows.h` / `SetConsoleOutputCP` 这类 Windows 专有调用。
+
+### ✅ 2026-10-20 关掉的一条债:mainwindow 的帧接线不再是 lint
+
+以前"每帧都记"和"序号→帧号换算"这两条只由**源码 lint** 守着 ——
+因为 `mainwindow.cpp` 不在任何测试目标里。实测代价:把"只记最后一帧"加回去,
+**12/12 套件全绿**(当时只有 12 个套件),没有任何一条断言发现。
+
+现在这两件事抽到了 `frame_record.h`(可行为测试),lint 的职责也换了:
+
+| | 以前 | 现在 |
+|---|---|---|
+| 每帧都记 | lint 查"没有 `totalFrames - 1`" | **行为测试**:驱动 30 帧,断言 30 帧的数字全在 |
+| 序号→帧号 | lint 查"没有 `showStepFrame(..., pos - 1)`" | **行为测试**:含"丢过帧之后序号≠帧号"这个关键场景 |
+| 接线本身 | — | lint 改成查"**必须走** `recordFrameResult()` / `frameNumberForPosition()`" |
+
+lint 从"禁止某种写法"变成"**要求某个可测入口**" —— 后者不会被等价写法绕过。
+
+**变异验证**:把 `shouldCacheFrame()` 改回 `frame == totalFrames - 1`,
+`run_policy` 套件立刻转红(`pass=161 fail=1`)。这条不变量现在**真的在验证**。
+
+### 🔗 判定核心搬到 common/pcb_core
+
+PCB 判定的实现(配方解析 + 定位 + 六条判据 + 短路)搬到了 `common/pcb_core/`,
+**W6 命令行和 W7 算子共用同一份**。
+
+理由:能力在 W7、数据在 W6,而 W6 自己用不上;硬把算法抄一份就是本项目
+栽过四遍的「抄副本」。现在 W6 也能检那 9 张 complex 板了,两边结论逐字一致。
+
 
 ## ✏️ 课后练习
 

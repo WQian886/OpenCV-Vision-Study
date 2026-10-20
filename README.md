@@ -13,13 +13,31 @@
 | **W3** | 边缘 + 轮廓 + 形态学 | ✅ 100% | [README](./W3_EdgeContour/README.md) |
 | **W4** | 模板匹配 + ORB 特征 | ✅ 100% | [README](./W4_TemplateFeature/README.md) |
 | **W5** | OCR + 二维码 | ✅ 100% | [README](./W5_OCR_QRCode/README.md) |
-| **W6** | PCB 缺陷检测综合项目 | ✅ 95% | [README](./W6_PCB_DefectProject/README.md) |
+| **W6** | PCB 缺陷检测综合项目 | ✅ 100% | [README](./W6_PCB_DefectProject/README.md) |
 | **W7** | Mini VisionMaster Lite (Qt) | ✅ 最终版 | [README](./W7_VisionMasterLite/README.md) |
 
 ## 🏆 两个综合项目
 
-- **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，12 个无头回归测试共 868 条断言
+- **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**2 个无头回归测试 / 305 条断言**
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，13 个无头回归测试共 1046 条断言
+
+## 🔗 共享判定核心（common/pcb_core）
+
+W6 和 W7 的 PCB 判定**共用同一份实现**（`common/pcb_core/`，无 Qt 依赖）：
+
+| 文件 | 作用 |
+|---|---|
+| `pcb_core.h/.cpp` | 板型配方解析 + 元件定位 + 六条判据（missing/wrong/polarity/bridge/insufficient/shifted）+ 短路 |
+| `pcb_color_ref.h` | 颜色判据去绝对化（相对板面基色），从 W7 的 operators/ 搬过来的 |
+| `mini_json.h/.cpp` | 无依赖 JSON 读取器 —— 配方解析器**只留一个**，两边共用 |
+
+**为什么要共用**：W6 原本是 `if (label == "R2")` 七处硬编码，换块板规则全空转
+（实测三块好板全被判废、两块废板输出与好板逐字相同）；W7 早就改成了配方驱动 +
+逐条标定的版本。硬把 W7 的算法抄一份到 W6，就是本项目栽过四遍的「抄副本」——
+抄出来的那份会随 W7 的标定一起漂，漂了没人知道。
+
+现在 W6 的 17 张测试图（8 张 demo + 9 张 complex）和 W7 算子走**同一份**判定。
+
 
 ### W7 最终版补上的东西
 
@@ -41,15 +59,16 @@ cd W7_VisionMasterLite
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
-12 个套件 / 868 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
-其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试。
+13 个套件 / 1046 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试，
+`pcb_core` 则是共享判定核心自己的测试（**W6 和 W7 链的是同一份源码**）。
 
 > ⚠️ **`-C Release` 不能省。** 生成器是 VS 多配置版，`CMAKE_CONFIGURATION_TYPES`
 > 同时含 Debug 和 Release，而 ctest 不带 `-C` 时默认按 **Debug** 去找 exe。
-> 只构建过 Release 的话，12 个测试会全部报 `Not Run`：
+> 只构建过 Release 的话，13 个测试会全部报 `Not Run`：
 >
 > ```
-> 0% tests passed, 12 tests failed out of 12
+> 0% tests passed, 13 tests failed out of 13
 > ```
 >
 > 看着像代码全坏了，其实一个测试都没跑。
@@ -60,7 +79,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 9 份，~150 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 10 份，~170 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -71,6 +90,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 - `notes_GitInit_2026-09.md` (10 KB) — git init 完整记录 + 踩坑
 - `notes_W7_ImageSourceCamera_2026-09.md` (10 KB) — 工业相机图像源（MVS SDK 条件编译）
 - `notes_W7_UndoRedo_2026-09.md` (17 KB) — M6 撤销重做 + 节点 UUID + P0 悬垂指针修复
+- `notes_PCB_SharedCore_2026-10.md` (15 KB) — 共享判定核心 + W6 可测层 + 路径编码 bug
 
 W7 收官期的改动（PCB/DL 算子、视频源、帧循环、每步结果查看、pin 检查、最近工程）
 逐条记在 git 提交信息里，每条都写清了"为什么"和"测试抓到了什么"。
@@ -95,7 +115,8 @@ out/build/x64-Release/w6_pcb_defect.exe report images
 ```
 OpenCV/
 ├── W1-W7/                 # 7 个学习项目
-├── notes/                 # 变更日志（9 份）
+├── common/pcb_core/       # W6/W7 共用的判定核心(无 Qt 依赖)
+├── notes/                 # 变更日志（10 份）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -104,8 +125,9 @@ OpenCV/
 
 ## 📊 统计
 
-- 7 个 C++ 项目
-- 68 个 C++ 文件 / ~8600 行代码
-- 9 份变更日志 / 131 KB
-- W7 单项 12 个无头回归测试 / 868 条断言
+- 7 个 C++ 项目 + 1 个共享核心
+- 96 个 C++ 文件 / ~17700 行代码
+- 10 份变更日志 / ~170 KB
+- **15 个无头回归测试 / 1351 条断言**（W7 13 个 / 1046，W6 2 个 / 305；
+  其中 `pcb_core` 一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
