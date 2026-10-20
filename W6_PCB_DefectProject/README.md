@@ -152,6 +152,12 @@ ctest --test-dir build -C Release --output-on-failure
 > CMake 会把 `recipes/` 拷到 exe 旁边),不是把断言改松。
 > 详见 [../notes/notes_TestWorkDir_2026-10.md](../notes/notes_TestWorkDir_2026-10.md)。
 
+> 🤖 **一条命令跑完"构建 + 全部测试 + 检查源码树没被写脏"**：
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File ..\tools\ci.ps1
+> ```
+> 详见 [../notes/notes_CI_2026-10.md](../notes/notes_CI_2026-10.md)。
+
 ### 断言从哪来
 
 不抄一份。板子清单读 `images/manifest.csv` 和 `images/complex/complex_manifest.csv`

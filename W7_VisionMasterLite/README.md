@@ -930,6 +930,14 @@ $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
 > `**/images/w7_*.png` 规则保留(那是应用行为,不是测试行为)。
 > 详见 [../notes/notes_TestWorkDir_2026-10.md](../notes/notes_TestWorkDir_2026-10.md)。
 
+> 🤖 **一条命令跑完"构建 + 全部测试 + 检查源码树没被写脏"**：
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File ..\tools\ci.ps1
+> ```
+> 最后那一步（跑完测试源码树必须没变）以前是**没人记得做**的，
+> 现在每次跑都查，泄漏会**逐个点名**。
+> 详见 [../notes/notes_CI_2026-10.md](../notes/notes_CI_2026-10.md)。
+
 ### 测试抓到的真 bug(留着当反面教材)
 - **`VideoCapture` 抛异常而不是返回 false**:塞一个非视频文件进去,
   image-sequence 后端走到 `CV_Assert(!filename_pattern.empty())` 直接抛

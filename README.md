@@ -83,10 +83,10 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 
 > ⚠️ **`-C Release` 不能省。** 生成器是 VS 多配置版，`CMAKE_CONFIGURATION_TYPES`
 > 同时含 Debug 和 Release，而 ctest 不带 `-C` 时默认按 **Debug** 去找 exe。
-> 只构建过 Release 的话，13 个测试会全部报 `Not Run`：
+> 只构建过 Release 的话，14 个测试会全部报 `Not Run`：
 >
 > ```
-> 0% tests passed, 13 tests failed out of 13
+> 0% tests passed, 14 tests failed out of 14
 > ```
 >
 > 看着像代码全坏了，其实一个测试都没跑。
@@ -95,9 +95,29 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 > `QT_FORCE_STDERR_LOGGING=1`。不加的话 Qt 6 在 Windows 上会把 `qInfo`
 > 送到调试通道而不是 stderr，`--output-on-failure` 只能看到一个非零退出码。
 
+## 🤖 CI
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/ci.ps1
+```
+
+一条命令跑完：**7 个工程全部编译（Release）→ W6 3 套件 + W7 14 套件
+全部跑通 → W5 的 exe 冒烟 → 检查源码树没被写脏**。
+
+最后一条是重点：测试产物必须落进 `build/`，源码树必须一个字节都不变。
+这条以前靠 `.gitignore` 藏，现在是**断言**——CI 会在产物写进源码树时直接红。
+
+`.github/workflows/ci.yml` 在 GitHub Actions 上跑同一套步骤
+（Windows runner + aqtinstall 装 Qt 6.8.3 + 官方预编译 OpenCV 4.13.0 + tesseract）。
+
+> ⚠️ 依赖准备那几步（Qt / OpenCV 下载）**还没在真实 runner 上验证过**；
+> 真正干活的那几步（配置 / 编译 / 测试 / 源码树检查）已在本机
+> `tools/ci.ps1` 跑通。哪些验过、哪些没验过，见
+> [notes_CI_2026-10.md](./notes/notes_CI_2026-10.md)。
+
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 14 份 + 21 张 atomic 卡，~230 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 15 份 + 22 张 atomic 卡，~250 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -113,14 +133,16 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 - `notes_PCB_Polarity_2026-10.md` (17 KB) — 极性判据重做：从「量错东西」到「量对东西」
 - `notes_QR_OCR_SharedCore_2026-10.md` (14 KB) — QR/OCR 合并成共享核心（第 5 次抄副本）
 - `notes_TestWorkDir_2026-10.md` (18 KB) — 测试产物落构建目录：`.gitignore` 藏起来的是文件，不是问题
+- `notes_CI_2026-10.md` (19 KB) — 上 CI：路径不能写死，以及 CI 第一次跑就逮到的两个真 bug
 
-`notes/atomic/` 里是**单条教训卡片**（21 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（22 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
 - `at-criterion-must-not-guess-the-baseline.md` — 判据不猜：期望值由知道真相的那一方登记
 - `at-test-leaves-residue-permanently-red.md` — 测试自己制造的失败：一次坏掉，永久变红
 - `at-gitignore-hides-files-not-problems.md` — `.gitignore` 藏起来的是文件，不是问题
+- `at-lookalike-dir-fools-the-locator.md` — 靠名字猜出来的位置，会被同名的东西骗到
 - `at-reported-vs-named.md` — 「报了缺陷」≠「报的是那个缺陷」
 - `at-mutation-ruler-broken.md` — 变异尺子本身坏了
 
@@ -148,7 +170,11 @@ out/build/x64-Release/w6_pcb_defect.exe report images
 OpenCV/
 ├── W1-W7/                 # 7 个学习项目
 ├── common/pcb_core/       # W6/W7 共用的判定核心(无 Qt 依赖)
-├── notes/                 # 变更日志（14 份 + 21 张 atomic 卡）
+├── common/qr_ocr/         # W5/W6/W7 共用的 QR/OCR 核心
+├── common/cmake/          # 三方依赖路径(本机默认值 + CI 覆盖)
+├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 检查源码树没被写脏
+├── .github/workflows/     # GitHub Actions
+├── notes/                 # 变更日志（15 份 + 22 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -159,7 +185,7 @@ OpenCV/
 
 - 7 个 C++ 项目 + 2 个共享核心
 - 96 个 C++ 文件 / ~17700 行代码
-- 14 份变更日志 + 21 张 atomic 卡 / ~230 KB
+- 15 份变更日志 + 22 张 atomic 卡 / ~250 KB
 - **17 个无头回归测试 / 1480 条断言**（W7 14 个 / 1101，W6 3 个 / 379；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

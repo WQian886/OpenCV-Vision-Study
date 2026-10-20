@@ -63,11 +63,44 @@ W7_VisionMasterLite/images/_test_src.avi
 - 任何「构建脚本会在源码目录里生成文件」的情况
 - 尤其：已经加了 ignore 规则、于是以为处理好了的时候
 
+## 同一个机制的另一面：ignore 规则也会藏**源码**
+
+`.gitignore` 里一条 `*.cmake`（本来只想挡 CMake 生成的中间文件），
+在加 `common/cmake/ThirdParty.cmake` 时把**一个要提交的源码文件**藏了：
+
+```
+The following paths are ignored by one of your .gitignore files:
+common/cmake/ThirdParty.cmake
+hint: Use -f if you really want to add them.
+```
+
+**藏产物只是难看，藏源码是文件丢了。**
+而且 `git add` 失败这件事很容易被忽略过去 —— 尤其在一次要加十几个文件的时候。
+
+修法是在规则后面显式捞回来：
+
+```gitignore
+*.cmake
+!common/cmake/*.cmake      # 这里放的是源码,不是生成物
+```
+
+（注意：`!` 规则必须写在 `*.cmake` **之后**；
+而且如果**父目录**被整体排除了，`!` 是救不回来的 —— git 不会走进被排除的目录。）
+
+**怎么验**：
+
+```powershell
+git check-ignore -v <路径>
+```
+
+看输出里命中的是哪一条。命中 `!` 开头那条 = 没被忽略 ✅。
+
 ## 检查清单
 
 - [ ] 这批文件是**测试产物**吗？（是的话，放进构建目录，不是 ignore）
 - [ ] ignore 规则是**为了让 bug 隐形**才加的吗？（是的话，删掉它）
 - [ ] 删掉 ignore 规则、跑一遍测试，`git status` 还干净吗？
+- [ ] **这条规则会不会误伤源码？**（`git check-ignore -v <要提交的文件>`）
 - [ ] 这些产物会不会被 `copy_directory` 顺带拷进构建目录？
       （会 → 构建产物里有一份陈旧的、来源不明的数据）
 - [ ] 有人手动从**别的目录**跑过测试吗？
