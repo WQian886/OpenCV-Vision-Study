@@ -138,6 +138,20 @@ ctest --test-dir build -C Release --output-on-failure
 `pcb_core` 的**源码在 `common/pcb_core/tests/`**，W6 和 W7 链的是同一份 ——
 两边都跑才能说明"判定是对的，而且 W6 真的用上了它"。
 
+> 🧹 **测试产物落在 `build/test_work/<套件名>/`,不落源码树。**
+> 2026-10-20 之前,三个套件都跑在 `build/` 根目录(共用一个 CWD)。
+> 现在每个套件一份工作目录,配方由构建时暂存进去 —— 每次构建都重做,
+> 所以改了配方下次构建就生效,不会拿旧配方判板。
+>
+> 这一改动当场逮到一条一直在"靠 CWD 恰好正确"才成立的断言:
+> `w6::findRecipeDir("")` 的自动发现是按**相对路径**试
+> (`recipes` / `../W7_VisionMasterLite/recipes` / `W7_VisionMasterLite/recipes`),
+> 工作目录一挪就全落空了 —— `w6_cli` 套件当场红 1 条
+> (`自动找得到配方目录`)。那条红得**对**:自动发现确实依赖 CWD。
+> 修法是把配方暂存进工作目录(这也正是 exe 真跑起来时的样子,
+> CMake 会把 `recipes/` 拷到 exe 旁边),不是把断言改松。
+> 详见 [../notes/notes_TestWorkDir_2026-10.md](../notes/notes_TestWorkDir_2026-10.md)。
+
 ### 断言从哪来
 
 不抄一份。板子清单读 `images/manifest.csv` 和 `images/complex/complex_manifest.csv`

@@ -75,6 +75,12 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试，
 `pcb_core` 则是共享判定核心自己的测试（**W6 和 W7 链的是同一份源码**）。
 
+> 🧹 **测试产物落在 `build/test_work/<套件名>/`，不落源码树。**
+> 每个套件一份工作目录（`ctest -j` 并行也不会互相踩），
+> 配方和测试图由构建时暂存进去 —— 改完数据下次构建就生效，不会拿旧数据跑。
+> 跑完测试 `git status` 应该是干净的；不干净就说明有产物写进源码树了。
+> 详见 [notes_TestWorkDir_2026-10.md](./notes/notes_TestWorkDir_2026-10.md)。
+
 > ⚠️ **`-C Release` 不能省。** 生成器是 VS 多配置版，`CMAKE_CONFIGURATION_TYPES`
 > 同时含 Debug 和 Release，而 ctest 不带 `-C` 时默认按 **Debug** 去找 exe。
 > 只构建过 Release 的话，13 个测试会全部报 `Not Run`：
@@ -91,7 +97,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 13 份 + 20 张 atomic 卡，~280 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 14 份 + 21 张 atomic 卡，~230 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -106,13 +112,15 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 - `notes_W7_EngineeringLessons_2026-10.md` (35 KB) — W7 工程经验汇总
 - `notes_PCB_Polarity_2026-10.md` (17 KB) — 极性判据重做：从「量错东西」到「量对东西」
 - `notes_QR_OCR_SharedCore_2026-10.md` (14 KB) — QR/OCR 合并成共享核心（第 5 次抄副本）
+- `notes_TestWorkDir_2026-10.md` (18 KB) — 测试产物落构建目录：`.gitignore` 藏起来的是文件，不是问题
 
-`notes/atomic/` 里是**单条教训卡片**（20 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（21 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
 - `at-criterion-must-not-guess-the-baseline.md` — 判据不猜：期望值由知道真相的那一方登记
 - `at-test-leaves-residue-permanently-red.md` — 测试自己制造的失败：一次坏掉，永久变红
+- `at-gitignore-hides-files-not-problems.md` — `.gitignore` 藏起来的是文件，不是问题
 - `at-reported-vs-named.md` — 「报了缺陷」≠「报的是那个缺陷」
 - `at-mutation-ruler-broken.md` — 变异尺子本身坏了
 
@@ -140,7 +148,7 @@ out/build/x64-Release/w6_pcb_defect.exe report images
 OpenCV/
 ├── W1-W7/                 # 7 个学习项目
 ├── common/pcb_core/       # W6/W7 共用的判定核心(无 Qt 依赖)
-├── notes/                 # 变更日志（13 份 + 20 张 atomic 卡）
+├── notes/                 # 变更日志（14 份 + 21 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -151,7 +159,7 @@ OpenCV/
 
 - 7 个 C++ 项目 + 2 个共享核心
 - 96 个 C++ 文件 / ~17700 行代码
-- 13 份变更日志 + 20 张 atomic 卡 / ~280 KB
+- 14 份变更日志 + 21 张 atomic 卡 / ~230 KB
 - **17 个无头回归测试 / 1480 条断言**（W7 14 个 / 1101，W6 3 个 / 379；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

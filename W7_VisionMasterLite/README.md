@@ -326,17 +326,17 @@ CMake 会真实探测并在 configure 时打印结果:
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
-# 一次跑完全部 13 个套件
+# 一次跑完全部 14 个套件
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
 > ⚠️ **`-C Release` 不能省。** 生成器是 VS 多配置版，`CMAKE_CONFIGURATION_TYPES`
 > 里 Debug 和 Release 都在，而 ctest 不带 `-C` 时**默认按 Debug 找 exe**。
-> 只构建过 Release 的话，13 个套件会全部报 `Not Run`——
+> 只构建过 Release 的话，14 个套件会全部报 `Not Run`——
 > 报错长这样：
 >
 > ```
-> 0% tests passed, 13 tests failed out of 13
+> 0% tests passed, 14 tests failed out of 14
 > 	  1 - undo_redo (Not Run)
 > ```
 >
@@ -472,6 +472,19 @@ FrameImageState imageState(const QString& nodeId, int frameIndex,
 > 走 ctest 却是 `fail=1`。两处都改了:CMakeLists 补上
 > `WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}`,守卫改成 `check(false, ...)`
 > 并在消息里点名 CMake 那一侧,让配置缺口当场暴露而不是静默。
+>
+> ⚠️ 2026-10-20 又改了一次:工作目录从工程根挪到了
+> `build/test_work/run_policy/`(为了不让测试产物落进源码树),
+> 于是"相对路径恰好能打开"这个前提**第二次**不成立了。
+> 这次没再补一个 `WORKING_DIRECTORY` —— 守卫改成**自己往上找**
+> `mainwindow.cpp`(`findMainWindowCpp()`,最多往上 8 层),
+> 找不到就**报红**。
+>
+> 两次修法不一样,是因为问题变了:
+> 第一次是"CWD 放错了",第二次是"**根本不该依赖 CWD**"。
+> 一条守卫如果它的成立前提是"某个目录碰巧对",
+> 那它迟早会因为目录挪动而失效 —— 而失效的方式是**变成恒真**。
+> 现在它只依赖一件事:**源码文件存在**。
 
 ### 帧选择器:序号 ≠ 帧号,这是设计出来的
 
@@ -899,11 +912,23 @@ $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
 # 期望末行:SUMMARY: pass=151 fail=0   RESULT=PASS(退出码 0)
 ```
 
-> `pcb_operators` / `image_sources` 会在 `images/` 下写标注图和临时素材,
-> 工作目录必须是工程根(CTEST 里已配 `WORKING_DIRECTORY`)。
-> 临时素材的 gitignore 规则在根 `.gitignore`,**必须是 `**/images/…`** ——
-> gitignore 里带 `/` 的模式是锚定到 `.gitignore` 所在目录的,
-> 写成 `images/w7_*.png` 管不到 `W7_VisionMasterLite/images/`。
+> 🧹 **测试产物落在 `build/test_work/<套件名>/`,不落源码树。**
+> `pcb_operators` / `image_sources` / `measurement` / `detection_operators` /
+> `template_match` 会在 `images/` 下写标注图和临时素材 ——
+> 2026-10-20 之前,它们的 CWD 是工程根,产物**直接写在源码树里**,
+> 靠根 `.gitignore` 的 `**/images/w7_*.png` 之类规则**藏起来**。
+>
+> 现在每个套件一份工作目录(全在 `build/` 下),配方和测试图由构建时暂存进去:
+>
+> - 产物不再进源码树,`git status` 跑完测试是干净的
+> - 暂存**每次构建都重做** —— 改了配方、换了图,下次构建就生效,不会拿旧数据跑
+> - 每套件一份目录,`ctest -j` 并行也不会互相踩
+>
+> 相应地,根 `.gitignore` 里那两条**只为藏测试产物**的规则
+> (`**/images/_test_src.avi`、`**/images/_srcframe_*.png`)已经删掉 ——
+> 规则是用来藏问题的,不是用来解决问题的。应用运行时产生的
+> `**/images/w7_*.png` 规则保留(那是应用行为,不是测试行为)。
+> 详见 [../notes/notes_TestWorkDir_2026-10.md](../notes/notes_TestWorkDir_2026-10.md)。
 
 ### 测试抓到的真 bug(留着当反面教材)
 - **`VideoCapture` 抛异常而不是返回 false**:塞一个非视频文件进去,
