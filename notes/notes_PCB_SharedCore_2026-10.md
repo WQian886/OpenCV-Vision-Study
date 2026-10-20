@@ -171,6 +171,13 @@ complex 板 → W6_PCB_DefectProject/images/complex/complex_manifest.csv
 断言记的是 PASS（当前真实行为）。哪天判据重做完了，断言会立刻转红，
 提醒补上"必须命中"的断言 —— 和 W7 套件里 `knownMiss=true` 同款做法。
 
+> 📌 **2026-10-20 更新**：`signal_polarity.png` 这条**已经修好了**（极性判据重做，
+> 见 `notes/notes_PCB_Polarity_2026-10.md`），已从 knownMiss 清单里划掉，
+> 改成"必须命中 polarity"。`power_short.png` **仍然漏检**。
+>
+> 上面这张表当时就是"过期检测器"：判据修好之后，它自己先红了 ——
+> 这正是把"当前真实行为"写进断言（而不是写死成期望）的价值。
+
 **已知漏检必须写进断言**：漏检在界面上跟真合格一模一样 ——
 光看 `result == "PASS"` 分不出"查过了没问题"和"根本没看见"。
 
@@ -330,7 +337,7 @@ W6：**2 个套件全绿**（163 + 142）—— W6 之前是**零个** ctest 套
 | 论断 | 核实方式 |
 |---|---|
 | W6 改造前三块好板全被判废 | 2026-10-20 实测三种板型 |
-| 核心 163 条断言 | `ctest --test-dir W6_PCB_DefectProject/build -C Release` |
+| 核心 163 条断言 | `ctest --test-dir W6_PCB_DefectProject/build -C Release`（2026-10-20 极性重做后已是 180 条，见 `notes_PCB_Polarity_2026-10.md`）|
 | W6 CLI 142 条断言 | 同上（`w6_cli` 套件）|
 | W7 13 套件全绿 | `ctest --test-dir W7_VisionMasterLite/build -C Release` |
 | MSVC 窄串路径抛异常 | 探针实测，输出见 5.2 |

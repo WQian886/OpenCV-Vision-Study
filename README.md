@@ -18,8 +18,8 @@
 
 ## 🏆 两个综合项目
 
-- **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**2 个无头回归测试 / 305 条断言**
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，13 个无头回归测试共 1046 条断言
+- **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**2 个无头回归测试 / 322 条断言**
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，13 个无头回归测试共 1065 条断言
 
 ## 🔗 共享判定核心（common/pcb_core）
 
@@ -45,7 +45,7 @@ W6 和 W7 的 PCB 判定**共用同一份实现**（`common/pcb_core/`，无 Qt 
 |---|---|
 | 4 种图像源 | 本地 / 文件夹 / 视频 / 工业相机（对标 VM 四种） |
 | 帧循环 | 源输出 `frame_count`，引擎按 `frame_index` 逐轮跑整条链 + 批量 PASS/FAIL 汇总 |
-| W6 深度联动 | `pcb_inspect` + `pcb_defect_judge` 把 PCB 算法挂进画布，7 类缺陷 9 个阈值可调 |
+| W6 深度联动 | `pcb_inspect` + `pcb_defect_judge` 把 PCB 算法挂进画布，7 类缺陷 7 个阈值可调（极性反那条不再是阈值判据 —— 期望侧由配方给）|
 | DL 算子 | `dl_postprocess`（letterbox/NMS/YOLOv5-v8 解析）+ `dl_infer`（ONNX Runtime，条件编译） |
 | 测量类 | `line_fit`（长度+角度）/ `circle_fit`（圆心+半径+圆度）/ `caliper_dist`（点到线距离），补齐 VM 四大模块最后一块 |
 | 每步结果查看 | 节点状态点 + 右键回看任意一步的图和全部字段（数字**全帧留**，图只留最近 N 帧；图没了明说，绝不拿别的帧顶替）+ 标题条上的**帧选择器** `[◀][spin][▶]` |
@@ -59,7 +59,7 @@ cd W7_VisionMasterLite
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
-13 个套件 / 1046 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+13 个套件 / 1065 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试，
 `pcb_core` 则是共享判定核心自己的测试（**W6 和 W7 链的是同一份源码**）。
 
@@ -79,7 +79,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 10 份，~170 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 12 份 + 19 张 atomic 卡，~260 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -91,6 +91,16 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 - `notes_W7_ImageSourceCamera_2026-09.md` (10 KB) — 工业相机图像源（MVS SDK 条件编译）
 - `notes_W7_UndoRedo_2026-09.md` (17 KB) — M6 撤销重做 + 节点 UUID + P0 悬垂指针修复
 - `notes_PCB_SharedCore_2026-10.md` (15 KB) — 共享判定核心 + W6 可测层 + 路径编码 bug
+- `notes_W7_EngineeringLessons_2026-10.md` (35 KB) — W7 工程经验汇总
+- `notes_PCB_Polarity_2026-10.md` (17 KB) — 极性判据重做：从「量错东西」到「量对东西」
+
+`notes/atomic/` 里是**单条教训卡片**（19 张）：一条坑一张卡，
+能单独引用、能单独复习。挑几条：
+
+- `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
+- `at-criterion-must-not-guess-the-baseline.md` — 判据不猜：期望值由知道真相的那一方登记
+- `at-reported-vs-named.md` — 「报了缺陷」≠「报的是那个缺陷」
+- `at-mutation-ruler-broken.md` — 变异尺子本身坏了
 
 W7 收官期的改动（PCB/DL 算子、视频源、帧循环、每步结果查看、pin 检查、最近工程）
 逐条记在 git 提交信息里，每条都写清了"为什么"和"测试抓到了什么"。
@@ -116,7 +126,7 @@ out/build/x64-Release/w6_pcb_defect.exe report images
 OpenCV/
 ├── W1-W7/                 # 7 个学习项目
 ├── common/pcb_core/       # W6/W7 共用的判定核心(无 Qt 依赖)
-├── notes/                 # 变更日志（10 份）
+├── notes/                 # 变更日志（12 份 + 19 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -127,7 +137,7 @@ OpenCV/
 
 - 7 个 C++ 项目 + 1 个共享核心
 - 96 个 C++ 文件 / ~17700 行代码
-- 10 份变更日志 / ~170 KB
-- **15 个无头回归测试 / 1351 条断言**（W7 13 个 / 1046，W6 2 个 / 305；
+- 12 份变更日志 + 19 张 atomic 卡 / ~260 KB
+- **15 个无头回归测试 / 1387 条断言**（W7 13 个 / 1065，W6 2 个 / 322；
   其中 `pcb_core` 一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
