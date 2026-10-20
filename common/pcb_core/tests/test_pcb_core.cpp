@@ -503,10 +503,11 @@ static void test_recipe_validation() {
     // 那条规则一条都不会跑,而且不报错。
     {
         const auto& known = knownChecks();
-        check(known.size() == 6,
-              "knownChecks 有 6 条规则(实际 " + std::to_string(known.size()) + ")");
+        check(known.size() == 7,
+              "knownChecks 有 7 条规则(实际 " + std::to_string(known.size()) + ")");
         const char* names[] = {rule::kMissing, rule::kShifted, rule::kWrong,
-                               rule::kPolarity, rule::kBridge, rule::kInsufficient};
+                               rule::kPolarity, rule::kBridge, rule::kInsufficient,
+                               rule::kShort};
         for (const char* n : names) {
             bool found = false;
             for (const auto& k : known) {
@@ -593,6 +594,47 @@ static void test_refuse_paths() {
 }
 
 // ============================================================
+// 短路判据的**前置条件**:元件本体不能是金属色
+// ============================================================
+//
+// 短路判据量的是"两个端子之间的绝缘缝里有没有金属"。如果元件本体
+// 自己就落在金属色带里(生成器的调色板按 RGB 写、注释按 BGR 写,
+// 于是"电容黄"实际渲染成和铜箔几乎同色的青蓝),那缝里本来就全是
+// 金属,分不出"是本体"还是"是短路"—— 硬判就是**每块好板都报短路**。
+//
+// 这条前置条件判据自己查不了(缺陷图的本体中心被那根短路铜条盖住,
+// 两种情况长得一模一样),所以由**配方层**保证:
+//   · 谁配 short -> tools/export_recipes.py 的 CHECKS 表
+//   · 配了对不对 -> 就是下面这个断言
+//
+// 断言在**好板**上量(好板上本体中心就是本体,没有铜条盖着)。
+// 配错了不会静默:好板会整片报短路,下面那张真值表当场红。
+static void checkShortPrecondition(const cv::Mat& img, const InspectResult& ir,
+                                   const std::string& who) {
+    for (const auto& s : ir.sites) {
+        bool hasShort = false;
+        for (const auto& c : s.checks) {
+            if (c == "short") { hasShort = true; break; }
+        }
+        if (!hasShort) continue;
+        const int cx = s.roi.x + s.roi.width / 2;
+        const int cy = s.roi.y + s.roi.height / 2;
+        int gold = 0;
+        for (int y = cy - 2; y <= cy + 2; ++y) {
+            for (int x = cx - 2; x <= cx + 2; ++x) {
+                if (x < 0 || y < 0 || x >= img.cols || y >= img.rows) continue;
+                if (ir.goldMask.at<uchar>(y, x) != 0) ++gold;
+            }
+        }
+        check(gold == 0,
+              who + " 的 " + s.label + " 配了短路检查,它的本体中心**不是**金属色"
+              "(金层掩膜里 " + std::to_string(gold) + "/25 个像素是金属)—— "
+              "这是短路判据能成立的前提:本体要是金属色,两脚之间的缝里"
+              "有没有金属就分不出来了");
+    }
+}
+
+// ============================================================
 // 用例 4:端到端 —— 核心直接调(不经过 Qt 算子)
 // ============================================================
 //
@@ -614,14 +656,18 @@ static void test_end_to_end() {
         const auto rows = readCsv(w6 / "images" / "manifest.csv");
         check(!rows.empty(), "读得到 images/manifest.csv");
         if (!rows.empty()) {
-            int fileCol = -1, defectCol = -1, expCol = -1;
+            int fileCol = -1, defectCol = -1, expCol = -1, siteCol = -1;
             for (size_t i = 0; i < rows[0].size(); ++i) {
                 if (rows[0][i] == "file")   fileCol = static_cast<int>(i);
                 if (rows[0][i] == "defect") defectCol = static_cast<int>(i);
                 if (rows[0][i] == "expected") expCol = static_cast<int>(i);
+                if (rows[0][i] == "site")   siteCol = static_cast<int>(i);
             }
             check(fileCol >= 0 && defectCol >= 0 && expCol >= 0,
                   "manifest.csv 有 file/defect/expected 三列");
+            check(siteCol >= 0,
+                  "manifest.csv 有 site 列(缺陷画在哪个元件上——"
+                  "期望值从这里读,不在代码里写死)");
 
             BoardRecipe recipe;
             std::string reason;
@@ -635,6 +681,13 @@ static void test_end_to_end() {
                 const std::string file = row[fileCol];
                 const std::string wantDefect = row[defectCol];
                 const std::string wantResult = row[expCol];
+                // 缺陷画在哪个元件上 —— 从**真值表**读。
+                // 写死 "R2" 就是第二份真值表:哪天生成器把缺陷挪到别的
+                // 元件上,这条断言会一直绿着,直到有一天它自己红掉 ——
+                // 而那时候没人知道它为什么红。
+                const std::string wantSite =
+                    (siteCol >= 0 && static_cast<int>(row.size()) > siteCol)
+                        ? row[siteCol] : std::string();
 
                 const cv::Mat img =
                     cv::imread((w6 / "images" / file).string(), cv::IMREAD_COLOR);
@@ -662,6 +715,53 @@ static void test_end_to_end() {
                     check(hit, file + " 必须命中 " + wantDefect +
                                "(实际: " + types + ")");
                 }
+
+                // --- 短路:点名到元件 + 读数在阈值两侧 ---
+                //
+                // ⚠ 2026-10-20 短路判据重做后加的。
+                //   "整张板 FAIL"不等于"那个元件被找到了"——
+                //   别的站点报一条同类型的缺陷就能把 verdict 撑成 FAIL。
+                //   所以短路必须**点名到元件**,而且读数要能看出
+                //   "好板是 0%、废板是接近 100%"。
+                {
+                    const std::string who = file;
+                    std::string comp;
+                    double read = -1.0;      // 出缺陷那个元件的读数
+                    double worst = -1.0;     // 所有配了短路的元件里最大的读数
+                    for (const auto& d : jr.defects) {
+                        if (d.type == "short") comp = d.component;
+                    }
+                    for (const auto& m : jr.metrics) {
+                        if (m.rule != "short") continue;
+                        if (m.component == comp) read = m.value;
+                        if (m.value > worst) worst = m.value;
+                    }
+                    if (wantDefect == "short") {
+                        check(comp == wantSite,
+                              who + " 的短路必须点名到 " + wantSite +
+                              "(实际 \"" + comp + "\")");
+                        check(read >= 50.0,
+                              who + " 的端子间隙金属占比应超过阈值 50%(实际 " +
+                              std::to_string(read) + ")");
+                    } else if (wantResult == "PASS") {
+                        check(comp.empty(),
+                              who + " 是好板,不该报短路(实际点名到 \"" + comp + "\")");
+                        // 好板:所有配了短路的元件,读数都必须是 **0**
+                        //
+                        // ⚠ 这里钉的是"**一点金属都没有**",不是"小于阈值"。
+                        //   阈值是 50%,而好板真实的读数是 0% ——
+                        //   中间那一大截余量看着安全,其实会盖住一类 bug:
+                        //   采样窗口多掐进焊盘 1px(焊盘自带 1px 描边,也是金属),
+                        //   好板读数就变成 4.8%:仍然低于阈值,判定不变,
+                        //   但"缝里到底有没有金属"这个读数已经**不诚实**了。
+                        //   读数一旦不诚实,标定它的那些结论就都不可信了。
+                        check(worst == 0.0,
+                              who + " 是好板,端子间隙里一点金属都没有(最大 " +
+                              std::to_string(worst) + "%)");
+                        // 好板才量得了前置条件(缺陷图的本体中心被铜条盖着)
+                        checkShortPrecondition(img, ir, who);
+                    }
+                }
             }
         }
     }
@@ -678,12 +778,16 @@ static void test_end_to_end() {
         const auto rows = readCsv(cdir / "complex_manifest.csv");
         check(!rows.empty(), "读得到 images/complex/complex_manifest.csv");
         if (!rows.empty()) {
-            int fileCol = -1, kindCol = -1, expCol = -1;
+            int fileCol = -1, kindCol = -1, expCol = -1, siteCol = -1;
             for (size_t i = 0; i < rows[0].size(); ++i) {
                 if (rows[0][i] == "file")     fileCol = static_cast<int>(i);
                 if (rows[0][i] == "kind")     kindCol = static_cast<int>(i);
                 if (rows[0][i] == "expected") expCol = static_cast<int>(i);
+                if (rows[0][i] == "site")     siteCol = static_cast<int>(i);
             }
+            check(siteCol >= 0,
+                  "complex_manifest.csv 有 site 列(缺陷画在哪个元件上——"
+                  "期望值从这里读,不在代码里写死)");
 
             // 已知漏检:原因见 common/pcb_core/pcb_core.cpp 里对应规则的注释
             //
@@ -691,19 +795,16 @@ static void test_end_to_end() {
             //   哪天判据重做完了,把条目删掉,断言会立刻转红,
             //   逼你补上"必须命中"那条 —— 否则就是改好了却没人知道。
             //
-            // 📌 2026-10-20:signal_polarity.png 从这张表里**划掉了**。
-            //   旧判据量的是"ROI 里所有白丝印的质心",而极性条只是其中
-            //   4~7px 宽的一小条,旁边还有丝印外框、二极管符号线在抢 ——
-            //   实测"根本没有极性条"的电容,质心也正好 50.0%,单边阈值
-            //   根本没有余量。现在改成:腐蚀出极性条本身 -> 定侧 -> 和
-            //   配方给的 polarity_side 比。这张图现在必须命中 polarity。
+            // 📌 2026-10-20:**这张表现在是空的**。
+            //   里面最后一条是 power_short.png —— 短路判据原来找的是
+            //   生成器画给人眼看的蓝紫**标记圈**,而 power 那张图画的是
+            //   一条**金条**,于是整板一路 PASS(漏检)。
+            //   短路判据重做成"量两个端子之间的绝缘缝里有没有金属"之后,
+            //   这张图能抓到了,条目删掉(改好了却没人知道 = 漏检变成第二张好板)。
+            //
+            //   另一张 signal_polarity.png 早在极性判据重做时就划掉了。
             struct KnownMiss { const char* file; const char* why; };
-            const KnownMiss misses[] = {
-                {"power_short.png",
-                 "短路判据找的是蓝紫**圆环**,而 power 这张图画的是一条**金条** —— "
-                 "面积 0.1992% 撞出上界 0.08%,宽 41.4% 对角线也撞出上界 8%。"
-                 "不是阈值没调好,是缺陷定义与判据不匹配。"},
-            };
+            const std::vector<KnownMiss> misses = {};
             // 命中已知漏检时把**原因一起带出来**。
             //
             // ⚠ why 这个字段不能只摆着不用:
@@ -725,6 +826,10 @@ static void test_end_to_end() {
                 const bool wantFail = want.rfind("FAIL", 0) == 0;
                 const std::string wantType =
                     wantFail ? want.substr(want.find(':') + 1) : std::string();
+                // 缺陷画在哪个元件上 —— 从**真值表**读,不在代码里写死 "L1"。
+                const std::string wantSite =
+                    (siteCol >= 0 && static_cast<int>(row.size()) > siteCol)
+                        ? row[siteCol] : std::string();
 
                 BoardRecipe recipe;
                 std::string reason;
@@ -774,6 +879,48 @@ static void test_end_to_end() {
                     check(hit, who + " 必须命中 " + wantType +
                                "(实际: " + types + ")");
                 }
+                // --- 短路:点名到元件 ---
+                //
+                // ⚠ 短路必须点名到元件:"整张板 FAIL"不等于"那个元件被找到了"
+                //   —— 别的站点报一条同类型的缺陷就能把 verdict 撑成 FAIL。
+                //   短路是**按元件**的规则(它量的是某个元件的两脚之间),
+                //   所以它报出来的也必须是某个元件。
+                if (wantType == "short") {
+                    std::string comp;
+                    for (const auto& d : jr.defects) {
+                        if (d.type == "short") comp = d.component;
+                    }
+                    // ⚠ 读数要**按元件取**:一块板上可能有好几个元件配了短路
+                    //   (power 板有 7 个),读错那条会拿到别的元件的 0%。
+                    double read = -1.0;
+                    for (const auto& m : jr.metrics) {
+                        if (m.rule == "short" && m.component == comp) read = m.value;
+                    }
+                    check(comp == wantSite,
+                          who + " 的短路必须点名到 " + wantSite +
+                          "(实际 \"" + comp + "\")");
+                    check(read >= 50.0,
+                          who + " 的端子间隙金属占比应超过阈值 50%(实际 " +
+                          std::to_string(read) + ")");
+                }
+                if (!wantFail) {
+                    // 好板才量得了短路的前置条件(缺陷图的本体中心被铜条盖着)
+                    checkShortPrecondition(img, ir, who);
+                    // 好板:配了短路的元件,端子间隙里一点金属都没有。
+                    //
+                    // ⚠ 这里也钉"**恰好 0**",不是"小于阈值"——
+                    //   power 板有 7 个元件配了短路,读数只要有一点点不对
+                    //   (比如采样窗口多掐进焊盘 1px),这个数就再也不诚实了。
+                    //   读数不诚实,拿它标出来的阈值就不可信。
+                    double worst = -1.0;
+                    for (const auto& m : jr.metrics) {
+                        if (m.rule != "short") continue;
+                        if (m.value > worst) worst = m.value;
+                    }
+                    check(worst == 0.0,
+                          who + " 是好板,端子间隙里一点金属都没有(最大 " +
+                          std::to_string(worst) + "%)");
+                }
                 // 定位到的元件数要与真值表一致
                 check(static_cast<int>(ir.sites.size()) ==
                           std::stoi(row[2]),
@@ -781,6 +928,101 @@ static void test_end_to_end() {
                       std::to_string(ir.sites.size()) + ")");
             }
         }
+    }
+}
+
+// ============================================================
+// 用例 5:短路必须有端子位置 —— 没有就必须报"没查"
+//
+// ============================================================
+//
+// ⚠ 这一条是 2026-10-20 补的,补的原因是**变异验证发现的**:
+//   判据里有"没登记端子 -> 报没查(skipped)"这条路径,
+//   但**没有任何断言**钉它 —— 把那条 push_back 删掉,
+//   整套测试照样全绿。
+//
+//   而这条路径恰恰是"静默失效"最典型的形态:
+//     端子没登记 -> 短路判不了 -> 这条规则没跑 -> defects 里没有 short
+//     -> 板子判成合格 —— **看起来和"查过了没问题"一模一样**。
+//   真短路的废板就这么被放过去了,而且界面上看不出任何异常。
+//
+// 所以这里钉三件事:
+//   ① 没登记端子 -> 必须有 skipped 条目(rule=short),说清为什么没查;
+//   ② 没查的时候不许同时报出 short 缺陷(没查就不许给结论);
+//   ③ 登记够了端子 -> 规则必须真的跑了(不许有 skipped,也必须有读数)。
+//
+// 顺带把"登记了三个端子"也钉住:数量不对同样判不了,
+// 不能因为"有 pads 字段"就当成登记好了。
+// ============================================================
+static void test_short_needs_pads() {
+    beginCase("短路:没登记端子就必须报\"没查\",不许装作查过了");
+
+    const fs::path w6 = g_root / "W6_PCB_DefectProject";
+    const cv::Mat img =
+        cv::imread((w6 / "images" / "baseline.png").string(), cv::IMREAD_COLOR);
+    check(!img.empty(), "读得到 baseline.png");
+    if (img.empty()) return;
+
+    // 同一块板、同一个元件,只改"登记了几个端子"。
+    // R2 在 demo 板上的端子是 [[110,480,12],[190,480,12]](配方里的真值)。
+    auto run = [&](const std::string& padsJson) {
+        JudgeResult jr;
+        BoardRecipe r;
+        std::string reason;
+        const std::string json =
+            "{\"name\":\"t\",\"ref_w\":1000,\"ref_h\":700,\"sites\":[{"
+            "\"label\":\"R2\",\"kind\":\"R\",\"cx\":150,\"cy\":480,"
+            "\"body_w\":100,\"body_h\":28,\"checks\":[\"short\"]" +
+            padsJson + "}]}";
+        const bool ok = parseRecipeJson(json, &r, &reason);
+        check(ok, std::string("配方能加载") + (ok ? "" : ("(" + reason + ")")));
+        if (!ok) return jr;
+        const JudgeParams p;
+        const InspectResult ir = inspect(img, r, pcbcolor::goldBand(p.maskVMul));
+        return judge(img, ir.sites, p, ir.goldMask, ir.boardBase);
+    };
+    auto countSkipped = [](const JudgeResult& jr, const char* rule) {
+        int n = 0;
+        for (const auto& s : jr.skipped) if (s.rule == rule) ++n;
+        return n;
+    };
+    auto countDefects = [](const JudgeResult& jr, const char* type) {
+        int n = 0;
+        for (const auto& d : jr.defects) if (d.type == type) ++n;
+        return n;
+    };
+
+    // ① 没登记端子 -> 必须报"没查"
+    {
+        const JudgeResult jr = run("");
+        const int n = countSkipped(jr, "short");
+        check(n == 1,
+              "没登记端子 -> 必须报一条 \"没查\"(实际 " + std::to_string(n) + " 条)");
+        std::string why;
+        for (const auto& s : jr.skipped) if (s.rule == "short") why = s.reason;
+        check(!why.empty(),
+              "\"没查\" 必须说清为什么(实际: \"" + why + "\")");
+        // ② 没查就不许给结论
+        const int d = countDefects(jr, "short");
+        check(d == 0,
+              "没查的时候不许报出 short 缺陷(实际报了 " + std::to_string(d) + " 条)");
+    }
+    // ③ 登记了三个端子 -> 数量不对,同样判不了
+    {
+        const JudgeResult jr =
+            run(",\"pads\":[[110,480,12],[190,480,12],[150,480,12]]");
+        const int n = countSkipped(jr, "short");
+        check(n == 1,
+              "登记了三个端子 -> 同样必须报 \"没查\"(实际 " + std::to_string(n) + " 条)");
+    }
+    // ④ 登记了两个 -> 规则必须真的跑了
+    {
+        const JudgeResult jr = run(",\"pads\":[[110,480,12],[190,480,12]]");
+        check(countSkipped(jr, "short") == 0,
+              "登记了两个端子 -> 规则必须真的跑(不该报没查)");
+        bool hasMetric = false;
+        for (const auto& m : jr.metrics) if (m.rule == "short") hasMetric = true;
+        check(hasMetric, "登记了两个端子 -> 必须给出读数(量了就得报数)");
     }
 }
 
@@ -794,6 +1036,7 @@ int main() {
     test_recipe_validation();
     test_refuse_paths();
     test_end_to_end();
+    test_short_needs_pads();
 
     std::cout << "\n========================================" << std::endl;
     std::cout << "SUMMARY: pass=" << g_pass << " fail=" << g_fail

@@ -109,8 +109,8 @@ BODY = {
 #   不会假装整板都查过了。
 # ============================================================
 CHECKS = {
-    "RES":       ["missing", "shifted", "wrong", "bridge"],
-    "DIODE":     ["missing", "shifted", "polarity"],
+    "RES":       ["missing", "shifted", "wrong", "bridge", "short"],
+    "DIODE":     ["missing", "shifted", "polarity", "short"],
     # ⚠ CAP_BIG / CAP_SMALL 配 missing 是**量出来才加的**,原来按"本体不是黑的"
     #   判定它们不适用 missing —— 那是拍的,实测推翻:
     #   power_missing.png 把 C2 整个擦掉,C2 暗像素 2.94% -> 0.00%,
@@ -118,18 +118,29 @@ CHECKS = {
     #   抓到的**全部原因**(变异验证:把 CAP_BIG 的 checks 清空,断言立刻转红)。
     #   暗像素虽然只来自本体那一圈黑描边,但 dark_min_pct 是相对板面基色的,
     #   整体亮度缩放时两边一起动,比例不变。
+    #
+    # ⚠ short(短路)只给**本体不是金属色**的两脚封装:
+    #   生成器的调色板常量是 RGB 顺序但注释按 BGR 写,于是"电容黄"
+    #   实际渲染成青蓝色,落在金层色带 H[85,115] 里 —— 和铜箔几乎同色
+    #   (H 94.7 vs 96.3),**分不开**。这种元件的两脚之间本来就是金属色,
+    #   "缝里有没有金属"根本判不出来,硬判就是每块好板都报短路。
+    #   判据那边有守门(本体中心落在金属色带里就报"没查"),
+    #   但既然知道分不开,就别配 —— 配了只会在报告里堆一堆"没查"。
     "CAP_SMALL": ["missing", "polarity"],
-    "CAP_BIG":   ["missing", "polarity"],
+    "CAP_BIG":   ["missing", "polarity", "short"],
     "TO220":     ["missing", "insufficient"],
     "QFP64":     ["missing", "insufficient"],
     "SOIC8":     ["missing", "insufficient"],
     "XTAL":      ["insufficient", "bridge"],
-    "INDUCTOR":  [],
+    # ⚠ INDUCTOR 本体是 (70,70,90)(偏蓝紫),不在金层色带里 ->
+    #   缝里有没有金属分得清 -> 可以判短路。
+    "INDUCTOR":  ["short"],
     "TERMINAL":  [],
     # ⚠ LED / HEADER 看着也像"能判缺件",实测**不能**(2026-10-10):
     #   LED 暗像素 0.77%,HEADER 0.00% —— 本体是橙/绿的自发光色,不是黑的。
     #   给它们配 missing 等于每一颗 LED、每一个排针都报缺件。
     #   这两个数就是它们**必须**留在空表里的理由,不是"忘了配"。
+    #   (LED 的本体 (40,140,230) 落在金层色带里,也不能配 short。)
     "LED":       [],
     "BUTTON":    [],
 }
@@ -156,18 +167,31 @@ def export_demo():
     # build_baseline() 只返回 Image,不写文件,调用它没有副作用。
     D.build_baseline()
     side_of = dict(D.POLARITY_SIDE)
+    # 端子(焊盘)位置:同样由生成器登记(画焊盘的那一行登记)。
+    # 短路判据量的是"两个端子之间有没有金属",位置必须是真的 ——
+    # 这里只搬运,不重算(dx/dy 抄一遍就是本项目栽过四遍的那种坑)。
+    pads_of = dict(D.PADS)
 
     sites = []
     for label, kind, cx, cy, _pad_dx, _pad_dy, bw, bh in D.SITES:
         # demo 板是刻意造来测这六条规则的,规则集就是当年那六条
+        #
+        # ⚠ 2026-10-20:R2 多了一条 "short"(短路)。
+        #   demo 板的两张样本图必须能互相区分开:
+        #     bridge.png = R1 的两个焊盘被连成一片 -> 报"焊桥"
+        #     short.png  = R2 的两个焊盘被连成一片 -> 报"短路"
+        #   物理上这两件事是**同一件**(两脚被金属连通),所以只能靠
+        #   "配方给哪个元件配哪条规则"来区分 —— 一个元件只配一条,
+        #   免得同一件事在报告里报两遍。
         checks = {
             "R1": ["bridge"], "C1": ["polarity"], "U1": ["insufficient"],
-            "R2": ["missing", "shifted"], "C2": [], "R3": ["wrong"],
+            "R2": ["missing", "shifted", "short"], "C2": [], "R3": ["wrong"],
         }.get(label, [])
         sites.append({
             "label": label, "kind": kind, "cx": cx, "cy": cy,
             "body_w": bw, "body_h": bh, "checks": checks,
             "polarity_side": side_of.get((cx, cy), ""),
+            "pads": [list(p) for p in pads_of.get((cx, cy), [])],
         })
     return {
         "name": "demo",
@@ -182,6 +206,8 @@ def export_complex(kind, builder, title):
     # builder 跑完,POLARITY_SIDE 里是**这块板**登记的 kind -> 侧。
     # 每块板建 baseline 时会先 clear(),所以不会串味。
     side_of = dict(G.POLARITY_SIDE)
+    # 端子(焊盘)位置:同样由生成器登记,这里只搬运。
+    pads_of = dict(G.PADS)
 
     sites = []
     for label, k, cx, cy in layout:
@@ -193,6 +219,7 @@ def export_complex(kind, builder, title):
         bw, bh = BODY[k]
         checks = list(CHECKS.get(k, []))
         side = side_of.get((cx, cy), "")
+        pads = pads_of.get((cx, cy), [])
         # ⚠ **没有极性条的封装不配 polarity 检查**。
         #   陶瓷电容没有极性标记,给它配了 polarity,规则每次都跑、
         #   每次都"读不到极性条" —— 报告里全是"没查"的噪音,
@@ -200,12 +227,23 @@ def export_complex(kind, builder, title):
         #   有没有极性条,生成器登记了才知道。
         if "polarity" in checks and not side:
             checks.remove("polarity")
+        # ⚠ 配了 short 就必须带端子位置。
+        #   没有端子,短路规则只能报"没查" —— 配方里写一条跑不起来的
+        #   规则,不如不写(覆盖度统计按"配了规则的元件数"算,
+        #   配了却跑不了 = 覆盖度虚高)。
+        if "short" in checks and len(pads) != 2:
+            sys.exit(
+                "%s(kind %s) 配了 short,但生成器只登记了 %d 个端子 —— "
+                "短路判据量的是\"两个端子之间\",端子不是一个数就判不了。"
+                % (label, k, len(pads))
+            )
         sites.append({
             "label": label, "kind": k, "cx": cx, "cy": cy,
             "body_w": bw, "body_h": bh,
             "checks": checks,
             "shift_tol_pct": SHIFT_TOL_PCT.get(k),
             "polarity_side": side,
+            "pads": [list(p) for p in pads],
         })
     return {
         "name": kind,

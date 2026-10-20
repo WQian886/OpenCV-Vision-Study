@@ -58,6 +58,21 @@ RED         = (40, 40, 220)    # 极性标记
 YELLOW      = (40, 200, 230)   # 电容黄
 BLUE_DARK   = (180, 80, 30)    # IC 蓝（棕褐色也行）
 
+# "错件"用的那个件的颜色 —— **不能是铜色**。
+#
+# ⚠ 2026-10-20 单独拎出来一个常量,原因是一个实测出来的坑:
+#   错件图 = "该装电阻的位置换成了一个电容"。而这个电容的本体如果是
+#   **铜色**(落进金层色带 H[85,115]),那么这个元件的**端子间隙里全是金属** ——
+#   短路判据量"两脚之间的缝里有没有金属",量到的就是本体的颜色,
+#   于是**好端端的板报了一条短路**(实测:MCU 板的 mcu_wrong.png 上
+#   R2 同时报了 wrong 和 short,而它压根没被短路)。
+#
+#   所以缺陷图里**颜色必须唯一对应一种物理含义**:铜色 = 铜箔,
+#   不许拿来当别的件的颜色。YELLOW 之所以还是铜色,是调色板的老问题
+#   (常量按 RGB 写、注释按 BGR 写,"电容黄"实际渲染成青蓝)——
+#   整个调色板要改就是另一个大工程,这里只把**错件**用的颜色摘出来。
+WRONG_PART  = (40, 200, 120)   # 错件:青绿色(明亮、偏色,一眼不是电阻)
+
 # ============================================================
 # 极性条画在哪一侧 —— 由画它的那一行代码自己登记
 #
@@ -69,6 +84,22 @@ BLUE_DARK   = (180, 80, 30)    # IC 蓝（棕褐色也行）
 # 值 "left"/"right" 相对**元件本体**,不是相对图。
 # ============================================================
 POLARITY_SIDE = {}
+
+# ============================================================
+# 端子(焊盘)位置登记 —— 由画焊盘的那一行代码自己登记
+#
+# 为什么要登记:
+#   短路判据要回答的是"**这两个端子之间**有没有金属"(两脚被连通),
+#   而"哪两个端子属于同一个元件、它们在哪儿"只有画它们的代码知道。
+#   和 POLARITY_SIDE 一个道理:期望侧由**知道真相的那一方**登记,
+#   判据不猜 —— 猜错的后果是把好板判成短路(静默误报)。
+#
+# 键是 (cx, cy):位置就是实例的身份(和 POLARITY_SIDE 一致)。
+# 值是 [(x, y, 焊盘半宽), ...]:焊盘中心 + 半宽。
+# 半宽的用处:把"焊盘自己"从"两脚之间的绝缘缝"里掐掉 ——
+# 焊盘本来就是金属,它是端子,不是缺陷。
+# ============================================================
+PADS = {}
 
 # 字体（Pillow 自带 bitmap 字体,避免 Windows 字体缺失）
 def _font(size):
@@ -216,6 +247,8 @@ def draw_component(d, kind, cx, cy, dx, w, h, rotated=False):
     if kind == "R":
         draw_two_pads(d, cx - dx, cy, 0)
         draw_two_pads(d, cx + dx, cy, 0)
+        # 登记端子位置(短路判据的唯一依据)。半宽 = draw_two_pads 的 pad_size。
+        PADS[(cx, cy)] = [(cx - dx, cy, 12), (cx + dx, cy, 12)]
         if rotated:
             draw_resistor(d, cx, cy, h, w)   # 反转宽高=180°旋转
         else:
@@ -223,12 +256,23 @@ def draw_component(d, kind, cx, cy, dx, w, h, rotated=False):
     elif kind == "C":
         draw_two_pads(d, cx - dx, cy, 0)
         draw_two_pads(d, cx + dx, cy, 0)
+        PADS[(cx, cy)] = [(cx - dx, cy, 12), (cx + dx, cy, 12)]
         if rotated:
             draw_capacitor(d, cx, cy, w, h, polarity_dot=False)
         else:
             draw_capacitor(d, cx, cy, w, h, polarity_dot=True)
     elif kind == "IC":
         draw_ic_pads(d, cx, cy, dx, count=6)
+        # IC 的端子多而且密(6x2),短路判据只对"两脚元件"有意义,
+        # 照样登记下来 —— 判据看到端子数不是 2 会自己报"没查",
+        # 而不是靠配方不写来回避。
+        spacing = dx * 2 / (6 - 1)
+        ic_pads = []
+        for i in range(6):
+            x = int(cx - dx + i * spacing)
+            ic_pads.append((x, cy - 30, 8))
+            ic_pads.append((x, cy + 30, 8))
+        PADS[(cx, cy)] = ic_pads
         if rotated:
             draw_ic(d, cx, cy, w, h, pin_dot_at=None)
         else:
@@ -271,11 +315,11 @@ def build_baseline() -> Image.Image:
 # ============================================================
 # 5. 缺陷变体（7 类）
 # ============================================================
-def defect_missing(base: Image.Image) -> Image.Image:
-    """缺件：把 R2 整个擦掉（焊盘保留,本体不见）"""
+def defect_missing(base: Image.Image, site) -> Image.Image:
+    """缺件：把 site 这个元件整个擦掉（焊盘保留,本体不见）"""
     img = base.copy()
     d = ImageDraw.Draw(img)
-    label, kind, cx, cy, dx, _dy, w, h = SITES[3]   # R2
+    label, kind, cx, cy, dx, _dy, w, h = site
     x0, y0 = cx - w//2 - 4, cy - h//2 - 4
     x1, y1 = cx + w//2 + 4, cy + h//2 + 4
     d.rectangle([x0, y0, x1, y1], fill=GREEN_PCB)
@@ -285,26 +329,27 @@ def defect_missing(base: Image.Image) -> Image.Image:
     return img
 
 
-def defect_wrong(base: Image.Image) -> Image.Image:
-    """错件：把 R3 换成 C（应该装电阻的位子装了电容）"""
+def defect_wrong(base: Image.Image, site) -> Image.Image:
+    """错件：把 site 换成 C（应该装电阻的位子装了电容）"""
     img = base.copy()
     d = ImageDraw.Draw(img)
-    label, kind, cx, cy, dx, _dy, w, h = SITES[5]   # R3
-    # 擦掉原 R3
+    label, kind, cx, cy, dx, _dy, w, h = site
+    # 擦掉原元件
     x0, y0 = cx - w//2 - 4, cy - h//2 - 4
     x1, y1 = cx + w//2 + 4, cy + h//2 + 4
     d.rectangle([x0, y0, x1, y1], fill=GREEN_PCB)
-    # 画一个电容（错的）
-    draw_capacitor(d, cx, cy, w, h, color=YELLOW, polarity_dot=True)
+    # 画一个电容（错的）。颜色用 WRONG_PART —— 不能用铜色,
+    # 否则这个件的本体自己就落在金属色带里,短路判据会把它当成短路。
+    draw_capacitor(d, cx, cy, w, h, color=WRONG_PART, polarity_dot=True)
     return img
 
 
-def defect_polarity(base: Image.Image) -> Image.Image:
-    """极性反：把 C1 旋转 180°（极性条从左换到右）"""
+def defect_polarity(base: Image.Image, site) -> Image.Image:
+    """极性反：把 site 旋转 180°（极性条从左换到右）"""
     img = base.copy()
     d = ImageDraw.Draw(img)
-    label, kind, cx, cy, dx, _dy, w, h = SITES[1]   # C1
-    # 擦掉原 C1
+    label, kind, cx, cy, dx, _dy, w, h = site
+    # 擦掉原元件
     x0, y0 = cx - w//2 - 4, cy - h//2 - 4
     x1, y1 = cx + w//2 + 4, cy + h//2 + 4
     d.rectangle([x0, y0, x1, y1], fill=GREEN_PCB)
@@ -324,22 +369,22 @@ def draw_capacitor_polarity_reversed(d, cx, cy, w, h):
     d.ellipse([x0+2, y0+2, x0+6, y0+6], fill=RED)
 
 
-def defect_bridge(base: Image.Image) -> Image.Image:
-    """焊桥：把 R1 的两个焊盘用金色长条连起来"""
+def defect_bridge(base: Image.Image, site) -> Image.Image:
+    """焊桥：把 site 的两个焊盘用金色长条连起来"""
     img = base.copy()
     d = ImageDraw.Draw(img)
-    label, kind, cx, cy, dx, _dy, w, h = SITES[0]   # R1
+    label, kind, cx, cy, dx, _dy, w, h = site
     # 在两个焊盘之间画一条金色横条
     d.rectangle([cx - dx - 12, cy - 8, cx + dx + 12, cy + 8],
                 fill=GOLD, outline=GOLD_DARK)
     return img
 
 
-def defect_insufficient(base: Image.Image) -> Image.Image:
-    """焊少：把 U1 的某个焊盘擦掉一大块"""
+def defect_insufficient(base: Image.Image, site) -> Image.Image:
+    """焊少：把 site 的某个焊盘擦掉一大块"""
     img = base.copy()
     d = ImageDraw.Draw(img)
-    label, kind, cx, cy, dx, _dy, w, h = SITES[2]   # U1
+    label, kind, cx, cy, dx, _dy, w, h = site
     # 把最左侧第二个焊盘擦掉（缩成小点）
     pad_x = int(cx - dx)
     # 擦
@@ -350,12 +395,12 @@ def defect_insufficient(base: Image.Image) -> Image.Image:
     return img
 
 
-def defect_shifted(base: Image.Image) -> Image.Image:
-    """偏移：把 R2 整体平移 30px,脱离焊盘中心"""
+def defect_shifted(base: Image.Image, site) -> Image.Image:
+    """偏移：把 site 整体平移 30px,脱离焊盘中心"""
     img = base.copy()
     d = ImageDraw.Draw(img)
-    label, kind, cx, cy, dx, _dy, w, h = SITES[3]   # R2
-    # 擦掉原 R2
+    label, kind, cx, cy, dx, _dy, w, h = site
+    # 擦掉原元件
     x0, y0 = cx - w//2 - 4, cy - h//2 - 4
     x1, y1 = cx + w//2 + 4, cy + h//2 + 4
     d.rectangle([x0, y0, x1, y1], fill=GREEN_PCB)
@@ -364,31 +409,71 @@ def defect_shifted(base: Image.Image) -> Image.Image:
     return img
 
 
-def defect_short(base: Image.Image) -> Image.Image:
-    """短路：在底部走线之间画一条多余的铜桥"""
+def defect_short(base: Image.Image, site) -> Image.Image:
+    """短路：site 的两个焊盘被一条铜条连起来了（两脚被金属连通）
+
+    ⚠ 2026-10-20 重画。原来这张图画的是"在底部走线之间补一段铜"，
+      而那一段**本来就存在**(走线 (418,480)-(664,480))——
+      画上去只是把 6px 的走线加粗到 7px，图像上根本不像短路，
+      电学上也没短接任何东西(那条走线两端本来就通)。
+      旧判据之所以能"抓到"它,是因为它量的根本不是短路,
+      而是**画给人眼看的那个蓝紫圆环**。
+
+      现在的短路图必须满足两条：
+        ① 物理上真的短接了 —— 同一个元件的两个端子之间出现金属；
+        ② 自己的判据认得出来 —— 端子位置由本文件登记(PADS),
+           判据量的是"两个端子之间的绝缘缝里有没有金属"。
+    """
     img = base.copy()
     d = ImageDraw.Draw(img)
-    # 在 (382, 480) 与 (740, 480) 之间拉一条横向短路桥
-    # 但走线 (418,480)-(664,480) 是断开的,正好可以在中间补一段
-    d.rectangle([418, 477, 664, 483], fill=GOLD, outline=GOLD_DARK)
-    # 标个红色圈便于人眼看出（检测算法不依赖这个）
-    d.ellipse([520, 460, 580, 500], outline=RED, width=2)
+    label, kind, cx, cy, dx, _dy, w, h = site
+    # 两个端子之间架一条铜条(端子在 cx±dx,半宽 12)
+    d.rectangle([cx - dx, cy - 8, cx + dx, cy + 8], fill=GOLD, outline=GOLD_DARK)
+    # 标个红圈便于人眼看出。
+    # ⚠ 红圈**不能压到**两个端子之间那段缝(短路判据就靠量那段缝),
+    #   所以画在元件外围:它的左右两个极值点在 x=cx±50,落在铜条两端之外。
+    #   顺带证明了一件事:判据不依赖这个标记圈(旧的判据依赖它)。
+    d.ellipse([cx - 50, cy - 30, cx + 50, cy + 30], outline=RED, width=2)
     return img
 
 
 # ============================================================
 # 6. 主流程
 # ============================================================
+#
+# 第四列"缺陷画在哪个元件上"是**真值表的一部分**。
+#
+# 它以前藏在函数体里(SITES[3] = R2),真值表里没有这一列,
+# 于是"缺陷画在谁身上"只有代码知道 ——
+# 测试想验"判据点名的元件 == 缺陷真的画在的那个元件",
+# 就只能自己再抄一份,抄错了没人知道(抄副本的老坑)。
+#
+# 现在位号只在这里写一次:
+#   画图  -> site_by_label() 按位号取坐标;
+#   真值表 -> manifest.csv 多一列 site,测试从**真值表**读期望。
+# ============================================================
 DEFECT_REGISTRY = [
-    ("baseline",       None,                "ok"),
-    ("missing",        defect_missing,      "FAIL:missing"),
-    ("wrong",          defect_wrong,        "FAIL:wrong"),
-    ("polarity",       defect_polarity,     "FAIL:polarity"),
-    ("bridge",         defect_bridge,       "FAIL:bridge"),
-    ("insufficient",   defect_insufficient, "FAIL:insufficient"),
-    ("shifted",        defect_shifted,      "FAIL:shifted"),
-    ("short",          defect_short,        "FAIL:short"),
+    # (名字, 画缺陷的函数, 期望, 缺陷画在哪个元件上)
+    ("baseline",       None,                "ok",          ""),
+    ("missing",        defect_missing,      "FAIL:missing", "R2"),
+    ("wrong",          defect_wrong,        "FAIL:wrong",   "R3"),
+    ("polarity",       defect_polarity,     "FAIL:polarity","C1"),
+    ("bridge",         defect_bridge,       "FAIL:bridge",  "R1"),
+    ("insufficient",   defect_insufficient, "FAIL:insufficient", "U1"),
+    ("shifted",        defect_shifted,      "FAIL:shifted", "R2"),
+    ("short",          defect_short,        "FAIL:short",   "R2"),
 ]
+
+
+def site_by_label(label):
+    """按位号取站点行(真值表里的位号 -> SITES 里那一行)
+
+    位号写错就直接抛 —— 不静默地取第一个。
+    """
+    for s in SITES:
+        if s[0] == label:
+            return s
+    raise KeyError(f"未知位号: {label!r}")
 
 
 def main():
@@ -399,11 +484,11 @@ def main():
     base = build_baseline()
     manifest = []
 
-    for name, fn, expected in DEFECT_REGISTRY:
+    for name, fn, expected, site_label in DEFECT_REGISTRY:
         if fn is None:
             img = base
         else:
-            img = fn(base)
+            img = fn(base, site_by_label(site_label))
         # 注意:img 是 RGB,但 OpenCV 读出来是 BGR,这里我们直接 RGB 保存
         # (W6 main.cpp 里用 cv::imread(path, IMREAD_COLOR) 读 BGR,色彩对应一致)
         path = out_dir / f"{name}.png"
@@ -413,13 +498,14 @@ def main():
             "file":     path.name,
             "defect":   "none" if expected == "ok" else expected.split(":", 1)[1],
             "expected": "PASS" if expected == "ok" else "FAIL",
+            "site":     site_label,
             "note":     "baseline reference" if expected == "ok" else f"synthetic defect: {expected.split(':', 1)[1]}",
         })
 
     # 写 manifest.csv
     csv_path = out_dir / "manifest.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["file", "defect", "expected", "note"])
+        w = csv.DictWriter(f, fieldnames=["file", "defect", "expected", "site", "note"])
         w.writeheader()
         for row in manifest:
             w.writerow(row)

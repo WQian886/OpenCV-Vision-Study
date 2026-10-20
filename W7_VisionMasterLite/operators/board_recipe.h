@@ -59,6 +59,7 @@ inline constexpr const char* kWrong        = pcbcore::rule::kWrong;
 inline constexpr const char* kPolarity     = pcbcore::rule::kPolarity;
 inline constexpr const char* kBridge       = pcbcore::rule::kBridge;
 inline constexpr const char* kInsufficient = pcbcore::rule::kInsufficient;
+inline constexpr const char* kShort        = pcbcore::rule::kShort;
 } // namespace recipe_rule
 
 // 判定算子真正实现了的规则。配方里出现表以外的规则名 = 拼错了,
@@ -82,6 +83,18 @@ struct RecipeSite {
     // 空串 = 这个元件没有极性条(陶瓷电容) -> polarity 规则不判定,
     // 但会在报告里报"没查",不能装作查过了。
     QString polaritySide;
+
+    // 这个元件的端子(焊盘)位置,短路判据的唯一依据。
+    //
+    // 由**生成器**登记(画焊盘的那一行代码自己登记),配方带下来 ——
+    // 和 polarity_side 同一个道理:期望侧由知道真相的那一方给,
+    // 判据不猜(猜错就是把好板判成废板)。
+    //
+    // 空 = 没登记端子 -> short 规则判不了,会报"没查"。
+    //
+    // ⚠ 直接用 pcbcore::Pad,不另定义一个 Qt 版 —— 同一个东西两个结构体
+    //   就是**抄副本**,本项目在这件事上栽过四遍。
+    QVector<pcbcore::Pad> pads;
 };
 
 struct BoardRecipe {

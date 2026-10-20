@@ -15,7 +15,19 @@
       "checks": [
         "bridge"
       ],
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          110,
+          200,
+          12
+        ],
+        [
+          190,
+          200,
+          12
+        ]
+      ]
     },
     {
       "label": "C1",
@@ -27,7 +39,19 @@
       "checks": [
         "polarity"
       ],
-      "polarity_side": "left"
+      "polarity_side": "left",
+      "pads": [
+        [
+          364,
+          200,
+          12
+        ],
+        [
+          436,
+          200,
+          12
+        ]
+      ]
     },
     {
       "label": "U1",
@@ -39,7 +63,69 @@
       "checks": [
         "insufficient"
       ],
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          630,
+          170,
+          8
+        ],
+        [
+          630,
+          230,
+          8
+        ],
+        [
+          666,
+          170,
+          8
+        ],
+        [
+          666,
+          230,
+          8
+        ],
+        [
+          702,
+          170,
+          8
+        ],
+        [
+          702,
+          230,
+          8
+        ],
+        [
+          738,
+          170,
+          8
+        ],
+        [
+          738,
+          230,
+          8
+        ],
+        [
+          774,
+          170,
+          8
+        ],
+        [
+          774,
+          230,
+          8
+        ],
+        [
+          810,
+          170,
+          8
+        ],
+        [
+          810,
+          230,
+          8
+        ]
+      ]
     },
     {
       "label": "R2",
@@ -50,9 +136,22 @@
       "body_h": 28,
       "checks": [
         "missing",
-        "shifted"
+        "shifted",
+        "short"
       ],
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          110,
+          480,
+          12
+        ],
+        [
+          190,
+          480,
+          12
+        ]
+      ]
     },
     {
       "label": "C2",
@@ -62,7 +161,19 @@
       "body_w": 70,
       "body_h": 28,
       "checks": [],
-      "polarity_side": "left"
+      "polarity_side": "left",
+      "pads": [
+        [
+          364,
+          480,
+          12
+        ],
+        [
+          436,
+          480,
+          12
+        ]
+      ]
     },
     {
       "label": "R3",
@@ -74,7 +185,19 @@
       "checks": [
         "wrong"
       ],
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          660,
+          480,
+          12
+        ],
+        [
+          740,
+          480,
+          12
+        ]
+      ]
     }
   ]
 }

@@ -186,6 +186,8 @@ struct ManifestRow {
     QString file;
     QString defect;    // "none" 表示好板
     QString expected;  // PASS / FAIL
+    QString site;      // 缺陷画在哪个元件上(真值表登记,空 = 好板)
+    QString kind;      // 板型(只有 complex 清单有这一列)
     QString note;
 };
 
@@ -203,6 +205,17 @@ static bool isScratchImage(const QString& name) {
     return name.startsWith("w7_") || name.startsWith("_srcframe_");
 }
 
+// 读一张"用例清单"CSV —— **按列名**读,不按位置。
+//
+// 按列名是必须的:demo 板和 complex 板的清单列根本不一样
+// (demo 是 file/defect/expected/site/note;
+//  complex 是 file/kind/components/size/filesize_kb/expected/site)。
+// 按位置读就得给两张表各写一套解析,加一列就错位 ——
+// 而"加一列就错位"正是抄副本最常见的死法。
+//
+// 顺带把 expected 的写法统一了:complex 表里写的是 "FAIL:short",
+// 这里统一拆成 expected=FAIL / defect=short,
+// 免得下面每处都要自己判断前缀。
 static QList<ManifestRow> readManifest(const QString& path, QString* err) {
     QList<ManifestRow> rows;
     QFile f(path);
@@ -213,6 +226,31 @@ static QList<ManifestRow> readManifest(const QString& path, QString* err) {
     const QString text = QString::fromUtf8(f.readAll());
     const QStringList lines = text.split(QRegularExpression("\r?\n"),
                                          Qt::SkipEmptyParts);
+
+    // 表头 -> 列号
+    QHash<QString, int> col;
+    for (const QString& line : lines) {
+        const QStringList cols = line.split(',');
+        if (cols.isEmpty()) continue;
+        if (cols[0].trimmed() == "file") {
+            for (int i = 0; i < cols.size(); ++i) col[cols[i].trimmed()] = i;
+            break;
+        }
+    }
+    if (!col.contains("file") || !col.contains("expected")) {
+        *err = path + " 里没有 file/expected 两列";
+        return rows;
+    }
+    // 按列名取一格(列不存在 -> 空串,不当成"这格是空的")
+    const auto cell = [](const QStringList& cols,
+                         const QHash<QString, int>& c,
+                         const char* name) -> QString {
+        if (!c.contains(name)) return QString();
+        const int i = c.value(name);
+        if (i >= cols.size()) return QString();
+        return cols[i].trimmed();
+    };
+
     for (const QString& line : lines) {
         const QStringList cols = line.split(',');
         if (cols.size() < 3) continue;
@@ -220,9 +258,18 @@ static QList<ManifestRow> readManifest(const QString& path, QString* err) {
         if (c0 == "file" || c0.startsWith('#')) continue;   // 表头/注释
         ManifestRow r;
         r.file     = c0;
-        r.defect   = cols[1].trimmed();
-        r.expected = cols[2].trimmed();
-        if (cols.size() > 3) r.note = cols[3].trimmed();
+        r.expected = cell(cols, col, "expected");
+        if (r.expected.startsWith("FAIL:")) {
+            r.defect   = r.expected.mid(5).trimmed();
+            r.expected = "FAIL";
+        } else if (r.expected == "PASS") {
+            r.defect = "none";
+        } else {
+            r.defect = cell(cols, col, "defect");
+        }
+        r.site = cell(cols, col, "site");
+        r.kind = cell(cols, col, "kind");
+        r.note = cell(cols, col, "note");
         rows << r;
     }
     if (rows.isEmpty()) *err = path + " 里没读到任何一行";
@@ -318,6 +365,16 @@ static void test_each_defect_detected() {
         check(r.defectTypes.contains(c.defect),
               QString("命中缺陷类型 %1  (实际:%2)")
                   .arg(c.defect).arg(r.defectTypes.values().join(",")));
+        // 点名到**真值表说的那个元件**才算抓到。
+        //
+        // 只看类型不够:别的站点报一条同类型的缺陷,也能把结论撑成 FAIL。
+        // 期望的元件从 manifest.csv 读(c.site)—— 不在代码里再抄一份。
+        if (!c.site.isEmpty()) {
+            check(r.defectSites.value(c.defect).contains(c.site),
+                  QString("%1 的 %2 应点名 %3 (实际点名:%4)")
+                      .arg(c.file, c.defect, c.site,
+                           r.defectSites.value(c.defect).join("/")));
+        }
     }
     // 少一行用例,这个函数就少跑一张图,而上面还是全绿。
     check(cases >= 7,
@@ -326,22 +383,47 @@ static void test_each_defect_detected() {
 }
 
 // ------------------------------------------------------------
-// 用例 3:短路不归属任何元件
-// short 是全局缺陷,defect.component 留空。
-// 如果哪天有人给它硬塞个元件名,这条会挂 —— 提醒他这类的语义变了。
+// 用例 3:短路必须点名到具体元件
+//
+// ⚠ 2026-10-20 之前这条是反的:那时 short 是**全局**规则,
+//   缺陷.component 留空,这条断言就钉"它必须留空"。
+//   短路判据重做之后 short 变成**按元件**的规则
+//   (同一个元件的两个端子之间有金属 = 短路),
+//   缺陷必须挂在那个元件上 ——
+//   不然产线上只知道"这板废了",不知道"哪个元件废了",
+//   还得人拿块表挨个量。
+//
+// 期望的元件从 **manifest.csv 读**(真值表里那一列),
+// 不在代码里写死 "R2" —— 写死就成第二份真值表了。
 // ------------------------------------------------------------
-static void test_short_has_no_owner() {
-    beginCase("short.png 的短路缺陷不挂元件");
-    RunResult r = runPipeline("short.png");
+static void test_short_names_the_component() {
+    beginCase("short.png 的短路缺陷必须点名到元件");
+    QString err;
+    const QList<ManifestRow> rows = readManifest("images/manifest.csv", &err);
+    if (rows.isEmpty()) {
+        check(false, QString("用例清单读不出来(%1)").arg(err));
+        return;
+    }
+    const ManifestRow* shortRow = nullptr;
+    for (const auto& m : rows) {
+        if (m.defect == "short") { shortRow = &m; break; }
+    }
+    check(shortRow != nullptr, "真值表里有 short 那一行");
+    if (!shortRow) return;
+    check(!shortRow->site.isEmpty(),
+          "真值表登记了 short 的元件(不能是空的)");
+    if (shortRow->site.isEmpty()) return;
+
+    RunResult r = runPipeline(shortRow->file);
     const QJsonArray defects = r.judgeOut.value("defects").toArray();
     int shortCnt = 0;
     for (const auto& d : defects) {
         QJsonObject o = d.toObject();
         if (o.value("type").toString() != "short") continue;
         ++shortCnt;
-        check(o.value("component").toString().isEmpty(),
-              QString("短路 component 为空 (实际 '%1')")
-                  .arg(o.value("component").toString()));
+        check(o.value("component").toString() == shortRow->site,
+              QString("短路点名到 %1 (实际 '%2')")
+                  .arg(shortRow->site, o.value("component").toString()));
     }
     check(shortCnt == 1, QString("短路判出 1 处 (实际 %1)").arg(shortCnt));
 }
@@ -1307,82 +1389,77 @@ static void test_board_switch_good_boards_clean() {
 
 static void test_board_switch_defect_boards() {
     beginCase("三块板的 6 张废板:能抓的必须抓,抓不到的必须写明");
-    // 期望值来自 W6 的真值表 complex_manifest.csv,不另抄一份。
+    // 期望值全部来自 W6 的真值表 complex_manifest.csv:
+    //   文件名、缺陷类型、点位元件、连哪张配方(kind + ".json")
+    // —— 这里一个都不抄。
     //
-    // knownMiss=true 的是**已知的漏检**(废板被判成合格)。
-    // 写在这里是为了让它**可见** —— 漏检在界面上跟真合格一模一样,
-    // 光看 result=="PASS" 分不出"查过了没问题"和"根本没看见"。
+    // ⚠ 2026-10-20 之前这里有一张手抄的表(recipe/file/type/site 四列),
+    //   内容跟真值表一样,但**没有任何机制**保证它们一直一样。
+    //   真值表补上 site 那一列之后,这张表就退化成了纯抄副本 ——
+    //   抄的东西迟早会漂,而且漂了没人知道。所以删掉它,直接读真值表。
+    //
+    // 唯一**不在**真值表里的是 knownMiss:已知漏检(废板被判成合格)。
+    // 那张表现在是空的(短路、极性判据重做之后 6 张废板全都抓得到),
+    // 但**机制留着** —— 它是"过期检测器":
+    // 哪天判据又退化,就有条目的"期望 PASS"自己先红,提醒你把问题当回事。
+    //
     // 各条为什么调阈值解决不了,实测数据记在 pcb_defect_judge.cpp
     // 的 polarity / short 两段,不在这儿重复。
-    //
-    // ⚠ 这些记的是**当前真实行为**,不是"期望行为"。
-    //   哪天判据重做完了,把它改成 caught,并补上命中类型的断言。
-    //   (2026-10-20 的 polarity 就是这么转正的:knownMiss 那条断言
-    //    自己先红了,提醒我把条目撤掉 —— 这张表是过期检测器。)
-    struct Bad {
-        const char* recipe;  const char* file;
-        bool knownMiss;                          // true = 已知漏检,期望 PASS
-        const char* type;                        // 抓到时应命中的那一类
-        const char* site;                        // 抓到时应当被点名的元件
-        const char* why;                         // 抓不到的结构性原因
+    struct KnownMiss {
+        const char* file;    // complex_manifest.csv 里的文件名
+        const char* why;     // 抓不到的结构性原因
     };
-    // site 一列是量出来的,不是照着真值表想当然的 —— 跑出厂默认参数,
-    // 逐张图看它到底点名了谁:
-    //   power_missing.png  -> C2/missing
-    //   mcu_wrong.png      -> R2/wrong (+R2/bridge)
-    //   mcu_bridge.png     -> Y1/bridge (+一条空 component 的全局 short)
-    //   signal_shifted.png -> R3/shifted
-    // 钉住"点名谁"是因为:板子整体 FAIL **不等于**那个元件被找到了 ——
-    // 别的站点报一条同类型的缺陷就能把 verdict 撑成 FAIL。实测绝对判据下,
-    // power_missing.png 从 sigma=图宽千分之八起 C2 就不再被报,
-    // 但整张板仍然显示 FAIL:missing,只看类型根本看不出来。
-    const Bad bads[] = {
-        {"power.json",  "power_short.png",     true,  "short",  "",
-         "short 判据找的是环(宽<=8%对角线),这张图是一条金条:"
-         "蓝紫连通域 621x61、宽 41.4% 对角线,两头都撞出窗口"},
-        {"power.json",  "power_missing.png",   false, "missing", "C2", ""},
-        {"mcu.json",    "mcu_wrong.png",       false, "wrong",   "R2", ""},
-        {"mcu.json",    "mcu_bridge.png",      false, "bridge",  "Y1", ""},
-        {"signal.json", "signal_shifted.png",  false, "shifted", "R3", ""},
-        // 📌 2026-10-20:这条原来是 knownMiss(极性判据是单边的,抓不到
-        //   挪到左边的反装),现在**判据重做之后能抓到了**,改成 caught。
-        //   改动留下的痕迹:knownMiss 那条断言自己先红了(期望 PASS,实际 FAIL),
-        //   这正是那张表该有的作用 —— 判据修好了它就提醒你把条目撤掉。
-        //
-        //   新判据:腐蚀出极性条本身 -> 定它在左还是在右 -> 和配方的
-        //   polarity_side 比。"应该在哪一侧"由生成器登记、配方带下来,
-        //   判据不猜(猜错就把好板判成反装)。
-        //   site 钉 D1:这张图反装的是 D1 二极管,点名到它才算抓到。
-        {"signal.json", "signal_polarity.png", false, "polarity", "D1", ""},
+    const QList<KnownMiss> knownMiss = {
+        // (空 —— 2026-10-20:短路判据重做 + 极性判据重做之后,
+        //  6 张废板全部抓得到,而且都点名到真值表说的那个元件)
     };
-    for (const auto& b : bads) {
-        const QString dir = kComplexDir;
-        RunResult r = runBoard(QString::fromUtf8(b.recipe), dir + QString::fromUtf8(b.file));
-        const QString who = QString::fromUtf8(b.file);
+
+    QString err;
+    const QString complexDir = QString::fromUtf8(kComplexDir);
+    const QList<ManifestRow> rows =
+        readManifest(complexDir + "complex_manifest.csv", &err);
+    check(err.isEmpty(), QString("读得到 complex_manifest.csv(%1)").arg(err));
+    if (rows.isEmpty()) return;
+
+    int defectBoards = 0;
+    for (const auto& m : rows) {
+        if (m.expected != "FAIL") continue;      // 好板另有一组用例
+        ++defectBoards;
+        const QString who  = m.file;
+        const QString type = m.defect;
+        const QString recipe = m.kind + ".json";
+
+        const KnownMiss* km = nullptr;
+        for (const auto& k : knownMiss) {
+            if (who == QString::fromUtf8(k.file)) { km = &k; break; }
+        }
+
+        RunResult r = runBoard(recipe, complexDir + who);
         const QString got = r.judgeOut.value("result").toString("无结论");
-        if (b.knownMiss) {
+        if (km) {
             check(got == "PASS",
                   QString("【已知漏检】%1 期望 PASS(实测 %2)。原因:%3")
-                      .arg(who, got, QString::fromUtf8(b.why)));
-        } else {
-            check(got == "FAIL", QString("%1 判废 (实际 %2)").arg(who, got));
-            check(r.defectTypes.contains(QString::fromUtf8(b.type)),
-                  QString("%1 命中 %2 (实际命中:%3)")
-                      .arg(who, QString::fromUtf8(b.type),
-                           r.defectTypes.values().join(",")));
-            // 点名到具体元件才算抓到。只看类型的话,一个瞎子也能通过 ——
-            // 上面 site 一列的注释就是被这么瞒过去的一次。
-            if (*b.site) {
-                check(r.defectSites.value(QString::fromUtf8(b.type))
-                          .contains(QString::fromUtf8(b.site)),
-                      QString("%1 的 %2 应点名 %3 (实际点名:%4)")
-                          .arg(who, QString::fromUtf8(b.type),
-                               QString::fromUtf8(b.site),
-                               r.defectSites.value(QString::fromUtf8(b.type))
-                                   .join("/")));
-            }
+                      .arg(who, got, QString::fromUtf8(km->why)));
+            continue;
+        }
+        check(got == "FAIL", QString("%1 判废 (实际 %2)").arg(who, got));
+        check(r.defectTypes.contains(type),
+              QString("%1 命中 %2 (实际命中:%3)")
+                  .arg(who, type, r.defectTypes.values().join(",")));
+        // 点名到具体元件才算抓到。只看类型的话,一个瞎子也能通过 ——
+        // 2026-10-20 之前就瞒过去过一次:整张板 FAIL:missing,
+        // 但报的根本不是 C2。
+        if (!m.site.isEmpty()) {
+            check(r.defectSites.value(type).contains(m.site),
+                  QString("%1 的 %2 应点名 %3 (实际点名:%4)")
+                      .arg(who, type, m.site,
+                           r.defectSites.value(type).join("/")));
         }
     }
+    // 少一行用例,这个函数就少跑一块板,而上面还是全绿。
+    check(defectBoards == 6,
+          QString("complex 板的废板不能少于 6 张(实际 %1 张 —— 是清单被改小了?)")
+              .arg(defectBoards));
 }
 
 // ============================================================
@@ -1685,7 +1762,7 @@ int main(int argc, char* argv[]) {
 
     test_baseline_clean();
     test_each_defect_detected();
-    test_short_has_no_owner();
+    test_short_names_the_component();
     test_missing_input_error();
     test_threshold_actually_controls();
     test_auto_contour_mode();

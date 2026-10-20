@@ -124,6 +124,12 @@ std::vector<std::string> knownRulesForKind(const std::string& kind) {
     }
     // 不认识的封装(TERMINAL / LED / BUTTON / XTAL ...):
     // **一条规则都不跑,但要说得出来**。
+    //
+    // ⚠ 这里**故意没有 short**:短路判据要量"两个端子之间的绝缘缝",
+    //   而端子位置只存在于**配方**(生成器登记 -> 导出脚本带出来)。
+    //   走兜底这条路(老存档 / auto_contour 产物)时根本没有端子位置,
+    //   硬塞一条进去 = 每个站点都报"没查",把真正的"没查"淹掉。
+    //   配方说了算 —— 配方里写了 short 的元件才查。
     return {};
 }
 
@@ -179,6 +185,7 @@ const std::vector<std::string>& knownChecks() {
     static const std::vector<std::string> kKnown = {
         rule::kMissing, rule::kShifted, rule::kWrong,
         rule::kPolarity, rule::kBridge, rule::kInsufficient,
+        rule::kShort,
     };
     return kKnown;
 }
@@ -365,6 +372,90 @@ bool parseRecipeJson(const std::string& text, BoardRecipe* out, std::string* rea
             s.polaritySide = side;
         }
 
+        // pads 可选:这个元件的端子(焊盘)位置,格式 [[x, y, r], ...]。
+        //
+        // ⚠ 为什么要有这个字段:短路判据要回答"**这两个端子之间**
+        //   有没有金属"。而"哪两个端子属于同一个元件、它们在哪儿"
+        //   只有**画焊盘的那一行代码**知道 —— 和 polarity_side 同理:
+        //   期望侧由知道真相的那一方登记,判据不猜。
+        //
+        //   以前判据是"在全图里找最大的蓝紫连通域,看它像不像一个
+        //   特定大小的圆环" —— 那量的是**生成器画给人眼看的标记圈**,
+        //   不是短路本身(见 pcb_core.h 里 JudgeParams 那段)。
+        //
+        // 字段缺省 = 这个元件没登记端子 -> short 规则判不了,
+        // 判定时会报"没查",不会装作查过了。
+        if (const mini_json::Value* pv = sv1.find("pads")) {
+            if (!pv->isArray()) {
+                if (reason) {
+                    *reason = at + "(" + s.label + ") 的 pads 不是数组(实际是" +
+                              typeName(*pv) + ")";
+                }
+                return false;
+            }
+            const std::vector<mini_json::Value>& parr = pv->asArray();
+            for (size_t k = 0; k < parr.size(); ++k) {
+                const mini_json::Value& one = parr[k];
+                const std::string atPad = at + "(" + s.label + ") 的第 " +
+                                          fmtInt(static_cast<long long>(k) + 1) + " 个端子";
+                if (!one.isArray()) {
+                    if (reason) {
+                        *reason = atPad + " 不是数组(实际是" + typeName(one) +
+                                  ") —— 端子要写成 [x, y, 焊盘半宽]";
+                    }
+                    return false;
+                }
+                const std::vector<mini_json::Value>& f = one.asArray();
+                if (f.size() != 3) {
+                    if (reason) {
+                        *reason = atPad + " 必须正好 3 个数 [x, y, 焊盘半宽](实际 " +
+                                  fmtInt(static_cast<long long>(f.size())) + " 个)";
+                    }
+                    return false;
+                }
+                int c3[3] = {0, 0, 0};
+                for (int j = 0; j < 3; ++j) {
+                    if (!f[static_cast<size_t>(j)].isNumber()) {
+                        if (reason) {
+                            *reason = atPad + " 的第 " + fmtInt(j + 1) +
+                                      " 项不是数字(实际是" +
+                                      typeName(f[static_cast<size_t>(j)]) + ")";
+                        }
+                        return false;
+                    }
+                    const double d = f[static_cast<size_t>(j)].asNumber();
+                    if (d != static_cast<double>(static_cast<int>(d))) {
+                        if (reason) {
+                            *reason = atPad + " 的第 " + fmtInt(j + 1) +
+                                      " 项是小数 " + fmt(d, 4) + " —— 像素坐标必须是整数";
+                        }
+                        return false;
+                    }
+                    c3[j] = static_cast<int>(d);
+                }
+                if (c3[0] < 0 || c3[1] < 0) {
+                    if (reason) {
+                        *reason = atPad + " 的坐标 (" + fmtInt(c3[0]) + "," +
+                                  fmtInt(c3[1]) + ") 是负数";
+                    }
+                    return false;
+                }
+                if (c3[2] <= 0) {
+                    if (reason) {
+                        *reason = atPad + " 的焊盘半宽 " + fmtInt(c3[2]) +
+                                  " 必须为正 —— 半宽用来把\"焊盘自己\"从"
+                                  "\"两脚之间的绝缘缝\"里掐掉,0 的话缝就量不准了";
+                    }
+                    return false;
+                }
+                Pad pd;
+                pd.x = c3[0];
+                pd.y = c3[1];
+                pd.r = c3[2];
+                s.pads.push_back(pd);
+            }
+        }
+
         r.sites.push_back(s);
     }
 
@@ -457,6 +548,20 @@ InspectResult inspect(const cv::Mat& img, const BoardRecipe& recipe,
         site.hasShiftTol = s.hasShiftTol();
         site.shiftTolPct = s.shiftTolPct;
         site.polaritySide = s.polaritySide;
+
+        // 端子位置**跟着这张图缩放**。和站点几何同一个基准(配方的
+        // ref_w/ref_h),不然换分辨率就会量到别的地方去 —— 短路判据
+        // 量的就是"这两个端子之间",位置错了结论就是错的。
+        site.pads.clear();
+        site.pads.reserve(s.pads.size());
+        for (const auto& p : s.pads) {
+            Pad pd;
+            pd.x = static_cast<int>(std::lround(p.x * sx));
+            pd.y = static_cast<int>(std::lround(p.y * sy));
+            pd.r = (std::max)(1, static_cast<int>(std::lround(
+                              p.r * (std::min)(sx, sy))));
+            site.pads.push_back(pd);
+        }
 
         // ROI 内的金像素占比。与下游所有阈值同一量纲。
         site.goldPct = 100.0 * cv::countNonZero(res.goldMask(roi))
@@ -879,49 +984,115 @@ JudgeResult judge(const cv::Mat& img,
                     "本规则不判定(缺件由 missing 负责)"});
             }
         }
-    }
 
-    // ---------- short: 蓝紫圆环(全局缺陷,不属单个元件) ----------
-    //
-    // 它不属于任何元件,所以没有 ROI 可依,基准只能用整张图:
-    // 面积对全图面积,宽高对全图对角线(对角线是唯一一个
-    // "不管横竖怎么变都跟着图一起缩"的尺子)。
-    {
-        const double imgArea = static_cast<double>(img.cols) * img.rows;
-        const double diag = std::sqrt(static_cast<double>(img.cols) * img.cols
-                                    + static_cast<double>(img.rows) * img.rows);
-        cv::Mat hsv;
-        cv::cvtColor(img, hsv, cv::COLOR_BGR2HSV);
-        cv::Mat blueMask = pcbcolor::bandMask(hsv, boardBase,
-                                              pcbcolor::blueBand(params.maskVMul));
-        // 蓝紫这一道**不过开运算**,金层过 —— 探针第一版两边都加了开运算,
-        // 数出来的连通域比判据看到的少一大截。量具得和被量的东西一模一样。
-        cv::Mat labels, stats, centroids;
-        int n = cv::connectedComponentsWithStats(blueMask, labels, stats, centroids);
-        int bestIdx = -1, bestArea = 0;
-        for (int i = 1; i < n; ++i) {
-            int a = stats.at<int>(i, cv::CC_STAT_AREA);
-            if (a > bestArea) { bestArea = a; bestIdx = i; }
-        }
-        if (bestIdx > 0) {
-            int x = stats.at<int>(bestIdx, cv::CC_STAT_LEFT);
-            int y = stats.at<int>(bestIdx, cv::CC_STAT_TOP);
-            int w = stats.at<int>(bestIdx, cv::CC_STAT_WIDTH);
-            int h = stats.at<int>(bestIdx, cv::CC_STAT_HEIGHT);
-            const double areaPct = 100.0 * bestArea / imgArea;
-            const double wPct = 100.0 * w / diag;
-            const double hPct = 100.0 * h / diag;
-            const bool isRing = (areaPct > params.shortMinPct && areaPct < params.shortMaxPct
-                        && wPct >= params.shortWMinPct && wPct <= params.shortWMaxPct
-                        && hPct >= params.shortHMinPct && hPct <= params.shortHMaxPct);
-            if (isRing) {
-                // component 留空 —— 短路是全局缺陷,不归属某个元件
-                res.defects.push_back({"", "short",
-                    "短路圆环 @(" + fmtInt(x) + "," + fmtInt(y) + ") " +
-                    fmtInt(w) + "x" + fmtInt(h) + " 面积=" + fmtInt(bestArea) +
-                    "(占全图 " + fmt(areaPct, 4) + "%)"});
-                cv::circle(res.marked, cv::Point(x + w / 2, y + h / 2),
-                           (std::max)(w, h), cv::Scalar(0, 0, 255), 3);
+        // ---------- short: 两个端子被金属连通(短路) ----------
+        //
+        // 短路 = **这个元件的两个端子之间,绝缘缝里出现了金属**。
+        //
+        // ⚠⚠ 为什么不是"全图扫一块蓝斑,看它像不像特定大小的圆环":
+        //   旧判据量的是**生成器画给人眼看的标记圈**(蓝紫圆环),
+        //   而那**不是短路**。实测两个方向都错:
+        //     power_short.png(真短路,画的是一条金条)-> 整板 PASS(漏检)
+        //     mcu_bridge.png(焊桥,画的是焊锡连片)  -> 多报一条"短路"(误报)
+        //   病根是**量错了对象**,不是阈值没调好 —— 所以旧的那六个
+        //   旋钮(面积/宽/高的上下限)一起删掉了,不是调它们。
+        //
+        // 量的东西:两个端子中心连线,掐掉两端各一个焊盘半宽
+        // (焊盘本来就是金属,不是缺陷),剩下那段"绝缘缝"逐点采样,
+        // 看有没有金属。焊盘位置由**生成器**登记、配方带下来
+        // (见 RecipeSite::pads)—— 判据不猜。
+        if (hasRule(rule::kShort)) {
+            if (s.pads.size() != 2) {
+                // 配方没登记端子(或登记的不是两个) -> 没有可比对的基准。
+                // 这跟"查过了没问题"是两回事,必须报出来。
+                res.skipped.push_back({label, rule::kShort,
+                    "配方没有登记这个元件的两个端子位置(实际登记了 " +
+                    fmtInt(static_cast<long long>(s.pads.size())) +
+                    " 个),判不出\"两脚之间有没有金属\",本规则不判定"});
+            } else {
+                // ⚠⚠ **前置条件:元件本体的颜色不能落在金属色带里。**
+                //
+                //   为什么:生成器的调色板常量是 RGB 顺序但注释按 BGR 写
+                //   (见 gen_pcb_dataset.py 的调色板段),于是"电容黄"
+                //   实际渲染成青蓝色,落在金层色带 H[85,115] 里 ——
+                //   和铜箔几乎同色(H 94.7 vs 96.3),分不开。
+                //   这种元件的"绝缘缝"本来就是金属色,缝里有没有金属
+                //   根本判不出来,硬判就是**每一块好板都报短路**。
+                //
+                //   为什么判据**不自己查**:本体中心那块像素,在好板上是
+                //   本体,在**缺陷图上是那根短路铜条** —— 两种情况长得
+                //   一模一样,靠图像分不出来(这坑实测踩过一次:
+                //   守门把"短路铜条盖住本体中心"当成了"本体是金属色",
+                //   于是漏检又回来了)。
+                //
+                //   所以这条前置条件由**配方层**保证:
+                //     · 谁给哪个元件配 short —— tools/export_recipes.py
+                //       的 CHECKS 表(那里写着每个封装的本体是什么颜色);
+                //     · 配了以后对不对 —— 回归测试在**好板**上量本体
+                //       中心的颜色,断言它不在金属色带里
+                //       (见 common/pcb_core/tests/test_pcb_core.cpp)。
+                //   配错了不会静默:好板会整片报短路,测试当场红。
+                const Pad& pa = s.pads[0];
+                const Pad& pb = s.pads[1];
+                const double dx = static_cast<double>(pb.x) - pa.x;
+                const double dy = static_cast<double>(pb.y) - pa.y;
+                const double len = std::sqrt(dx * dx + dy * dy);
+                // 掐掉两端各一个焊盘半宽 —— 剩下那段才是"绝缘缝"。
+                // ⚠ 再各多掐 1px:焊盘自己带 1px 描边,那圈描边**也可能是金属**
+                //   (现在这批图的描边是暗金色,不在金属色带里,所以掐不掐读数
+                //   一样,实测都是 0% —— 原来这条注释写的是"不掐会变成 4.8%",
+                //   实测发现那是**错的**,注释改成了实话)。
+                //   留这 1px 不是为了现在的读数,是为了**不依赖描边的颜色**:
+                //   哪天描边变亮了,量到的仍然是"缝",不是焊盘自己。
+                //   真出事了不用改判据 —— 回归测试里"好板读数必须恰好 0"
+                //   那条会当场红。
+                const double ra = pa.r + 1, rb = pb.r + 1;
+                if (len <= 0.5 || ra + rb >= len - 1.0) {
+                    res.skipped.push_back({label, rule::kShort,
+                        "两个端子几乎贴在一起(间距 " + fmt(len, 1) +
+                        "px,焊盘半宽合计 " + fmt(ra + rb, 1) +
+                        "px),没有可测的绝缘缝,本规则不判定"});
+                } else {
+                    const double ux = dx / len, uy = dy / len;
+                    const double ax = pa.x + ux * ra, ay = pa.y + uy * ra;
+                    const double bx = pb.x - ux * rb, by = pb.y - uy * rb;
+                    const double glen = std::sqrt((bx - ax) * (bx - ax) +
+                                                 (by - ay) * (by - ay));
+                    const int n = (std::max)(1, static_cast<int>(std::lround(glen)));
+                    // 垂直方向的取样半宽:容一点"画歪了"的余量,
+                    // 但要小到不会碰到旁边横穿的走线。
+                    const int half = (std::max)(1, static_cast<int>(
+                        std::lround(0.2 * (std::min)(ra, rb))));
+                    int metal = 0;
+                    for (int i = 0; i < n; ++i) {
+                        const double t = (n == 1) ? 0.0
+                            : static_cast<double>(i) / (n - 1);
+                        const double px = ax + (bx - ax) * t;
+                        const double py = ay + (by - ay) * t;
+                        for (int k = -half; k <= half; ++k) {
+                            const int qx = static_cast<int>(std::lround(px - uy * k));
+                            const int qy = static_cast<int>(std::lround(py + ux * k));
+                            if (qx < 0 || qy < 0 ||
+                                qx >= img.cols || qy >= img.rows) continue;
+                            if (goldMask.at<uchar>(qy, qx) != 0) { ++metal; break; }
+                        }
+                    }
+                    const double pct = 100.0 * metal / n;
+                    res.metrics.push_back({label, rule::kShort, pct,
+                                           params.shortGapMinPct,
+                                           "% 端子间隙(有金属的采样点)"});
+                    if (pct >= params.shortGapMinPct) {
+                        res.defects.push_back({label, "short",
+                            "两个端子 (" + fmtInt(pa.x) + "," + fmtInt(pa.y) +
+                            ")-(" + fmtInt(pb.x) + "," + fmtInt(pb.y) +
+                            ") 之间的绝缘缝里 " + fmtInt(metal) + "/" +
+                            fmtInt(n) + " 个采样点是金属(" + fmt(pct, 1) +
+                            "%),超过阈值 " + fmt(params.shortGapMinPct, 1) +
+                            "%(两脚被金属连通,短路)"});
+                        cv::line(res.marked, cv::Point(pa.x, pa.y),
+                                 cv::Point(pb.x, pb.y), cv::Scalar(0, 0, 255), 3);
+                    }
+                }
             }
         }
     }

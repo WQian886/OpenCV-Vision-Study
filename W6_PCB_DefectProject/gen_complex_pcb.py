@@ -46,6 +46,20 @@ GREEN_TERM  = (40, 150, 60)       # 端子绿色
 ORANGE_LED  = (40, 140, 230)      # LED 橙
 GRAY_BLOCK  = (140, 140, 140)     # 按钮灰
 
+# "错件"用的那个件的颜色 —— **不能是铜色**。
+#
+# ⚠ 2026-10-20:错件图 = "该装电阻的位置换成了一个电容"。如果这个电容
+#   的本体是铜色(落进金层色带 H[85,115]),那它的**端子间隙里全是金属** ——
+#   短路判据量"两脚之间的缝里有没有金属",量到的其实是本体的颜色,
+#   于是好端端的板报了一条短路(实测:mcu_wrong.png 上 R2 同时报了
+#   wrong 和 short,而它压根没被短路)。
+#
+#   缺陷图里**颜色必须唯一对应一种物理含义**:铜色 = 铜箔。
+#   (YELLOW 之所以还是铜色,是调色板的老问题:常量按 RGB 写、
+#   注释按 BGR 写,"电容黄"实际渲染成青蓝。整个调色板要改是另一个
+#   大工程,这里只把**错件**用的颜色摘出来。)
+WRONG_PART  = (40, 200, 120)      # 错件:青绿色(明亮、偏色,一眼不是电阻)
+
 
 def _font(size):
     try:
@@ -120,6 +134,28 @@ _BODIES = []
 POLARITY_SIDE = {}
 
 
+# ============================================================
+# 端子(焊盘)位置登记 —— 由画焊盘的那一行代码自己登记
+#
+# 和 POLARITY_SIDE 同一个道理,同一个理由:
+#   短路判据要回答"**这两个端子之间**有没有金属"(两脚被金属连通),
+#   而"哪两个端子属于同一个元件、它们在哪儿"只有画它们的代码知道。
+#   期望侧由**知道真相的那一方**登记,判据不猜 ——
+#   猜错的后果是把好板判成短路,那是静默误报,比漏检更难查。
+#
+# 键:(cx, cy) —— 位置就是实例的身份(和 POLARITY_SIDE / _BODIES 一致)。
+# 值:[(x, y, 焊盘半宽), ...]
+#   半宽用来把"焊盘自己"从"两脚之间的绝缘缝"里掐掉 ——
+#   焊盘本来就是金属,它是端子,不是缺陷。
+# ============================================================
+PADS = {}
+
+
+def reg_pads(cx, cy, pads):
+    """登记一个元件的端子位置。画焊盘的那一行调用它。"""
+    PADS[(cx, cy)] = pads
+
+
 def opaque(cx, cy, w, h):
     """登记一个不透明本体矩形(居中 w×h)。画本体时调用。"""
     _BODIES.append((cx - w // 2, cy - h // 2, cx + w // 2, cy + h // 2))
@@ -192,6 +228,7 @@ def draw_resistor_small(d, cx, cy, w=44, h=16):
     silk_box(d, cx, cy, w, h)
     pad(d, cx-w//2-6, cy)
     pad(d, cx+w//2+6, cy)
+    reg_pads(cx, cy, [(cx-w//2-6, cy, 10), (cx+w//2+6, cy, 10)])
     d.rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=BLACK)
     opaque(cx, cy, w, h)
     for i, c in enumerate([(40,40,180),(40,180,40),(180,40,40),(180,180,40)]):
@@ -203,6 +240,7 @@ def draw_cap_small(d, cx, cy, w=36, h=18, color=YELLOW, polarity=False):
     silk_box(d, cx, cy, w, h)
     pad(d, cx-w//2-6, cy)
     pad(d, cx+w//2+6, cy)
+    reg_pads(cx, cy, [(cx-w//2-6, cy, 10), (cx+w//2+6, cy, 10)])
     d.rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=color, outline=BLACK)
     if polarity:
         d.rectangle([cx-w//2+2, cy-h//2+2, cx-w//2+6, cy+h//2-2], fill=WHITE)
@@ -215,6 +253,7 @@ def draw_cap_big(d, cx, cy, r=20, polarity=True):
     silk_box(d, cx, cy, r*2+4, r*2+4)
     pad_round(d, cx, cy-r-6, r=8)
     pad_round(d, cx, cy+r+6, r=8)
+    reg_pads(cx, cy, [(cx, cy-r-6, 8), (cx, cy+r+6, 8)])
     d.ellipse([cx-r, cy-r, cx+r, cy+r], fill=(60,60,60), outline=(5,5,5))
     opaque(cx, cy, r * 2, r * 2)
     # 顶部十字 + 极性条
@@ -230,6 +269,7 @@ def draw_inductor(d, cx, cy, w=50, h=24):
     silk_box(d, cx, cy, w, h)
     pad(d, cx-w//2-6, cy)
     pad(d, cx+w//2+6, cy)
+    reg_pads(cx, cy, [(cx-w//2-6, cy, 10), (cx+w//2+6, cy, 10)])
     d.rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=(70,70,90), outline=BLACK)
     # 内部圆点模拟绕线
     for i, x in enumerate([cx-w//2+10, cx, cx+w//2-10]):
@@ -242,6 +282,7 @@ def draw_diode(d, cx, cy, w=40, h=14):
     silk_box(d, cx, cy, w, h)
     pad(d, cx-w//2-6, cy)
     pad(d, cx+w//2+6, cy)
+    reg_pads(cx, cy, [(cx-w//2-6, cy, 10), (cx+w//2+6, cy, 10)])
     d.rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=BLACK)
     # 极性条(阴极侧)
     d.rectangle([cx+2, cy-h//2+2, cx+6, cy+h//2-2], fill=WHITE)
@@ -263,6 +304,8 @@ def draw_to220(d, cx, cy, label="U?"):
     pad(d, cx-20, cy+h//2+12, size=8)
     pad(d, cx,    cy+h//2+12, size=8)
     pad(d, cx+20, cy+h//2+12, size=8)
+    reg_pads(cx, cy, [(cx-20, cy+h//2+12, 8), (cx, cy+h//2+12, 8),
+                      (cx+20, cy+h//2+12, 8)])
     silk(d, label, cx, cy-h//2-12, font=FONT_S)
     opaque(cx, cy, w, h)
 
@@ -277,6 +320,7 @@ def draw_qfp64(d, cx, cy, label="U?"):
     d.ellipse([cx-body//2+6, cy-body//2+6, cx-body//2+16, cy-body//2+16], fill=(60,60,60))
     # 4 面引脚
     pitch = body // 17
+    qfp_pads = []
     for i in range(16):
         # 左
         x = cx - body//2
@@ -288,6 +332,10 @@ def draw_qfp64(d, cx, cy, label="U?"):
         pad(d, cx - body//2 + pitch*(i+1), cy - body//2 - 12, size=5)
         # 下
         pad(d, cx - body//2 + pitch*(i+1), cy + body//2 + 12, size=5)
+        qfp_pads += [(x-12, y, 5), (x+body+12, y, 5),
+                     (cx - body//2 + pitch*(i+1), cy - body//2 - 12, 5),
+                     (cx - body//2 + pitch*(i+1), cy + body//2 + 12, 5)]
+    reg_pads(cx, cy, qfp_pads)
     silk(d, label, cx, cy+body//2+24, font=FONT_M)
     opaque(cx, cy, body, body)
 
@@ -301,10 +349,13 @@ def draw_soic8(d, cx, cy, label="U?"):
     d.ellipse([cx-w//2+3, cy-h//2+3, cx-w//2+10, cy-h//2+10], fill=(60,60,60))
     # 引脚
     pitch = h // 6
+    soic_pads = []
     for i in range(4):
         y = cy - h//2 + pitch*(i+1)
         pad(d, cx-w//2-10, y, size=4)
         pad(d, cx+w//2+10, y, size=4)
+        soic_pads += [(cx-w//2-10, y, 4), (cx+w//2+10, y, 4)]
+    reg_pads(cx, cy, soic_pads)
     silk(d, label, cx, cy+h//2+14, font=FONT_S)
     opaque(cx, cy, w, h)
 
@@ -317,6 +368,8 @@ def draw_button(d, cx, cy, size=24):
     pad_round(d, cx+size+4, cy-size-4, r=5)
     pad_round(d, cx-size-4, cy+size+4, r=5)
     pad_round(d, cx+size+4, cy+size+4, r=5)
+    reg_pads(cx, cy, [(cx-size-4, cy-size-4, 5), (cx+size+4, cy-size-4, 5),
+                      (cx-size-4, cy+size+4, 5), (cx+size+4, cy+size+4, 5)])
     opaque(cx, cy, size * 2, size * 2)
 
 
@@ -324,6 +377,7 @@ def draw_led(d, cx, cy, r=8, color=ORANGE_LED):
     """LED(圆头 + 2 引脚)"""
     pad_round(d, cx-8, cy, r=5)
     pad_round(d, cx+8, cy, r=5)
+    reg_pads(cx, cy, [(cx-8, cy, 5), (cx+8, cy, 5)])
     d.ellipse([cx-r, cy-r, cx+r, cy+r], fill=color, outline=(200,200,200))
     # 极性平边
     d.line([(cx-r+2, cy-r+2),(cx-r+2, cy-r+6)], fill=BLACK, width=2)
@@ -335,6 +389,7 @@ def draw_crystal(d, cx, cy, w=50, h=22):
     silk_box(d, cx, cy, w, h)
     pad(d, cx-w//2-6, cy)
     pad(d, cx+w//2+6, cy)
+    reg_pads(cx, cy, [(cx-w//2-6, cy, 10), (cx+w//2+6, cy, 10)])
     d.rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2],
                 fill=(180,180,200), outline=BLACK)
     d.text((cx-12, cy-6), "XTAL", fill=BLACK, font=FONT_XS)
@@ -346,10 +401,13 @@ def draw_terminal(d, cx, cy, n=3):
     w, h = 12*n+8, 30
     silk_box(d, cx, cy, w, h)
     d.rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=GREEN_TERM, outline=BLACK)
+    term_pads = []
     for i in range(n):
         x = cx - w//2 + 8 + i*12
         d.ellipse([x-3, cy-3, x+3, cy+3], fill=(220,220,220))
         pad_round(d, x, cy+h//2+6, r=4)
+        term_pads.append((x, cy+h//2+6, 4))
+    reg_pads(cx, cy, term_pads)
     opaque(cx, cy, w, h)
 
 
@@ -372,6 +430,7 @@ def draw_qr(d, img, data, size=110, pos=None):
 def build_power_baseline():
     _BODIES.clear()
     POLARITY_SIDE.clear()   # 这块板用哪些 kind,重新登记
+    PADS.clear()             # 同理:端子位置也是每块板重新登记
     img = Image.new("RGB", (W, H), GREEN_PCB)
     draw_pcb_base(img, "Power Supply v1 — LM2596 Buck")
     d = ImageDraw.Draw(img)
@@ -442,22 +501,53 @@ def build_power_baseline():
     return img, layout
 
 
-def defect_power_short(base, layout):
-    """电源板短路:C1 和 L1 之间 GND 与 VOUT 桥接"""
+def site_xy(layout, label):
+    """按位号取坐标(真值表里的位号 -> 这块板 layout 里那一行)
+
+    缺陷函数不再自己写死坐标 —— 坐标只有 layout 一处,
+    位号只有 REGISTRY 一处,两处对上,才画得对。
+    """
+    for entry in layout:
+        if entry[0] == label:
+            return entry[2], entry[3]
+    raise KeyError(f"未知位号: {label!r}")
+
+
+def defect_power_short(base, layout, site):
+    """电源板短路：site 的两个引脚被一条铜条连起来了(两脚被金属连通)
+
+    ⚠ 2026-10-20 重画。原来这张图画的是"在 (200,244) 与 (820,156) 之间
+      拉一条横贯全板的金条",而那条金条:
+        ① 跨过了 GND 与 VOUT 之间的**所有**铜箔,图上很"壮观";
+        ② 但**短路判据认不出来** —— 旧判据找的是蓝紫圆环,这条金条
+           既不是圆环,面积/宽高也全都撞出窗口(实测 0.1992% > 上界 0.08%,
+           宽 41.4% 对角线 > 上界 8%),于是整块板一路 PASS(漏检)。
+
+      现在的短路图必须满足两条:
+        ① 物理上真的短接了 —— 同一个元件的两个端子之间出现金属;
+        ② 自己的判据认得出来 —— 端子位置由本文件登记(PADS),
+           判据量的是"两个端子之间的绝缘缝里有没有金属"。
+    """
     img = base.copy()
     d = ImageDraw.Draw(img)
-    # 在 (200, 244) 与 (820, 156) 之间画一条金色短路
-    d.rectangle([200, 240, 820, 250], fill=GOLD, outline=RED)
-    d.ellipse([460, 220, 540, 280], outline=RED, width=3)
-    silk(d, "SHORT!", 500, 240, color=RED, font=FONT_M)
+    # site 的中心(电感 L1 在 (680,200),两个引脚在 (649,200) 和 (711,200))
+    cx, cy = site_xy(layout, site)
+    d.rectangle([cx - 36, cy - 6, cx + 36, cy + 6], fill=GOLD, outline=GOLD_DARK)
+    # 标个红圈 + 一个字,便于人眼看出。
+    # ⚠ 红圈**不能压到**两个端子之间那段缝(短路判据就靠量那段缝),
+    #   所以画在元件外围:它在 y=cy±6 处已经跑到 x=610/750 以外了,
+    #   而铜条只有 cx±36。红字同理,放在电感上方,离铜条远远的。
+    #   顺带证明了一件事:判据不依赖这些标记(旧的判据依赖它)。
+    d.ellipse([cx - 70, cy - 40, cx + 70, cy + 40], outline=RED, width=3)
+    silk(d, "SHORT!", cx, cy - 80, color=RED, font=FONT_M)
     return img, layout
 
 
-def defect_power_missing(base, layout):
-    """电源板缺件:C2 输出电容整个擦掉"""
+def defect_power_missing(base, layout, site):
+    """电源板缺件:site 输出电容整个擦掉"""
     img = base.copy()
     d = ImageDraw.Draw(img)
-    cx, cy = 820, 200
+    cx, cy = site_xy(layout, site)
     d.rectangle([cx-30, cy-30, cx+30, cy+30], fill=GREEN_PCB)
     # 焊盘保留
     pad_round(d, cx, cy-26, r=8)
@@ -471,6 +561,7 @@ def defect_power_missing(base, layout):
 def build_mcu_baseline():
     _BODIES.clear()
     POLARITY_SIDE.clear()   # 这块板用哪些 kind,重新登记
+    PADS.clear()             # 同理:端子位置也是每块板重新登记
     img = Image.new("RGB", (W, H), GREEN_PCB)
     draw_pcb_base(img, "MCU Core v1 — STM32F103 QFP-64")
     d = ImageDraw.Draw(img)
@@ -506,6 +597,7 @@ def build_mcu_baseline():
     pad_round(d, 460, 240, r=4)
     pad_round(d, 500, 240, r=4)
     layout.append(("JP1","HEADER",480,240))
+    reg_pads(480, 240, [(460, 240, 4), (500, 240, 4)])
 
     # === 8 个限流电阻(底部,模拟 IO 口) ===
     for i, x in enumerate(range(180, 1021, 110)):
@@ -543,25 +635,27 @@ def build_mcu_baseline():
     return img, layout
 
 
-def defect_mcu_wrong(base, layout):
-    """MCU 板错件:R2(本该是电阻)换成了小电容"""
+def defect_mcu_wrong(base, layout, site):
+    """MCU 板错件:site(本该是电阻)换成了小电容"""
     img = base.copy()
     d = ImageDraw.Draw(img)
-    cx, cy = 260, 450
+    cx, cy = site_xy(layout, site)
     # 擦掉原电阻
     d.rectangle([cx-30, cy-14, cx+30, cy+14], fill=GREEN_PCB)
-    # 画一个黄色电容
-    draw_cap_small(d, cx, cy, color=YELLOW, polarity=True)
+    # 画一个电容。颜色用 WRONG_PART —— 不能用铜色,否则这个件的本体
+    # 自己就落在金属色带里,短路判据会把它当成"两脚被金属连通"。
+    draw_cap_small(d, cx, cy, color=WRONG_PART, polarity=True)
     return img, layout
 
 
-def defect_mcu_bridge(base, layout):
-    """MCU 板焊桥:Y1 晶振两个引脚短接"""
+def defect_mcu_bridge(base, layout, site):
+    """MCU 板焊桥:site 晶振两个引脚短接"""
     img = base.copy()
     d = ImageDraw.Draw(img)
     # Y1 中心 (600, 240), 引脚在 (574,240) 和 (626,240)
-    d.rectangle([574, 232, 626, 248], fill=GOLD, outline=RED)
-    d.ellipse([580, 220, 620, 260], outline=RED, width=2)
+    cx, cy = site_xy(layout, site)
+    d.rectangle([cx - 26, cy - 8, cx + 26, cy + 8], fill=GOLD, outline=RED)
+    d.ellipse([cx - 20, cy - 20, cx + 20, cy + 20], outline=RED, width=2)
     return img, layout
 
 
@@ -571,6 +665,7 @@ def defect_mcu_bridge(base, layout):
 def build_signal_baseline():
     _BODIES.clear()
     POLARITY_SIDE.clear()   # 这块板用哪些 kind,重新登记
+    PADS.clear()             # 同理:端子位置也是每块板重新登记
     img = Image.new("RGB", (W, H), GREEN_PCB)
     draw_pcb_base(img, "Signal Chain v1 — Dual Op-Amp Filter")
     d = ImageDraw.Draw(img)
@@ -651,29 +746,28 @@ def build_signal_baseline():
     return img, layout
 
 
-def defect_signal_polarity(base, layout):
-    """信号板极性反:D1 二极管装反"""
+def defect_signal_polarity(base, layout, site):
+    """信号板极性反:site 二极管装反"""
     img = base.copy()
     d = ImageDraw.Draw(img)
-    cx, cy = 760, 350
-    # 擦掉原 D1
+    cx, cy = site_xy(layout, site)
+    # 擦掉原二极管
     d.rectangle([cx-30, cy-14, cx+30, cy+14], fill=GREEN_PCB)
     # 极性条改到左侧(原本在右 = 阴极)
     pad(d, cx-26, cy, size=8)
     pad(d, cx+26, cy, size=8)
-    d.rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2] if False else [cx-20, cy-7, cx+20, cy+7],
-                fill=BLACK)
+    d.rectangle([cx-20, cy-7, cx+20, cy+7], fill=BLACK)
     d.rectangle([cx-19, cy-5, cx-13, cy+5], fill=WHITE)  # 极性条移到左侧 = 反
     d.line([(cx-12, cy),(cx+12, cy)], fill=WHITE, width=1)
     return img, layout
 
 
-def defect_signal_shifted(base, layout):
-    """信号板偏移:R3 整体平移 20px"""
+def defect_signal_shifted(base, layout, site):
+    """信号板偏移:site 整体平移 20px"""
     img = base.copy()
     d = ImageDraw.Draw(img)
-    cx, cy = 720, 450
-    # 擦掉原 R3
+    cx, cy = site_xy(layout, site)
+    # 擦掉原电阻
     d.rectangle([cx-30, cy-14, cx+30, cy+14], fill=GREEN_PCB)
     # 偏移后重画
     draw_resistor_small(d, cx+20, cy+8)
@@ -683,17 +777,29 @@ def defect_signal_shifted(base, layout):
 # ============================================================
 # 主流程
 # ============================================================
+#
+# 第五列"缺陷画在哪个元件上"是**真值表的一部分**。
+#
+# 它以前藏在函数体里(每个 defect_* 自己写死坐标),
+# 真值表里没有这一列 —— 于是"缺陷画在谁身上"只有代码知道,
+# 测试想验"判据点名的元件 == 缺陷真的画在的那个元件",
+# 就只能自己再抄一份(抄副本的老坑)。
+#
+# 现在位号只在这里写一次:
+#   画图   -> site_xy() 按位号从 layout 取坐标;
+#   真值表 -> complex_manifest.csv 多一列 site,测试从**真值表**读期望。
+# ============================================================
 REGISTRY = [
-    # (kind, name, builder, defect_fn or None)
-    ("power",  "power_baseline",   build_power_baseline,   None),
-    ("power",  "power_short",      build_power_baseline,   defect_power_short),
-    ("power",  "power_missing",    build_power_baseline,   defect_power_missing),
-    ("mcu",    "mcu_baseline",     build_mcu_baseline,     None),
-    ("mcu",    "mcu_wrong",        build_mcu_baseline,     defect_mcu_wrong),
-    ("mcu",    "mcu_bridge",       build_mcu_baseline,     defect_mcu_bridge),
-    ("signal", "signal_baseline",  build_signal_baseline,  None),
-    ("signal", "signal_polarity",  build_signal_baseline,  defect_signal_polarity),
-    ("signal", "signal_shifted",   build_signal_baseline,  defect_signal_shifted),
+    # (kind, name, builder, defect_fn or None, 缺陷画在哪个元件上)
+    ("power",  "power_baseline",   build_power_baseline,   None,              ""),
+    ("power",  "power_short",      build_power_baseline,   defect_power_short,   "L1"),
+    ("power",  "power_missing",    build_power_baseline,   defect_power_missing, "C2"),
+    ("mcu",    "mcu_baseline",     build_mcu_baseline,     None,              ""),
+    ("mcu",    "mcu_wrong",        build_mcu_baseline,     defect_mcu_wrong,     "R2"),
+    ("mcu",    "mcu_bridge",       build_mcu_baseline,     defect_mcu_bridge,    "Y1"),
+    ("signal", "signal_baseline",  build_signal_baseline,  None,              ""),
+    ("signal", "signal_polarity",  build_signal_baseline,  defect_signal_polarity, "D1"),
+    ("signal", "signal_shifted",   build_signal_baseline,  defect_signal_shifted,  "R3"),
 ]
 
 
@@ -707,10 +813,10 @@ def main():
     manifest = []
     summary_by_kind = {}
 
-    for kind, name, builder, defect_fn in REGISTRY:
+    for kind, name, builder, defect_fn, site in REGISTRY:
         base, layout = builder()
         if defect_fn is not None:
-            img, _ = defect_fn(base, layout)
+            img, _ = defect_fn(base, layout, site)
             expected = f"FAIL:{name.split('_', 1)[1]}"
         else:
             img = base
@@ -729,6 +835,7 @@ def main():
             "size":       f"{W}x{H}",
             "filesize_kb": area_kb,
             "expected":   expected,
+            "site":       site,
         })
         # 按 kind 累加
         if kind not in summary_by_kind:
@@ -742,7 +849,7 @@ def main():
     # 写 manifest
     csv_path = out_dir / "complex_manifest.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["file", "kind", "components", "size", "filesize_kb", "expected"])
+        w = csv.DictWriter(f, fieldnames=["file", "kind", "components", "size", "filesize_kb", "expected", "site"])
         w.writeheader()
         for row in manifest:
             w.writerow(row)

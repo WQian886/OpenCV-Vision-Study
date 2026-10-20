@@ -86,7 +86,7 @@ protected:
     void setParams(const QJsonObject& params) override;
 private:
     // 全是百分比(用 QDoubleSpinBox,不是整数 SpinBox):
-    // 短路圆环的面积只占全图的 0.01%~0.04%,整数表达不了。
+    // 短路判据量的是"端子间隙里有金属的采样点占比",要能敲 0.1 的步长。
     QDoubleSpinBox* m_darkMinPct   = nullptr;  // missing(黑本体): 暗像素占 ROI 面积下限
     QDoubleSpinBox* m_bodyMinPct   = nullptr;  // missing(彩色本体): 非板面像素占 ROI 面积下限(站点不足时的兜底)
     QDoubleSpinBox* m_bodyRatioMin = nullptr;  // missing(彩色本体): 占同板中位数的下限
@@ -97,12 +97,7 @@ private:
     QDoubleSpinBox* m_padDropPct   = nullptr;  // insufficient:最小焊盘比中位数低多少
     QDoubleSpinBox* m_shiftXPct    = nullptr;  // shifted: x 偏移容差(占 ROI 宽)
     QDoubleSpinBox* m_shiftYPct    = nullptr;  // shifted: y 偏移容差(占 ROI 高)
-    QDoubleSpinBox* m_shortMinPct  = nullptr;  // short: 圆环面积下限(占全图)
-    QDoubleSpinBox* m_shortMaxPct  = nullptr;  // short: 圆环面积上限(占全图)
-    QDoubleSpinBox* m_shortWMinPct = nullptr;  // short: 圆环宽下限(占全图对角线)
-    QDoubleSpinBox* m_shortWMaxPct = nullptr;  // short: 圆环宽上限(占全图对角线)
-    QDoubleSpinBox* m_shortHMinPct = nullptr;  // short: 圆环高下限(占全图对角线)
-    QDoubleSpinBox* m_shortHMaxPct = nullptr;  // short: 圆环高上限(占全图对角线)
+    QDoubleSpinBox* m_shortGapMinPct = nullptr;  // short: 端子间隙里有金属的采样点占比下限
     // 颜色判据的倍数(占板面基色,不是占 ROI)。range 和上面那些百分比
     // 一样是 0~100,步长不同 —— 0.6/1.15/1.6 这几个数要能精确敲进去。
     QDoubleSpinBox* m_darkVMul      = nullptr;  // 暗: V < 0.6 x 板面V
@@ -110,7 +105,7 @@ private:
     QDoubleSpinBox* m_neutralMax    = nullptr;  // 丝印白: 中性度 max/min 上限
     QDoubleSpinBox* m_offColorMul   = nullptr;  // 错色: B,G >= 1.6 x 板面
     QDoubleSpinBox* m_offColorRMax  = nullptr;  // 错色: R <= 1.3 x 板面
-    QDoubleSpinBox* m_maskVMul      = nullptr;  // 金层/蓝环 HSV 掩膜 V 下界
+    QDoubleSpinBox* m_maskVMul      = nullptr;  // 金层 HSV 掩膜 V 下界
 };
 
 } // namespace w7

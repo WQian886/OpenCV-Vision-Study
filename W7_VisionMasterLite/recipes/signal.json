@@ -14,7 +14,19 @@
       "body_h": 30,
       "checks": [],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          72,
+          471,
+          4
+        ],
+        [
+          84,
+          471,
+          4
+        ]
+      ]
     },
     {
       "label": "R1",
@@ -27,10 +39,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          192,
+          450,
+          10
+        ],
+        [
+          248,
+          450,
+          10
+        ]
+      ]
     },
     {
       "label": "C1",
@@ -44,7 +69,19 @@
         "polarity"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": "left"
+      "polarity_side": "left",
+      "pads": [
+        [
+          316,
+          450,
+          10
+        ],
+        [
+          364,
+          450,
+          10
+        ]
+      ]
     },
     {
       "label": "U1",
@@ -58,7 +95,49 @@
         "insufficient"
       ],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          430,
+          433,
+          4
+        ],
+        [
+          530,
+          433,
+          4
+        ],
+        [
+          430,
+          441,
+          4
+        ],
+        [
+          530,
+          441,
+          4
+        ],
+        [
+          430,
+          449,
+          4
+        ],
+        [
+          530,
+          449,
+          4
+        ],
+        [
+          430,
+          457,
+          4
+        ],
+        [
+          530,
+          457,
+          4
+        ]
+      ]
     },
     {
       "label": "R2",
@@ -71,10 +150,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          452,
+          350,
+          10
+        ],
+        [
+          508,
+          350,
+          10
+        ]
+      ]
     },
     {
       "label": "C2",
@@ -88,7 +180,19 @@
         "polarity"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": "left"
+      "polarity_side": "left",
+      "pads": [
+        [
+          556,
+          350,
+          10
+        ],
+        [
+          604,
+          350,
+          10
+        ]
+      ]
     },
     {
       "label": "C3",
@@ -102,7 +206,19 @@
         "polarity"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": "left"
+      "polarity_side": "left",
+      "pads": [
+        [
+          596,
+          450,
+          10
+        ],
+        [
+          644,
+          450,
+          10
+        ]
+      ]
     },
     {
       "label": "R3",
@@ -115,10 +231,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          692,
+          450,
+          10
+        ],
+        [
+          748,
+          450,
+          10
+        ]
+      ]
     },
     {
       "label": "U2",
@@ -132,7 +261,49 @@
         "insufficient"
       ],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          810,
+          433,
+          4
+        ],
+        [
+          910,
+          433,
+          4
+        ],
+        [
+          810,
+          441,
+          4
+        ],
+        [
+          910,
+          441,
+          4
+        ],
+        [
+          810,
+          449,
+          4
+        ],
+        [
+          910,
+          449,
+          4
+        ],
+        [
+          810,
+          457,
+          4
+        ],
+        [
+          910,
+          457,
+          4
+        ]
+      ]
     },
     {
       "label": "R4",
@@ -145,10 +316,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          832,
+          350,
+          10
+        ],
+        [
+          888,
+          350,
+          10
+        ]
+      ]
     },
     {
       "label": "D1",
@@ -160,10 +344,23 @@
       "checks": [
         "missing",
         "shifted",
-        "polarity"
+        "polarity",
+        "short"
       ],
       "shift_tol_pct": null,
-      "polarity_side": "right"
+      "polarity_side": "right",
+      "pads": [
+        [
+          734,
+          350,
+          10
+        ],
+        [
+          786,
+          350,
+          10
+        ]
+      ]
     },
     {
       "label": "D2",
@@ -175,10 +372,23 @@
       "checks": [
         "missing",
         "shifted",
-        "polarity"
+        "polarity",
+        "short"
       ],
       "shift_tol_pct": null,
-      "polarity_side": "right"
+      "polarity_side": "right",
+      "pads": [
+        [
+          934,
+          350,
+          10
+        ],
+        [
+          986,
+          350,
+          10
+        ]
+      ]
     },
     {
       "label": "C4",
@@ -192,7 +402,19 @@
         "polarity"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": "left"
+      "polarity_side": "left",
+      "pads": [
+        [
+          996,
+          450,
+          10
+        ],
+        [
+          1044,
+          450,
+          10
+        ]
+      ]
     },
     {
       "label": "J2",
@@ -203,7 +425,19 @@
       "body_h": 30,
       "checks": [],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          1132,
+          471,
+          4
+        ],
+        [
+          1144,
+          471,
+          4
+        ]
+      ]
     },
     {
       "label": "C5",
@@ -216,7 +450,19 @@
         "missing"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          356,
+          600,
+          10
+        ],
+        [
+          404,
+          600,
+          10
+        ]
+      ]
     },
     {
       "label": "C6",
@@ -229,7 +475,19 @@
         "missing"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          556,
+          600,
+          10
+        ],
+        [
+          604,
+          600,
+          10
+        ]
+      ]
     },
     {
       "label": "C7",
@@ -242,7 +500,19 @@
         "missing"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          736,
+          600,
+          10
+        ],
+        [
+          784,
+          600,
+          10
+        ]
+      ]
     },
     {
       "label": "C8",
@@ -255,7 +525,19 @@
         "missing"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          936,
+          600,
+          10
+        ],
+        [
+          984,
+          600,
+          10
+        ]
+      ]
     }
   ]
 }

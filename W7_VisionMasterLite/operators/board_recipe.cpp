@@ -47,6 +47,8 @@ w7::RecipeSite toQtSite(const pcbcore::RecipeSite& s) {
     for (const auto& c : s.checks) out.checks << QString::fromUtf8(c.c_str());
     out.shiftTolPct = s.shiftTolPct;
     out.polaritySide = QString::fromUtf8(s.polaritySide.c_str());
+    out.pads.clear();
+    for (const auto& p : s.pads) out.pads.append(p);
     return out;
 }
 
@@ -121,6 +123,8 @@ pcbcore::BoardRecipe toCoreRecipe(const BoardRecipe& r) {
         for (const auto& c : s.checks) cs.checks.push_back(c.toStdString());
         cs.shiftTolPct = s.shiftTolPct;
         cs.polaritySide = s.polaritySide.toStdString();
+        cs.pads.clear();
+        for (const auto& p : s.pads) cs.pads.push_back(p);
         out.sites.push_back(cs);
     }
     return out;

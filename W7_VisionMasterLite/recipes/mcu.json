@@ -17,7 +17,329 @@
         "insufficient"
       ],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          518,
+          388,
+          5
+        ],
+        [
+          682,
+          388,
+          5
+        ],
+        [
+          538,
+          368,
+          5
+        ],
+        [
+          538,
+          532,
+          5
+        ],
+        [
+          518,
+          396,
+          5
+        ],
+        [
+          682,
+          396,
+          5
+        ],
+        [
+          546,
+          368,
+          5
+        ],
+        [
+          546,
+          532,
+          5
+        ],
+        [
+          518,
+          404,
+          5
+        ],
+        [
+          682,
+          404,
+          5
+        ],
+        [
+          554,
+          368,
+          5
+        ],
+        [
+          554,
+          532,
+          5
+        ],
+        [
+          518,
+          412,
+          5
+        ],
+        [
+          682,
+          412,
+          5
+        ],
+        [
+          562,
+          368,
+          5
+        ],
+        [
+          562,
+          532,
+          5
+        ],
+        [
+          518,
+          420,
+          5
+        ],
+        [
+          682,
+          420,
+          5
+        ],
+        [
+          570,
+          368,
+          5
+        ],
+        [
+          570,
+          532,
+          5
+        ],
+        [
+          518,
+          428,
+          5
+        ],
+        [
+          682,
+          428,
+          5
+        ],
+        [
+          578,
+          368,
+          5
+        ],
+        [
+          578,
+          532,
+          5
+        ],
+        [
+          518,
+          436,
+          5
+        ],
+        [
+          682,
+          436,
+          5
+        ],
+        [
+          586,
+          368,
+          5
+        ],
+        [
+          586,
+          532,
+          5
+        ],
+        [
+          518,
+          444,
+          5
+        ],
+        [
+          682,
+          444,
+          5
+        ],
+        [
+          594,
+          368,
+          5
+        ],
+        [
+          594,
+          532,
+          5
+        ],
+        [
+          518,
+          452,
+          5
+        ],
+        [
+          682,
+          452,
+          5
+        ],
+        [
+          602,
+          368,
+          5
+        ],
+        [
+          602,
+          532,
+          5
+        ],
+        [
+          518,
+          460,
+          5
+        ],
+        [
+          682,
+          460,
+          5
+        ],
+        [
+          610,
+          368,
+          5
+        ],
+        [
+          610,
+          532,
+          5
+        ],
+        [
+          518,
+          468,
+          5
+        ],
+        [
+          682,
+          468,
+          5
+        ],
+        [
+          618,
+          368,
+          5
+        ],
+        [
+          618,
+          532,
+          5
+        ],
+        [
+          518,
+          476,
+          5
+        ],
+        [
+          682,
+          476,
+          5
+        ],
+        [
+          626,
+          368,
+          5
+        ],
+        [
+          626,
+          532,
+          5
+        ],
+        [
+          518,
+          484,
+          5
+        ],
+        [
+          682,
+          484,
+          5
+        ],
+        [
+          634,
+          368,
+          5
+        ],
+        [
+          634,
+          532,
+          5
+        ],
+        [
+          518,
+          492,
+          5
+        ],
+        [
+          682,
+          492,
+          5
+        ],
+        [
+          642,
+          368,
+          5
+        ],
+        [
+          642,
+          532,
+          5
+        ],
+        [
+          518,
+          500,
+          5
+        ],
+        [
+          682,
+          500,
+          5
+        ],
+        [
+          650,
+          368,
+          5
+        ],
+        [
+          650,
+          532,
+          5
+        ],
+        [
+          518,
+          508,
+          5
+        ],
+        [
+          682,
+          508,
+          5
+        ],
+        [
+          658,
+          368,
+          5
+        ],
+        [
+          658,
+          532,
+          5
+        ]
+      ]
     },
     {
       "label": "Y1",
@@ -31,7 +353,19 @@
         "bridge"
       ],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          569,
+          240,
+          10
+        ],
+        [
+          631,
+          240,
+          10
+        ]
+      ]
     },
     {
       "label": "Y2",
@@ -45,7 +379,19 @@
         "bridge"
       ],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          669,
+          240,
+          10
+        ],
+        [
+          731,
+          240,
+          10
+        ]
+      ]
     },
     {
       "label": "C1",
@@ -58,7 +404,19 @@
         "missing"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          506,
+          240,
+          10
+        ],
+        [
+          554,
+          240,
+          10
+        ]
+      ]
     },
     {
       "label": "C2",
@@ -71,7 +429,19 @@
         "missing"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          746,
+          240,
+          10
+        ],
+        [
+          794,
+          240,
+          10
+        ]
+      ]
     },
     {
       "label": "C3",
@@ -84,7 +454,19 @@
         "missing"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          156,
+          200,
+          10
+        ],
+        [
+          204,
+          200,
+          10
+        ]
+      ]
     },
     {
       "label": "C4",
@@ -97,7 +479,19 @@
         "missing"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          156,
+          700,
+          10
+        ],
+        [
+          204,
+          700,
+          10
+        ]
+      ]
     },
     {
       "label": "C5",
@@ -110,7 +504,19 @@
         "missing"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          996,
+          200,
+          10
+        ],
+        [
+          1044,
+          200,
+          10
+        ]
+      ]
     },
     {
       "label": "C6",
@@ -123,7 +529,19 @@
         "missing"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          996,
+          700,
+          10
+        ],
+        [
+          1044,
+          700,
+          10
+        ]
+      ]
     },
     {
       "label": "SW1",
@@ -134,7 +552,29 @@
       "body_h": 48,
       "checks": [],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          992,
+          422,
+          5
+        ],
+        [
+          1048,
+          422,
+          5
+        ],
+        [
+          992,
+          478,
+          5
+        ],
+        [
+          1048,
+          478,
+          5
+        ]
+      ]
     },
     {
       "label": "R1",
@@ -147,10 +587,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          912,
+          450,
+          10
+        ],
+        [
+          968,
+          450,
+          10
+        ]
+      ]
     },
     {
       "label": "LED1",
@@ -161,7 +614,19 @@
       "body_h": 16,
       "checks": [],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          172,
+          450,
+          5
+        ],
+        [
+          188,
+          450,
+          5
+        ]
+      ]
     },
     {
       "label": "R2",
@@ -174,10 +639,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          232,
+          450,
+          10
+        ],
+        [
+          288,
+          450,
+          10
+        ]
+      ]
     },
     {
       "label": "JP1",
@@ -188,7 +666,19 @@
       "body_h": 8,
       "checks": [],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          460,
+          240,
+          4
+        ],
+        [
+          500,
+          240,
+          4
+        ]
+      ]
     },
     {
       "label": "R3",
@@ -201,10 +691,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          152,
+          820,
+          10
+        ],
+        [
+          208,
+          820,
+          10
+        ]
+      ]
     },
     {
       "label": "R4",
@@ -217,10 +720,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          262,
+          820,
+          10
+        ],
+        [
+          318,
+          820,
+          10
+        ]
+      ]
     },
     {
       "label": "R5",
@@ -233,10 +749,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          372,
+          820,
+          10
+        ],
+        [
+          428,
+          820,
+          10
+        ]
+      ]
     },
     {
       "label": "R6",
@@ -249,10 +778,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          482,
+          820,
+          10
+        ],
+        [
+          538,
+          820,
+          10
+        ]
+      ]
     },
     {
       "label": "R7",
@@ -265,10 +807,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          592,
+          820,
+          10
+        ],
+        [
+          648,
+          820,
+          10
+        ]
+      ]
     },
     {
       "label": "R8",
@@ -281,10 +836,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          702,
+          820,
+          10
+        ],
+        [
+          758,
+          820,
+          10
+        ]
+      ]
     },
     {
       "label": "R9",
@@ -297,10 +865,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          812,
+          820,
+          10
+        ],
+        [
+          868,
+          820,
+          10
+        ]
+      ]
     },
     {
       "label": "R10",
@@ -313,10 +894,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          922,
+          820,
+          10
+        ],
+        [
+          978,
+          820,
+          10
+        ]
+      ]
     }
   ]
 }

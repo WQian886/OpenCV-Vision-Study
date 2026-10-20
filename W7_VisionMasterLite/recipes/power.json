@@ -14,7 +14,19 @@
       "body_h": 30,
       "checks": [],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          72,
+          221,
+          4
+        ],
+        [
+          84,
+          221,
+          4
+        ]
+      ]
     },
     {
       "label": "C1",
@@ -25,10 +37,23 @@
       "body_h": 40,
       "checks": [
         "missing",
-        "polarity"
+        "polarity",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": "left"
+      "polarity_side": "left",
+      "pads": [
+        [
+          200,
+          174,
+          8
+        ],
+        [
+          200,
+          226,
+          8
+        ]
+      ]
     },
     {
       "label": "U1",
@@ -42,7 +67,24 @@
         "insufficient"
       ],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          360,
+          247,
+          8
+        ],
+        [
+          380,
+          247,
+          8
+        ],
+        [
+          400,
+          247,
+          8
+        ]
+      ]
     },
     {
       "label": "D1",
@@ -54,10 +96,23 @@
       "checks": [
         "missing",
         "shifted",
-        "polarity"
+        "polarity",
+        "short"
       ],
       "shift_tol_pct": null,
-      "polarity_side": "right"
+      "polarity_side": "right",
+      "pads": [
+        [
+          494,
+          200,
+          10
+        ],
+        [
+          546,
+          200,
+          10
+        ]
+      ]
     },
     {
       "label": "L1",
@@ -66,9 +121,23 @@
       "cy": 200,
       "body_w": 50,
       "body_h": 24,
-      "checks": [],
+      "checks": [
+        "short"
+      ],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          649,
+          200,
+          10
+        ],
+        [
+          711,
+          200,
+          10
+        ]
+      ]
     },
     {
       "label": "C2",
@@ -79,10 +148,23 @@
       "body_h": 40,
       "checks": [
         "missing",
-        "polarity"
+        "polarity",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": "left"
+      "polarity_side": "left",
+      "pads": [
+        [
+          820,
+          174,
+          8
+        ],
+        [
+          820,
+          226,
+          8
+        ]
+      ]
     },
     {
       "label": "J2",
@@ -93,7 +175,19 @@
       "body_h": 30,
       "checks": [],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          972,
+          221,
+          4
+        ],
+        [
+          984,
+          221,
+          4
+        ]
+      ]
     },
     {
       "label": "R1",
@@ -106,10 +200,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          352,
+          360,
+          10
+        ],
+        [
+          408,
+          360,
+          10
+        ]
+      ]
     },
     {
       "label": "R2",
@@ -122,10 +229,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          452,
+          360,
+          10
+        ],
+        [
+          508,
+          360,
+          10
+        ]
+      ]
     },
     {
       "label": "LED1",
@@ -136,7 +256,19 @@
       "body_h": 16,
       "checks": [],
       "shift_tol_pct": null,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          192,
+          480,
+          5
+        ],
+        [
+          208,
+          480,
+          5
+        ]
+      ]
     },
     {
       "label": "R3",
@@ -149,10 +281,23 @@
         "missing",
         "shifted",
         "wrong",
-        "bridge"
+        "bridge",
+        "short"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          262,
+          480,
+          10
+        ],
+        [
+          318,
+          480,
+          10
+        ]
+      ]
     },
     {
       "label": "C3",
@@ -166,7 +311,19 @@
         "polarity"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": "left"
+      "polarity_side": "left",
+      "pads": [
+        [
+          596,
+          480,
+          10
+        ],
+        [
+          644,
+          480,
+          10
+        ]
+      ]
     },
     {
       "label": "C4",
@@ -180,7 +337,19 @@
         "polarity"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": "left"
+      "polarity_side": "left",
+      "pads": [
+        [
+          696,
+          480,
+          10
+        ],
+        [
+          744,
+          480,
+          10
+        ]
+      ]
     },
     {
       "label": "C5",
@@ -194,7 +363,19 @@
         "polarity"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": "left"
+      "polarity_side": "left",
+      "pads": [
+        [
+          796,
+          480,
+          10
+        ],
+        [
+          844,
+          480,
+          10
+        ]
+      ]
     },
     {
       "label": "C6",
@@ -207,7 +388,19 @@
         "missing"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          176,
+          640,
+          10
+        ],
+        [
+          224,
+          640,
+          10
+        ]
+      ]
     },
     {
       "label": "C7",
@@ -220,7 +413,19 @@
         "missing"
       ],
       "shift_tol_pct": 15.0,
-      "polarity_side": ""
+      "polarity_side": "",
+      "pads": [
+        [
+          796,
+          640,
+          10
+        ],
+        [
+          844,
+          640,
+          10
+        ]
+      ]
     }
   ]
 }

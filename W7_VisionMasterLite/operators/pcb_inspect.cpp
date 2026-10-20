@@ -332,6 +332,25 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
             //   (不是发空串)—— 判定那边分得清"没写"和"写了但是空"。
             if (!s.polaritySide.empty())
                 cj["polarity_side"] = QString::fromUtf8(s.polaritySide.c_str());
+            // 端子(焊盘)位置。**必须往下游传** —— 短路判据量的是
+            // "两个端子之间的绝缘缝里有没有金属",拿不到端子位置就
+            // 判不了,整条规则会静悄悄地变成"没查"(skipped)。
+            //
+            // ⚠ 和 polarity_side 是同一类坑:字段漏在这一跳,
+            //   核心那边只能跳过,跳过的条目混在报告里没人看,
+            //   好板照样 PASS —— 而真正短路的废板也 PASS。
+            //   (登记端子的是生成器,配方带下来,这里原样搬运。)
+            if (!s.pads.empty()) {
+                QJsonArray pa;
+                for (const auto& p : s.pads) {
+                    QJsonArray one;
+                    one.append(p.x);
+                    one.append(p.y);
+                    one.append(p.r);
+                    pa.append(one);
+                }
+                cj["pads"] = pa;
+            }
             // 偏移容差按封装给(配方里可省,省了用算子默认)。
             // 写死成一个数等于"所有元件一样灵":小电阻挪 20px 可能
             // 还没出框,QFP64 挪 20px 就是大事。

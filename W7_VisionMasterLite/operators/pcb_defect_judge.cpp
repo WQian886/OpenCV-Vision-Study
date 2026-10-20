@@ -275,19 +275,25 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     p["off_color_r_max"] = pcbcolor::kOffColorRMax;   // 错色: R <= 1.3 x 板面
     p["mask_v_mul"]      = pcbcolor::kMaskVMul;       // 金层/蓝环 HSV 掩膜的 V 下界
 
-    // --- 全图 % ---
-    // 短路圆环面积占全图:正常板最大的蓝斑 0.0107% ↔ 短路圆环 0.0411%,
-    // 几何中点 0.021。上限只要高于 0.0411 就行,给到 0.08。
-    p["short_min_pct"]   = 0.021;
-    p["short_max_pct"]   = 0.08;
-    // 圆环外框宽 / 高,占全图对角线(对角线跟着分辨率一起缩,是最省心的尺子):
-    // 宽 0.246% ↔ 5.00%,高 2.05% ↔ 3.36%。
-    // 宽这一条才是真正区分"环"和"斑"的(正常那块是 3x25 的实心小点);
-    // 高这一条区分不了,窗口留宽即可,原来 20~60px 也一样区分不了。
-    p["short_w_min_pct"] = 1.1;
-    p["short_w_max_pct"] = 8.0;
-    p["short_h_min_pct"] = 1.0;
-    p["short_h_max_pct"] = 6.0;
+    // --- 短路:端子间隙 ---
+    //
+    // ⚠ 2026-10-20:这里原来有**六个**短路旋钮
+    //   (short_min_pct / short_max_pct / short_w_min_pct /
+    //    short_w_max_pct / short_h_min_pct / short_h_max_pct),
+    //   量的是"全图最大的蓝紫连通域是不是一个特定大小的圆环"。
+    //
+    //   那条判据量的**不是短路**,是**生成器画给人眼看的标记圈**。
+    //   实测两个方向都错:
+    //     power_short.png(真短路,画的是一条金条)-> 整板 PASS(漏检)
+    //     mcu_bridge.png(焊桥,画的是焊锡连片)  -> 多报一条"短路"(误报)
+    //   病根是**量错了对象**,不是阈值没调好 —— 所以六个旋钮一起删,
+    //   留着就是界面上摆六个**调了不生效**的旋钮。
+    //
+    // 现在的短路判据:量"元件两个端子之间的绝缘缝里有没有金属",
+    // 端子位置由生成器登记、配方带下来(见 RecipeSite::pads)。
+    // 读数 = 缝里有金属的采样点占比;好板 0%,短路板接近 100%,
+    // 阈值取中点 50。
+    p["short_gap_min_pct"] = 50.0;
     return p;
 }
 
@@ -437,12 +443,7 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     const double padDropPct   = params.value("pad_drop_pct").toDouble(33.0);
     const double shiftXPct    = params.value("shift_x_pct").toDouble(8.0);
     const double shiftYPct    = params.value("shift_y_pct").toDouble(10.0);
-    const double shortMinPct  = params.value("short_min_pct").toDouble(0.021);
-    const double shortMaxPct  = params.value("short_max_pct").toDouble(0.08);
-    const double shortWMinPct = params.value("short_w_min_pct").toDouble(1.1);
-    const double shortWMaxPct = params.value("short_w_max_pct").toDouble(8.0);
-    const double shortHMinPct = params.value("short_h_min_pct").toDouble(1.0);
-    const double shortHMaxPct = params.value("short_h_max_pct").toDouble(6.0);
+    const double shortGapMinPct = params.value("short_gap_min_pct").toDouble(50.0);
 
     // 金层 mask(bridge / insufficient 判定需要)
     //
@@ -503,6 +504,22 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
         //   才发现,核心和 W6 一直是对的,坏的是这一跳。
         if (c.contains("polarity_side"))
             s.polaritySide = c.value("polarity_side").toString().toStdString();
+        // 端子(焊盘)位置。上游(pcb_inspect)传下来,这里原样带走。
+        //
+        // ⚠ 和 polarity_side 同一类坑:漏了这一句,短路规则就
+        //   变成"没查"(skipped)—— 好板照样 PASS,真短路的废板也 PASS,
+        //   而界面上看不出区别(少一条缺陷而已)。
+        if (c.contains("pads")) {
+            for (const auto& pv : c.value("pads").toArray()) {
+                const QJsonArray one = pv.toArray();
+                if (one.size() != 3) continue;
+                Pad p;
+                p.x = one.at(0).toInt();
+                p.y = one.at(1).toInt();
+                p.r = one.at(2).toInt();
+                s.pads.push_back(p);
+            }
+        }
         if (c.contains("body_pct")) {
             s.hasBodyPct = true;
             s.bodyPct    = c.value("body_pct").toDouble();
@@ -526,12 +543,7 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     jp.bridgeMinPct = bridgeMinPct;
     jp.shiftXPct    = shiftXPct;
     jp.shiftYPct    = shiftYPct;
-    jp.shortMinPct  = shortMinPct;
-    jp.shortMaxPct  = shortMaxPct;
-    jp.shortWMinPct = shortWMinPct;
-    jp.shortWMaxPct = shortWMaxPct;
-    jp.shortHMinPct = shortHMinPct;
-    jp.shortHMaxPct = shortHMaxPct;
+    jp.shortGapMinPct = shortGapMinPct;
     jp.darkVMul     = darkVMul;
     jp.brightVMul   = brightVMul;
     jp.neutralMax   = neutralMax;
@@ -694,12 +706,7 @@ void PcbDefectJudgeForm::buildUI() {
     m_padDropPct   = mk(33.0,  2);
     m_shiftXPct    = mk(8.0,   2);
     m_shiftYPct    = mk(10.0,  2);
-    m_shortMinPct  = mk(0.021, 3);
-    m_shortMaxPct  = mk(0.08,  3);
-    m_shortWMinPct = mk(1.1,   2);
-    m_shortWMaxPct = mk(8.0,   2);
-    m_shortHMinPct = mk(1.0,   2);
-    m_shortHMaxPct = mk(6.0,   2);
+    m_shortGapMinPct = mk(dflt("short_gap_min_pct", 50.0), 1);
     m_darkVMul      = mkMul(pcbcolor::kDarkMul);
     m_brightVMul    = mkMul(pcbcolor::kBrightMul);
     m_neutralMax    = mkMul(pcbcolor::kNeutralMax);
@@ -717,12 +724,7 @@ void PcbDefectJudgeForm::buildUI() {
     m_layout->addRow(tr("焊少:比中位数低 %"),          m_padDropPct);
     m_layout->addRow(tr("偏移:x 容差 占 ROI 宽 %"),    m_shiftXPct);
     m_layout->addRow(tr("偏移:y 容差 占 ROI 高 %"),    m_shiftYPct);
-    m_layout->addRow(tr("短路:面积下限 占全图 %"),      m_shortMinPct);
-    m_layout->addRow(tr("短路:面积上限 占全图 %"),      m_shortMaxPct);
-    m_layout->addRow(tr("短路:宽下限 占对角线 %"),      m_shortWMinPct);
-    m_layout->addRow(tr("短路:宽上限 占对角线 %"),      m_shortWMaxPct);
-    m_layout->addRow(tr("短路:高下限 占对角线 %"),      m_shortHMinPct);
-    m_layout->addRow(tr("短路:高上限 占对角线 %"),      m_shortHMaxPct);
+    m_layout->addRow(tr("短路:端子间隙里有金属的采样点占比下限 %"), m_shortGapMinPct);
 
     // 分组标题。上面 15 个是"占 ROI / 全图"的百分比,下面 6 个是
     // "占板面基色"的倍数 —— 量纲不同,混在一起排会让人以为它们可比。
@@ -733,7 +735,7 @@ void PcbDefectJudgeForm::buildUI() {
     m_layout->addRow(tr("极性:白 中性度 上限"),           m_neutralMax);
     m_layout->addRow(tr("错件:B,G >= 板面 x"),            m_offColorMul);
     m_layout->addRow(tr("错件:R <= 板面 x"),              m_offColorRMax);
-    m_layout->addRow(tr("金层/蓝环掩膜 V 下界 x"),        m_maskVMul);
+    m_layout->addRow(tr("金层掩膜 V 下界 x"),            m_maskVMul);
 }
 
 void PcbDefectJudgeForm::setParams(const QJsonObject& params) {
@@ -754,14 +756,9 @@ void PcbDefectJudgeForm::setParams(const QJsonObject& params) {
     m_padDropPct->setValue(params.value("pad_drop_pct").toDouble(d.value("pad_drop_pct").toDouble()));
     m_shiftXPct->setValue(params.value("shift_x_pct").toDouble(d.value("shift_x_pct").toDouble()));
     m_shiftYPct->setValue(params.value("shift_y_pct").toDouble(d.value("shift_y_pct").toDouble()));
-    // short_* 这六个原来各自带一个手写的兜底默认值 —— 同样是抄的第二份账。
-    // 这里也统一走 d(唯一入口),不然 defaultParams() 改了这六个不会跟着动。
-    m_shortMinPct->setValue(params.value("short_min_pct").toDouble(d.value("short_min_pct").toDouble()));
-    m_shortMaxPct->setValue(params.value("short_max_pct").toDouble(d.value("short_max_pct").toDouble()));
-    m_shortWMinPct->setValue(params.value("short_w_min_pct").toDouble(d.value("short_w_min_pct").toDouble()));
-    m_shortWMaxPct->setValue(params.value("short_w_max_pct").toDouble(d.value("short_w_max_pct").toDouble()));
-    m_shortHMinPct->setValue(params.value("short_h_min_pct").toDouble(d.value("short_h_min_pct").toDouble()));
-    m_shortHMaxPct->setValue(params.value("short_h_max_pct").toDouble(d.value("short_h_max_pct").toDouble()));
+    // short_gap_min_pct 同样只认 defaultParams() 这一个入口 ——
+    // 原来这六个旋钮各自带一个手写的兜底默认值,是抄的第二份账。
+    m_shortGapMinPct->setValue(params.value("short_gap_min_pct").toDouble(d.value("short_gap_min_pct").toDouble()));
 m_darkVMul->setValue(params.value("dark_v_mul").toDouble(pcbcolor::kDarkMul));
 m_brightVMul->setValue(params.value("bright_v_mul").toDouble(pcbcolor::kBrightMul));
 m_neutralMax->setValue(params.value("neutral_max").toDouble(pcbcolor::kNeutralMax));
@@ -782,12 +779,7 @@ QJsonObject PcbDefectJudgeForm::collect() const {
     p["pad_drop_pct"]    = m_padDropPct->value();
     p["shift_x_pct"]     = m_shiftXPct->value();
     p["shift_y_pct"]     = m_shiftYPct->value();
-    p["short_min_pct"]   = m_shortMinPct->value();
-    p["short_max_pct"]   = m_shortMaxPct->value();
-    p["short_w_min_pct"] = m_shortWMinPct->value();
-    p["short_w_max_pct"] = m_shortWMaxPct->value();
-    p["short_h_min_pct"] = m_shortHMinPct->value();
-    p["short_h_max_pct"] = m_shortHMaxPct->value();
+    p["short_gap_min_pct"] = m_shortGapMinPct->value();
     p["dark_v_mul"]      = m_darkVMul->value();
     p["bright_v_mul"]    = m_brightVMul->value();
     p["neutral_max"]     = m_neutralMax->value();

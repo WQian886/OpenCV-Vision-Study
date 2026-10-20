@@ -58,6 +58,7 @@ inline constexpr char kWrong[]        = "wrong";        // 本体错色(装错�
 inline constexpr char kPolarity[]     = "polarity";     // 极性条偏向反了
 inline constexpr char kBridge[]       = "bridge";       // 焊盘间金条连片
 inline constexpr char kInsufficient[] = "insufficient"; // 焊盘面积远低于同侪
+inline constexpr char kShort[]        = "short";        // 两脚被金属连通(短路)
 } // namespace rule
 
 // 判定真正实现了的规则。配方里出现表以外的规则名 = 拼错了,
@@ -67,6 +68,21 @@ const std::vector<std::string>& knownChecks();
 // ============================================================
 // 配方
 // ============================================================
+
+// 一个**端子**(焊盘):中心坐标 + 焊盘半宽(参考分辨率下)。
+//
+// ⚠ 为什么端子位置要由**生成器**登记,而不是判据自己找:
+//   短路判据要回答"这两个端子之间有没有金属",而"哪两个端子属于
+//   同一个元件、它们在哪儿"只有画它们的那一行代码知道 ——
+//   和 polarity_side 一个道理:期望侧由知道真相的那一方登记,
+//   判据不猜(猜错就是把好板判成废板,那是静默误报)。
+struct Pad {
+    int x = 0;   // 焊盘中心 x
+    int y = 0;   // 焊盘中心 y
+    int r = 0;   // 焊盘半宽(px)。用来把"焊盘自己"从"两脚之间的
+                 // 绝缘缝"里掐掉 —— 焊盘本来就是金属,不是缺陷。
+};
+
 struct RecipeSite {
     std::string label;       // 位号,只用于显示和报告,判定不依赖它
     std::string kind;        // 封装类别(RES / CAP_SMALL / QFP64 ...)
@@ -89,6 +105,14 @@ struct RecipeSite {
     // 空串 = 这个元件没有极性条(陶瓷电容),或者配方没写 ——
     // 两种情况都判不了极性,必须报出来,不能装作查过了。
     std::string polaritySide;
+
+    // 这个元件的端子(焊盘)位置。**短路判据的唯一依据**。
+    //
+    // 空 = 这个元件没登记端子 -> short 规则判不了,必须报"没查"。
+    // ⚠ 这个字段**放在结构体末尾**是故意的(和 polaritySide 同理):
+    //   结构体中间插字段会让所有**位置聚合初始化**的调用点整体错位,
+    //   而且错位不一定编译报错,可能把 bool 塞进 double,静默变味。
+    std::vector<Pad> pads;
 };
 
 struct BoardRecipe {
@@ -137,6 +161,11 @@ struct InspectSite {
     //   —— 而且错位不一定编译报错,可能把 bool 塞进 double,静默变味。
     //   放末尾,老调用点原样对得上;新字段请一律用具名赋值。
     std::string polaritySide;
+
+    // 端子(焊盘)位置,**已按这张图的分辨率缩放**。
+    // 短路判据量"两个端子之间的绝缘缝里有没有金属" —— 位置不对,
+    // 量到的就是别的地方。
+    std::vector<Pad> pads;
 };
 
 struct InspectResult {
@@ -184,10 +213,25 @@ struct JudgeParams {
     double shiftXPct     = 8.0;    // 质心横向偏移容差
     double shiftYPct     = 10.0;   // 质心纵向偏移容差
     // --- 全图 % ---
-    double shortMinPct   = 0.021;  // 短路圆环面积占全图
-    double shortMaxPct   = 0.08;
-    double shortWMinPct = 1.1, shortWMaxPct = 8.0;   // 圆环外框宽 / 全图对角线
-    double shortHMinPct = 1.0, shortHMaxPct = 6.0;   // 圆环外框高 / 全图对角线
+    // ⚠ 2026-10-20:原来这里有 6 个 short 旋钮
+    //   (shortMinPct/shortMaxPct/shortWMinPct/shortWMaxPct/
+    //    shortHMinPct/shortHMaxPct),量的是"全图最大的**蓝紫连通域**
+    //   是不是一个特定大小的圆环"。
+    //
+    //   那 6 个数量的**不是短路** —— 短路是"两个端子被金属连通了",
+    //   而它们量的是生成器画给人眼看的那个标记圈。实测:
+    //     power_short.png(真短路,画的是一条金条) -> 整板 PASS(漏检)
+    //     mcu_bridge.png(焊桥,画的是焊锡连片)   -> 报了一条"短路"(误报)
+    //   病根是**量错了对象**,不是阈值没调好,所以六个旋钮一起删掉 ——
+    //   留着它们 = 界面上摆六个**调了不生效**的旋钮,骗人。
+    //
+    // 新的短路判据见下面 shortGapMinPct,和别的规则一样是**按元件**跑的。
+    //
+    // --- 短路:端子间隙 ---
+    // 短路 = 这个元件两个端子之间的**绝缘缝**里出现了金属(两脚被连通)。
+    // 读数 = 缝里(采样点)有金属的比例。阈值取在好板(0%)与
+    // 短路板(接近 100%)之间,中点取 50。
+    double shortGapMinPct = 50.0;  // 端子间隙里有金属的采样点占比下限 %
     // --- 颜色判据的倍数(相对板面基色) ---
     double darkVMul     = 0.6;    // 暗: V < 0.6 x 板面V
     double brightVMul   = 1.3;    // 白: V >= 1.3 x 板面V
