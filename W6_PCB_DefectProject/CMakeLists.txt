@@ -13,6 +13,44 @@ set(OpenCV_DIR "D:/opencv-src/build/install/lib")
 find_package(OpenCV REQUIRED)
 
 # ============================================================
+# === 测试工作目录:每个套件一份,全在 build 里
+#
+# W6 的三个套件以前都跑在 build/ 根目录(没给 WORKING_DIRECTORY),
+# 产物落点其实已经在 build 里 —— 但**三个套件共用一个目录**。
+# 共用的坏处:谁在子目录里写了个固定名字的文件,另一个套件就可能踩到。
+# w6_cli_test 会在 CWD 下建 w6_cli_test_tmp/(自己起自己删),
+# 别的套件要是也用这个名字,或者将来 ctest -j 并行跑,就会互相删。
+#
+# 现在每个套件一份:${CMAKE_CURRENT_BINARY_DIR}/test_work/<套件名>/
+#
+# ## 数据从哪来
+#
+# 测试**读**的数据(板图、manifest)不走 CWD —— 那是 findRepoRoot()
+# 往上找到的源码树,工作目录挪了也不影响。
+#
+# 但有一份数据是**靠 CWD 找**的:w6::findRecipeDir("") 的自动发现,
+# 它按顺序试 "recipes"、 "../W7_VisionMasterLite/recipes"、
+# "W7_VisionMasterLite/recipes" 这几个**相对路径**。
+#
+# 工作目录一挪到 build/test_work/w6_cli/,这三个相对路径就全落空了
+# —— 断言当场变红(实测:162 条里红 1 条"自动找得到配方目录")。
+# 这正是这条断言该有的样子:它没有假装通过。
+#
+# 修法不是"改断言",也不是"把 CWD 拉回去"(那就等于白改),
+# 而是**把配方暂存进工作目录** —— 这也正是 W6 真正跑起来时的样子:
+# CMake 会把 recipes/ 拷到 exe 旁边,自动发现找的就是它。
+# ============================================================
+
+# 套件名累积(给末尾的暂存目标用)
+set(W6_TEST_SUITES "")
+
+function(w6_add_test suite target)
+    set(_dir "${CMAKE_CURRENT_BINARY_DIR}/test_work/${suite}")
+    add_test(NAME ${suite} COMMAND ${target} WORKING_DIRECTORY "${_dir}")
+    set(W6_TEST_SUITES ${W6_TEST_SUITES} ${suite} PARENT_SCOPE)
+endfunction()
+
+# ============================================================
 # === 共享判定核心 (common/pcb_core)
 #
 # PCB 判定的真值(板型配方、颜色判据、逐条规则)在 common/pcb_core/ 下,
@@ -76,8 +114,7 @@ add_custom_command(TARGET w6_core_test POST_BUILD
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
 
-add_test(NAME pcb_core COMMAND w6_core_test)
-
+w6_add_test(pcb_core w6_core_test)
 # ============================================================
 # === 共享 QR/OCR 核心 (common/qr_ocr)
 #
@@ -137,7 +174,7 @@ add_custom_command(TARGET w6_qr_ocr_test POST_BUILD
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
 
-add_test(NAME qr_ocr COMMAND w6_qr_ocr_test)
+w6_add_test(qr_ocr w6_qr_ocr_test)
 
 # ============================================================
 # === W6 自己的可测逻辑层 + 它的回归测试
@@ -191,7 +228,7 @@ add_custom_command(TARGET w6_cli_test POST_BUILD
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
 
-add_test(NAME w6_cli COMMAND w6_cli_test)
+w6_add_test(w6_cli w6_cli_test)
 
 set_target_properties(w6_pcb_defect PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -226,3 +263,32 @@ add_custom_command(TARGET w6_pcb_defect POST_BUILD
         $<TARGET_FILE_DIR:w6_pcb_defect>
     COMMENT "Copying OpenCV DLLs to output directory"
 )
+
+# ============================================================
+# === 暂存测试数据(每次构建都重拷)
+#
+# 配方只有一份(在 W7_VisionMasterLite/recipes/),这里是**构建期暂存**,
+# 不是第二份定义 —— 真正读的仍然是那一份,导出脚本也只认那一份。
+#
+# 为什么每次构建都重拷:
+#   POST_BUILD 只在重编时跑。改了 recipes/demo.json 而代码没动
+#   -> 不重编 -> 不重拷 -> 测试拿旧配方判板,还判得"对" ——
+#   旧配方下的正确答案。改配方其实没生效,没人知道。
+#   add_custom_target 没有输出文件,永远算过期,所以每次构建都跑。
+#
+# 配方目录**只有** findRecipeDir("") 的自动发现需要它
+# (它按相对路径试 "recipes" 等几个位置)。
+# 显式指定 --recipes 的路径、以及测试本身读真值表,都不依赖这里。
+# ============================================================
+set(_stage_cmds "")
+foreach(_suite IN LISTS W6_TEST_SUITES)
+    set(_d "${CMAKE_CURRENT_BINARY_DIR}/test_work/${_suite}")
+    list(APPEND _stage_cmds
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_d}"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/../W7_VisionMasterLite/recipes"
+                "${_d}/recipes")
+endforeach()
+
+add_custom_target(w6_test_data ALL ${_stage_cmds}
+    COMMENT "Staging W6 test data into build/test_work/")

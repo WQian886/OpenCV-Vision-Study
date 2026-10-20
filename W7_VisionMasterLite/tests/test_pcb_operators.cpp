@@ -15,7 +15,10 @@
 //   —— 等于把 W6 当时的验收清单变成了可重复执行的测试。
 //
 // 依赖:本测试要真跑 OpenCV 算子,所以链接 OpenCV(与 undo 测试不同)。
-// 运行:  w7_pcb_test.exe      (工作目录必须是工程根,里面有 images/)
+// 运行:  w7_pcb_test.exe
+//   工作目录 = build/test_work/pcb_operators/(ctest 给的),
+//   里面有暂存进来的 images/ 和 recipes/。产物也只落在这里,
+//   不再往源码树里写。
 // ============================================================
 
 // windows.h 会把 min/max 定义成宏,不加 NOMINMAX 的话
@@ -67,11 +70,19 @@ using namespace pcbcore;
 //   判据不成立),整套复杂板用例变成空转,测试全绿。
 //
 // 这个仓库其它测试一律用相对路径("images/xxx.png"),基准是 ctest 给的
-// WORKING_DIRECTORY = W7_VisionMasterLite/。这里跟着同一套约定:
-//   ../W6_PCB_DefectProject/images/complex/
+// WORKING_DIRECTORY = build/test_work/<套件名>/。这里跟着同一套约定:
+//   images/complex/
 // 仓库整体搬到哪,这个相对关系都成立。
+//
+// ⚠ 复杂板的数据在 W6 那边(那边才是生成器所在地),所以 CMake 的
+//   w7_add_test() 会在**构建时**把 W6_PCB_DefectProject/images/complex
+//   拷进测试工作目录的 images/complex/。
+//   用构建时拷而不是运行时找仓库根,是因为运行时找路径 = 路径一断
+//   就"读不到图",而读不到图的断言照样可能报"通过"(见上面那段话)。
+//   拷进工作目录后,路径写死成相对路径反而是最稳的 —— 因为拷不动会
+//   在构建阶段就炸,不会拖到测试阶段变成一句"找不到文件"。
 // ============================================================
-static const char* kComplexDir = "../W6_PCB_DefectProject/images/complex/";
+static const char* kComplexDir = "images/complex/";
 
 // ============================================================
 // 极简断言(与 test_undo_redo.cpp 保持同一套风格)
@@ -179,7 +190,15 @@ struct ManifestRow {
 };
 
 // images/ 下这些是别的用例跑出来的中间产物,不是测试图,
-// 不该要求它们登记在册。(它们该待在别处是另一回事,不在本轮。)
+// 不该要求它们登记在册。
+//
+// ⚠ 这个豁免是**必须留着的**,不是遗留:
+//   算子算完会把画框图写回 images/(artifact_path.h 的"测试路径"分支),
+//   而本文件下面那条"images/ 下没有漏登记的图"是在同一趟运行里查的。
+//   没有这个豁免,算子刚画出来的框就会被当成"多了一张没人登记的图"。
+//
+// 但豁免名单不能随便放宽 —— 它白名单化的是**产物**,不是**样本**。
+// 样本(8 张 demo 板)一张都不许豁免。
 static bool isScratchImage(const QString& name) {
     return name.startsWith("w7_") || name.startsWith("_srcframe_");
 }

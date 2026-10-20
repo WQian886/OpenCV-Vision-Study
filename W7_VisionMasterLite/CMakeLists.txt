@@ -7,6 +7,57 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+# ============================================================
+# === 测试工作目录:产物落 build,不落源码树
+#
+# ⚠ 2026-10-20 之前,14 个套件里有 6 个的 WORKING_DIRECTORY 是
+#   ${CMAKE_SOURCE_DIR} —— 也就是**源码树**
+#   (pcb_operators / image_sources / measurement / run_policy /
+#    detection_operators / template_match)。
+#   于是测试造的临时图(images/w7_*.png、images/_t_*.png、
+#   images/_test_src.avi)和算子的落盘产物,**全写在源码树里**。
+#   另外 8 个套件没给 WORKING_DIRECTORY,跑在 build/ 根目录 ——
+#   产物是进了 build,但那 8 个套件**共用一个目录**。
+#
+# 当时的应对是往 .gitignore 里加规则把它们**藏起来**:
+#     **/images/w7_*.png
+#     **/images/_test_src.avi
+#     **/images/_srcframe_*.png
+#
+# 那是**治标**:文件还在源码树里,还在被人看见、被误提交、被拷进构建目录。
+# 而且"用 ignore 藏起来"会让人以为"已经处理好了"。
+#
+# 现在每个套件有自己的工作目录,**全在 build 里**:
+#     ${CMAKE_CURRENT_BINARY_DIR}/test_work/<套件名>/
+#
+# 每个套件一份目录(不是共用一份)有两个理由:
+#   1) 产物不再落进源码树(就是上面那 6 个套件的老毛病);
+#   2) ctest -j 并行时各写各的,不会因为共用一个 CWD 而看见对方的产物。
+#      ⚠ 这一条是**风险**不是**实测**:那 8 个共用 build/ 根目录的套件
+#      实测都不写文件,所以这次没踩上。共用 CWD 本身就是这个风险,
+#      写不写文件只是"今天碰巧没发生"。
+#
+# ## 数据怎么办
+#
+# 配方是**输入**(pcb_inspect 按相对路径 "recipes/xxx.json" 读),
+# images/ 既是输入(demo 板图)又是测试的输出目录(算子画框图)——
+# 所以工作目录里必须有一份。
+#
+# 这一份是**构建期暂存**的,不是第二份"定义":
+#   配方和图都只存在于源码树一处,这里只是拷一份给测试用。
+# 暂存由文件末尾的 w7_test_data 目标完成,**每次构建都重拷** ——
+# 理由见那个目标的注释(POST_BUILD 会留下陈旧数据)。
+# ============================================================
+
+# 套件名累积(给末尾的暂存目标用)
+set(W7_TEST_SUITES "")
+
+function(w7_add_test suite target)
+    set(_dir "${CMAKE_CURRENT_BINARY_DIR}/test_work/${suite}")
+    add_test(NAME ${suite} COMMAND ${target} WORKING_DIRECTORY "${_dir}")
+    set(W7_TEST_SUITES ${W7_TEST_SUITES} ${suite} PARENT_SCOPE)
+endfunction()
+
 # === Release-only (与 W1–W6 一致) ===
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     message(FATAL_ERROR "W7 must use Release. Debug triggers cv::debug_build_guard ABI mismatch.")
@@ -161,7 +212,7 @@ add_custom_command(TARGET w7_qr_ocr_test POST_BUILD
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
 
-add_test(NAME qr_ocr COMMAND w7_qr_ocr_test)
+w7_add_test(qr_ocr w7_qr_ocr_test)
 
 # ------------------------------------------------------------
 # 共享核心**自己**的测试
@@ -197,9 +248,10 @@ add_custom_command(TARGET w7_core_test POST_BUILD
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
 
-# 不给 WORKING_DIRECTORY:测试自己从当前目录往上找仓库根
-# (它会被链进 W6 和 W7 两个目标,两个目标的 ctest 工作目录不同)。
-add_test(NAME pcb_core COMMAND w7_core_test)
+# 工作目录由 w7_add_test() 给(在 build/test_work/pcb_core/)。
+# 测试自己从当前目录往上找仓库根(它会被链进 W6 和 W7 两个目标,
+# 两个目标的 ctest 工作目录不同)—— 找法见 test_pcb_core.cpp。
+w7_add_test(pcb_core w7_core_test)
 
 # === 源码 ===
 set(SOURCES
@@ -364,7 +416,7 @@ if(MSVC)
 endif()
 
 enable_testing()
-add_test(NAME undo_redo COMMAND w7_undo_test)
+w7_add_test(undo_redo w7_undo_test)
 
 # ============================================================
 # === PCB 算子 回归测试 (headless, 端到端跑 W6 样本)
@@ -374,7 +426,8 @@ add_test(NAME undo_redo COMMAND w7_undo_test)
 # 7 张缺陷图各自必须命中自己那类 —— 等于把 W6 当时的
 # 肉眼验收清单变成可重复执行的测试。
 #
-# 算子会往 images/ 里写画框图,所以工作目录必须是工程根。
+# 算子会往 images/ 里写画框图,所以工作目录要能写 —— 由 w7_add_test()
+# 指向 build/test_work/pcb_operators/,产物不再落进源码树。
 # ============================================================
 qt_add_executable(w7_pcb_test
     tests/test_pcb_operators.cpp
@@ -408,8 +461,7 @@ add_custom_command(TARGET w7_pcb_test POST_BUILD
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
 
-add_test(NAME pcb_operators COMMAND w7_pcb_test
-         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+w7_add_test(pcb_operators w7_pcb_test)
 
 # ============================================================
 # === 板型配方随二进制一起拷一份
@@ -466,7 +518,7 @@ add_custom_command(TARGET w7_dl_test POST_BUILD
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
 
-add_test(NAME dl_postprocess COMMAND w7_dl_test)
+w7_add_test(dl_postprocess w7_dl_test)
 
 # ============================================================
 # === 图像源 回归测试 (headless, 自造临时视频)
@@ -505,9 +557,9 @@ add_custom_command(TARGET w7_source_test POST_BUILD
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
 
-# 测试会往 images/ 里造临时视频和图,工作目录必须是工程根
-add_test(NAME image_sources COMMAND w7_source_test
-         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+# 测试会往 images/ 里造临时视频和图 —— 工作目录在
+# build/test_work/image_sources/,不落源码树。
+w7_add_test(image_sources w7_source_test)
 
 # ============================================================
 # === 每步结果查看 回归测试 (headless, 纯逻辑)
@@ -536,7 +588,7 @@ if(MSVC)
     target_compile_options(w7_step_test PRIVATE /utf-8)
 endif()
 
-add_test(NAME step_result COMMAND w7_step_test)
+w7_add_test(step_result w7_step_test)
 
 # ============================================================
 # === pin 类型检查 + 最近文件列表 回归测试 (headless, 纯 QtCore)
@@ -561,7 +613,7 @@ if(MSVC)
     target_compile_options(w7_pin_test PRIVATE /utf-8)
 endif()
 
-add_test(NAME pin_and_recent COMMAND w7_pin_test)
+w7_add_test(pin_and_recent w7_pin_test)
 
 # ============================================================
 # === line_fit 回归测试 (headless, 纯几何)
@@ -570,7 +622,8 @@ add_test(NAME pin_and_recent COMMAND w7_pin_test)
 # 角度 0~180 还是 0~360、两点重合报不报错、没给图报不报错。
 # 这些都不崩,只是结果悄悄变了,而测量结果直接决定判废。
 #
-# 不需要图片文件,所以工作目录不设 WORKING_DIRECTORY。
+# 不需要图片文件,工作目录给不给都行 —— 还是给一个
+# (build/test_work/line_fit/),免得有的套件在源码树跑、有的在 build 跑。
 # ============================================================
 qt_add_executable(w7_line_test
     tests/test_line_fit.cpp
@@ -599,7 +652,7 @@ add_custom_command(TARGET w7_line_test POST_BUILD
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
 
-add_test(NAME line_fit COMMAND w7_line_test)
+w7_add_test(line_fit w7_line_test)
 
 # ============================================================
 # === 测量类算子 回归测试 (headless, circle_fit + caliper_dist)
@@ -607,7 +660,8 @@ add_test(NAME line_fit COMMAND w7_line_test)
 # 和 line_test 合并成两个套件(而不是拆成三个)是因为这两个
 # 考的是同一种东西:**公式简单,但约定和退化情形容易错**。
 #
-# circle_fit 自造 mask 写到 images/,工作目录必须是工程根。
+# circle_fit 自造 mask 写到 images/,工作目录在
+# build/test_work/measurement/。
 # ============================================================
 qt_add_executable(w7_measure_test
     tests/test_measurement.cpp
@@ -640,8 +694,7 @@ add_custom_command(TARGET w7_measure_test POST_BUILD
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
 
-add_test(NAME measurement COMMAND w7_measure_test
-         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+w7_add_test(measurement w7_measure_test)
 
 # ============================================================
 # === Run 帧循环策略 回归测试 (headless, 纯逻辑 + 一个真日志控件)
@@ -674,13 +727,17 @@ if(MSVC)
     target_compile_options(w7_run_test PRIVATE /utf-8)
 endif()
 
-# WORKING_DIRECTORY 必须显式给:run_policy 里有一条**源码级守卫**
+# 工作目录必须显式给:run_policy 里有一条**源码级守卫**
 # (test_mainwindow_records_every_frame)要读 mainwindow.cpp 源码。
 # 不给的话 ctest 会在 build/ 下跑,找不到文件 —— 而那条守卫
 # 第一版写成了"打不开就 return",于是它变成**恒真的空断言**:
 # 测试绿着,而守卫根本没生效。这正是"看着在验证其实没验证"。
-add_test(NAME run_policy COMMAND w7_run_test
-         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+#
+# ⚠ 所以这里不是"给个目录就完事":守卫必须**自己去找**源码,
+#   不能靠 CWD 恰好是工程根。改成从当前目录往上找 mainwindow.cpp
+#   (见 test_run_policy.cpp 的 findMainWindowCpp()),
+#   这样工作目录挪到 build/test_work/ 之后守卫照样真的在跑。
+w7_add_test(run_policy w7_run_test)
 
 # ============================================================
 # === 检测类算子 回归测试 (color_segment / blob_count / count_check)
@@ -691,7 +748,7 @@ add_test(NAME run_policy COMMAND w7_run_test
 #   2) 中间结果靠落盘文件名传递 → 文件名不唯一就互相覆盖,
 #      下游读到别人的结果,不崩不报错,数就是错的
 #
-# 测试要往 images/ 写临时图,工作目录必须是工程根。
+# 测试要往 images/ 写临时图,工作目录在 build/test_work/detection_operators/。
 # ============================================================
 qt_add_executable(w7_detect_test
     tests/test_detection_operators.cpp
@@ -722,8 +779,7 @@ add_custom_command(TARGET w7_detect_test POST_BUILD
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
 
-add_test(NAME detection_operators COMMAND w7_detect_test
-         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+w7_add_test(detection_operators w7_detect_test)
 
 # ============================================================
 # === template_match 回归测试 (headless, 自造带纹理的图和模板)
@@ -739,7 +795,7 @@ add_test(NAME detection_operators COMMAND w7_detect_test
 #
 # 三条都不报错、状态点都是绿的,只有结论是错的 —— 产线上要到漏检才发现。
 #
-# 测试要往 images/ 写临时图,工作目录必须是工程根。
+# 测试要往 images/ 写临时图,工作目录在 build/test_work/template_match/。
 # ============================================================
 qt_add_executable(w7_tpl_test
     tests/test_template_match.cpp
@@ -768,8 +824,7 @@ add_custom_command(TARGET w7_tpl_test POST_BUILD
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
 
-add_test(NAME template_match COMMAND w7_tpl_test
-         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+w7_add_test(template_match w7_tpl_test)
 
 # ============================================================
 # === 算子库分组 回归测试 (headless, 纯 QtCore)
@@ -797,7 +852,7 @@ if(MSVC)
     target_compile_options(w7_lib_test PRIVATE /utf-8)
 endif()
 
-add_test(NAME operator_library COMMAND w7_lib_test)
+w7_add_test(operator_library w7_lib_test)
 
 # ============================================================
 # 让测试失败时能看到是哪条断言挂了
@@ -815,3 +870,49 @@ set_tests_properties(
     template_match operator_library
     PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1"
 )
+
+# ============================================================
+# === 暂存测试数据(每次构建都重拷)
+#
+# ## 为什么不是 POST_BUILD
+#
+# POST_BUILD 挂在目标上,**只在目标重新链接时才跑**。
+# 改了 recipes/demo.json、或者换了一张测试图,而代码一行没动
+# -> 不重编 -> 不重拷 -> 测试读到的还是**上一次的旧数据**。
+#
+# 旧数据照样能把测试跑绿,而且**一声不响**:
+#   配方改了判据,测试拿旧配方判,结论是旧配方下的正确答案;
+#   测试图换了,测试拿旧图,判的还是旧图。
+# 这就是本项目最怕的那种"静默失效"—— 看着在验证,其实没在验证。
+#
+# ## 为什么不是 configure 时拷
+#
+# configure 时拷 = 只在"有人跑 cmake"时才更新。
+# 改了图直接 ctest,拿到的还是旧数据,而且没有任何提示。
+#
+# ## 那为什么每次都重拷
+#
+# add_custom_target 没有输出文件,CMake 永远认为它"过期",
+# 所以**每次构建都会跑**。数据永远不会是陈的。
+#
+# 代价:每次构建多几十个 cmake -E copy_directory(实测 1 秒上下)。
+# 换来的是"改了数据,下一次构建就生效",而且这个性质是**无条件**的。
+# ============================================================
+set(_stage_cmds "")
+foreach(_suite IN LISTS W7_TEST_SUITES)
+    set(_d "${CMAKE_CURRENT_BINARY_DIR}/test_work/${_suite}")
+    list(APPEND _stage_cmds
+        # 板型配方(pcb_inspect 按相对路径 "recipes/xxx.json" 读)
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_SOURCE_DIR}/recipes" "${_d}/recipes"
+        # demo 板的测试图(顺便给测试一个能写的 images/ 目录)
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_SOURCE_DIR}/images" "${_d}/images"
+        # complex 三块板的图(数据在 W6 那边 —— 那边才是生成器所在地)
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_SOURCE_DIR}/../W6_PCB_DefectProject/images/complex"
+                "${_d}/images/complex")
+endforeach()
+
+add_custom_target(w7_test_data ALL ${_stage_cmds}
+    COMMENT "Staging W7 test data into build/test_work/")

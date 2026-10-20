@@ -27,6 +27,7 @@
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QDir>
 #include <windows.h>
 
 #include "run_policy.h"
@@ -951,10 +952,37 @@ static QString stripLineComments(const QString& src) {
     return out;
 }
 
+// ============================================================
+// 找 mainwindow.cpp
+//
+// ⚠ 2026-10-20:不能写死相对路径 "mainwindow.cpp"。
+//
+//   以前工作目录是工程根(W7_VisionMasterLite/),相对路径恰好能打开。
+//   现在工作目录改成了 build 里的测试目录
+//   (为了不让测试产物落进源码树),相对路径就**打不开了**。
+//
+//   而"打不开"这件事本身有段血案史:
+//   第一版是 `if (!opened) return;` —— 找不到文件就直接返回,
+//   于是一条断言都没跑,测试照样全绿。
+//   那是**恒真的空断言**:比没有守卫更坏,因为它让人以为守卫在生效。
+//
+//   所以现在:路径自己往上找,找不到就**报红**。
+// ============================================================
+static QString findMainWindowCpp() {
+    QDir dir = QDir::current();
+    for (int i = 0; i < 8; ++i) {
+        const QString cand = dir.filePath("mainwindow.cpp");
+        if (QFile::exists(cand)) return cand;
+        if (!dir.cdUp()) break;
+    }
+    return QString();
+}
+
 static void test_mainwindow_records_every_frame() {
     beginCase("源码守卫:mainwindow 不能退回只缓存最后一帧");
 
-    QFile f(QStringLiteral("mainwindow.cpp"));
+    const QString mwPath = findMainWindowCpp();
+    QFile f(mwPath);
     const bool opened = f.open(QIODevice::ReadOnly | QIODevice::Text);
     // 打不开文件**必须报红**,不能 return 了事。
     // 第一版写的是 "if (!opened) return;" —— 而 CMake 里
@@ -963,11 +991,11 @@ static void test_mainwindow_records_every_frame() {
     // 一条断言都没跑,测试照样全绿。
     //
     // 那是"恒真的空断言":比没有守卫更坏,因为它让人以为守卫在生效。
-    // 所以这里 check 的是 false 分支,让配置漏了 WORKING_DIRECTORY
-    // 立刻暴露。
+    // 所以这里 check 的是 false 分支 —— 路径找不到就当场报红,
+    // 而不是"这条守卫今天不算数"。
     check(opened,
-          "能打开 mainwindow.cpp —— 打不开说明 run_policy 的 "
-          "add_test 缺 WORKING_DIRECTORY(见 CMakeLists.txt 里的说明),"
+          "能打开 mainwindow.cpp —— 打不开说明它不在预期位置("
+          "找过 " + QDir::currentPath() + " 往上 8 层),"
           "这条源码守卫会变成恒真的空断言");
     if (!opened) return;
     const QString src = stripLineComments(QString::fromUtf8(f.readAll()));
@@ -1027,11 +1055,12 @@ static void test_mainwindow_records_every_frame() {
 static void test_mainwindow_frame_selector_maps_through_framesOf() {
     beginCase("源码守卫:帧选择器必须经 framesOf 换算,不能拿序号当帧号");
 
-    QFile f(QStringLiteral("mainwindow.cpp"));
+    QFile f(findMainWindowCpp());
     const bool opened = f.open(QIODevice::ReadOnly | QIODevice::Text);
     check(opened,
-          "能打开 mainwindow.cpp —— 打不开说明 run_policy 的 "
-          "add_test 缺 WORKING_DIRECTORY,这条源码守卫会变成恒真的空断言");
+          "能打开 mainwindow.cpp —— 打不开说明它不在预期位置("
+          "找过 " + QDir::currentPath() + " 往上 8 层),"
+          "这条源码守卫会变成恒真的空断言");
     if (!opened) return;
     const QString src = stripLineComments(QString::fromUtf8(f.readAll()));
     f.close();
