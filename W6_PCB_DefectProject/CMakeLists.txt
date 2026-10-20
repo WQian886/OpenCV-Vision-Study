@@ -78,7 +78,25 @@ add_custom_command(TARGET w6_core_test POST_BUILD
 
 add_test(NAME pcb_core COMMAND w6_core_test)
 
-set(SOURCES main.cpp)
+# ============================================================
+# === W6 自己的可测逻辑层 + 它的回归测试
+#
+# w6_cli.h/.cpp 是从 main.cpp 里抽出来的**纯逻辑**层
+# (查板型 / 找配方 / 跑一块板 / 摊 CSV 行 / 写 CSV)。
+#
+# 为什么要抽:
+#   main.cpp 是程序入口,没法被别的目标链接 ——
+#   逻辑留在 main.cpp 里,W6 就一条自动化测试都没有,
+#   而 W6 恰恰是最需要测试的一层(它决定"哪些图被检了")。
+#
+# 仓库里已有同样的先例:W7 的 step_scope.h 就是这么从 mainwindow.cpp
+# 抽出来的,见那个头文件的说明。
+# ============================================================
+set(SOURCES
+    main.cpp
+    w6_cli.cpp
+)
+
 add_executable(w6_pcb_defect ${SOURCES})
 
 target_include_directories(w6_pcb_defect PRIVATE ${OpenCV_INCLUDE_DIRS})
@@ -87,6 +105,32 @@ target_link_libraries(w6_pcb_defect PRIVATE ${OpenCV_LIBS} w6_pcb_core)
 if(MSVC)
     target_compile_options(w6_pcb_defect PRIVATE /utf-8)
 endif()
+
+# --- W6 CLI 层的回归测试 ---
+add_executable(w6_cli_test
+    tests/test_w6_cli.cpp
+    w6_cli.cpp
+)
+
+target_include_directories(w6_cli_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w6_cli_test PRIVATE ${OpenCV_LIBS} w6_pcb_core)
+
+if(MSVC)
+    target_compile_options(w6_cli_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w6_cli_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        D:/opencv-src/build/install/bin
+        $<TARGET_FILE_DIR:w6_cli_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+add_test(NAME w6_cli COMMAND w6_cli_test)
 
 set_target_properties(w6_pcb_defect PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

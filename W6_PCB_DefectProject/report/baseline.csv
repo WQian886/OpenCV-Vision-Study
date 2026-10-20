@@ -1,7 +1,7 @@
-board_file,component,kind,defect,description,silk,qr,result
-report/baseline.csv,R1,R,ok,-,,PCB-2026-001,PASS
-report/baseline.csv,C1,C,ok,-,,PCB-2026-001,PASS
-report/baseline.csv,U1,IC,ok,-,,PCB-2026-001,PASS
-report/baseline.csv,R2,R,ok,-,,PCB-2026-001,PASS
-report/baseline.csv,C2,C,ok,-,,PCB-2026-001,PASS
-report/baseline.csv,R3,R,ok,-,,PCB-2026-001,PASS
+board_file,board_type,component,kind,defect,description,silk,qr,result
+images/baseline.png,demo,R1,R,ok,-,PCB-2026-00)  oo.  )  Log tL Lo Lut ot  Oo |  C2  -|  ———  fol [o)  [ols,PCB-2026-001,PASS
+images/baseline.png,demo,C1,C,ok,-,PCB-2026-00)  oo.  )  Log tL Lo Lut ot  Oo |  C2  -|  ———  fol [o)  [ols,PCB-2026-001,PASS
+images/baseline.png,demo,U1,IC,ok,-,PCB-2026-00)  oo.  )  Log tL Lo Lut ot  Oo |  C2  -|  ———  fol [o)  [ols,PCB-2026-001,PASS
+images/baseline.png,demo,R2,R,ok,-,PCB-2026-00)  oo.  )  Log tL Lo Lut ot  Oo |  C2  -|  ———  fol [o)  [ols,PCB-2026-001,PASS
+images/baseline.png,demo,C2,C,ok,-,PCB-2026-00)  oo.  )  Log tL Lo Lut ot  Oo |  C2  -|  ———  fol [o)  [ols,PCB-2026-001,PASS
+images/baseline.png,demo,R3,R,ok,-,PCB-2026-00)  oo.  )  Log tL Lo Lut ot  Oo |  C2  -|  ———  fol [o)  [ols,PCB-2026-001,PASS
