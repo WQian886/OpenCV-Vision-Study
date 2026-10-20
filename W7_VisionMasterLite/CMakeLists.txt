@@ -104,6 +104,66 @@ if(MSVC)
 endif()
 
 # ------------------------------------------------------------
+# 共享 QR/OCR 核心 (common/qr_ocr)
+#
+# QR 解码 + tesseract 文字识别,W5 / W6 / W7 **共用同一份**。
+#
+# 这是本项目**第五次**抄同一个副本。前三次分别长在:
+#   · W5 的 main.cpp(QR 解码 + tesseract 调用各一份)
+#   · W6 的 w6_cli.cpp(抄 W5 的,修了宽字符转换和 --psm 11)
+#   · W7 的 qr_decode 算子(又抄了一份 QR 解码)
+#
+# 抄出来的代价不是"多几行代码":
+#   · W6 的 --psm 11 和 W5 的 --psm 6 是**两个不同的答案**,
+#     谁也说不清哪个对 —— 它们是两份拷贝,不是一份的两个参数。
+#   · W6 那份修了宽字符转换的坑(路径带中文会毁),
+#     W5 那份还在逐元素窄化。修一处,另一处照旧坏着。
+#
+# 同样刻意不依赖 Qt —— W5 和 W6 都不引 Qt。
+# ------------------------------------------------------------
+set(QR_OCR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../common/qr_ocr")
+
+add_library(w7_qr_ocr STATIC
+    ${QR_OCR_DIR}/qr_ocr.cpp
+)
+
+target_include_directories(w7_qr_ocr PUBLIC
+    ${QR_OCR_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w7_qr_ocr PUBLIC ${OpenCV_LIBS})
+
+if(MSVC)
+    target_compile_options(w7_qr_ocr PRIVATE /utf-8)
+endif()
+
+# 同一份测试源码也链进 W6 和 W7 两个目标,理由和 pcb_core 一样:
+#   · W7 那边是 VS 生成器,证明核心在 VS + Qt 环境下也能编;
+#   · W6 那边是 Ninja + 无 Qt,证明核心能脱离 Qt 单独用。
+# 两边都绿才说明"核心自己是对的,而且换个构建环境也没坏"。
+add_executable(w7_qr_ocr_test
+    ${QR_OCR_DIR}/tests/test_qr_ocr.cpp
+)
+
+target_include_directories(w7_qr_ocr_test PRIVATE ${QR_OCR_DIR})
+
+target_link_libraries(w7_qr_ocr_test PRIVATE ${OpenCV_LIBS} w7_qr_ocr)
+
+if(MSVC)
+    target_compile_options(w7_qr_ocr_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_qr_ocr_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        D:/opencv-src/build/install/bin
+        $<TARGET_FILE_DIR:w7_qr_ocr_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+add_test(NAME qr_ocr COMMAND w7_qr_ocr_test)
+
+# ------------------------------------------------------------
 # 共享核心**自己**的测试
 #
 # 为什么单独有一个套件:
@@ -232,6 +292,7 @@ target_link_libraries(w7_vm_lite PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets
     ${OpenCV_LIBS}
     w7_pcb_core
+    w7_qr_ocr
 )
 
 if(MSVC)

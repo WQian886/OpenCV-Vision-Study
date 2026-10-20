@@ -114,6 +114,15 @@ struct Skip {
     std::string reason;   // 人话
 };
 
+// 一次没读成的读取。
+//
+// what 写**读的是什么**(silkscreen / qr),reason 写人话。
+struct ReadFailure {
+    std::string file;
+    std::string what;
+    std::string reason;
+};
+
 // CSV 里的一行 = 一个元件。
 struct ReportRow {
     std::string boardFile;   // 相对扫描根的路径
@@ -130,11 +139,52 @@ struct ReportRow {
 struct ReportResult {
     std::vector<ReportRow> rows;
     std::vector<Skip>      skipped;
+    // 没读成的**读取**(比如丝印 OCR 没跑起来)。
+    //
+    // ⚠ 这跟 skipped 是**两件不同的事**,不能混:
+    //   skipped = 这块板**没判**,结论不成立;
+    //   读失败 = 板判了,但丝印那一栏是空的。
+    //
+    //   混在一起的后果:看报告的人以为"少检了一块板",
+    //   去查板型/配方 —— 而真正的问题是 tesseract 没装。
+    //
+    //   更糟的是以前这里干脆**什么都不报**:
+    //   OCR 的失败原因算出来了,却直接丢掉(silkErr 收了就没再用)。
+    //   报告里 silk 列空着,和"板上没丝印"长得一模一样。
+    std::vector<ReadFailure> readFailures;
     int passCount = 0;
     int failCount = 0;
     int skipCount = 0;
     int boardCount = 0;     // 真正判过的板数
 };
+
+// ============================================================
+// 一块板的 QR 串号 + 丝印文字
+//
+// "读出来是空的"和"根本没读"必须分得开:
+//   silkRead = false -> **没读**(开关关着,或者读失败)
+//   silkRead = true, silk 为空 -> 读了,图上确实没字
+//
+// ⚠ 这两个在 CSV 里长得一模一样(都是空字符串),
+//   所以失败原因必须**另外报出去**,不能指望从 silk 列看出来。
+// ============================================================
+struct BoardCodes {
+    std::string qr;         // QR 内容
+    bool qrFound = false;   // 图上到底有没有 QR
+    std::string silk;       // 丝印文字
+    bool silkRead = false;  // 有没有读
+    std::string silkError;  // 没读成的原因(人话);读成了就是空
+};
+
+// 读一块板的码。
+//
+// doSilkscreen = false 时**不读**丝印(要起 tesseract 进程,慢,测试用不着),
+// 此时 silkRead = false —— 不是"读了但是空"。
+//
+// tesseractPath 空 = 自动找。传一个不存在的路径可以确定性地
+// 触发"没读成"那条路径(给测试用)。
+BoardCodes readBoardCodes(const cv::Mat& img, bool doSilkscreen,
+                          const std::string& tesseractPath = "");
 
 // ============================================================
 // 把一块板的判定结果摊成 CSV 行(一个元件一行)
@@ -154,8 +204,12 @@ std::vector<ReportRow> rowsFromBoard(const std::string& relPath,
 //
 // readSilkscreen 为 false 时跳过 OCR —— 丝印 OCR 要起 tesseract 进程,
 // 慢,而且测试用不着。
+//
+// ⚠ tesseractPath 只给**测试**用:传一个不存在的路径,
+//   就能确定性地触发"OCR 没跑成"这条路径,不用真的卸掉 tesseract。
+//   空 = 自动找(默认安装位置 / PATH)。
 ReportResult runReport(const fs::path& dir, const std::string& recipeDir,
-                       bool readSilkscreen);
+                       bool readSilkscreen, const std::string& tesseractPath = "");
 
 // ============================================================
 // CSV
@@ -175,13 +229,23 @@ bool writeCSVReport(const std::string& outPath, const std::vector<ReportRow>& ro
 
 // ============================================================
 // W6d: QR 串号 / 丝印 OCR
-// ============================================================
-std::string readQRCode(const cv::Mat& img);
-
-// 读丝印。失败时 err 写**人话**。
 //
-// ⚠ "读出来是空的"和"根本没读"是两件事 —— 报告里 silk 列空着,
-//   看的人分不清是板上没丝印还是 OCR 没跑。
-std::string readSilkscreen(const cv::Mat& img, std::string& err);
+// ⚠ 2026-10-20:这两个函数**从本文件里删掉了** ——
+//   QR 解码和 tesseract 调用搬到了 common/qr_ocr/,W5 / W6 / W7 共用一份。
+//
+//   搬之前本文件里有一份拷贝,W5 的 main.cpp 里有一份,
+//   W7 的 qr_decode 算子里还有一份 —— 本项目栽过四遍的坑,这是第五次。
+//
+//   现在的约定:
+//     qroc::readQr(img)            -> QrResult{found, text, corners}
+//     qroc::readText(img, options) -> OcrResult{ok, text, error, ...}
+//
+//   "读出来是空的"和"根本没读"必须分得开:
+//     ok=false                    -> **没读**,error 里写清楚为什么
+//     ok=true 且 text 为空         -> 读了,图上确实没字
+//
+//   报告里 silk 列空着的时候,看的人必须分得出是"板上没丝印"
+//   还是"OCR 根本没跑"。分不清就等于把没查说成查过了。
+// ============================================================
 
 } // namespace w6

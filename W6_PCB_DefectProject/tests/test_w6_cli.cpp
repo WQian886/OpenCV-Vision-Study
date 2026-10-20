@@ -798,6 +798,122 @@ static void test_write_csv() {
     }
 }
 
+// ============================================================
+// 用例 8:读码 —— "没读"和"读了但是空"必须分得开
+//
+// ============================================================
+// 背景:2026-10-20 把 QR/OCR 搬到 common/qr_ocr/ 之后,
+// 顺手逮到 W6 的一个真缺陷:
+//
+//     std::string qr, silk, silkErr;
+//     if (doSilkscreen) silk = readSilkscreen(img, silkErr);
+//     // ← silkErr 算出来了,之后再也没被用过
+//
+// 失败原因算出来就丢掉,报告里 silk 列空着 ——
+// 和"板上没丝印"长得一模一样。看报告的人分不清是哪个。
+//
+// 这一组用例钉的是那个区分:
+//   silkRead = false              -> **没读**(开关关着 / 读失败)
+//   silkRead = true 且 silk 为空    -> 读了,图上确实没字
+//
+// 而"没读"的原因必须能被报出来 ——
+// 批量报告里多了一个 readFailures 通道(和 skipped 分开,
+// 因为"板没判"和"板判了但丝印没读到"是两件事)。
+// ============================================================
+static void test_read_codes() {
+    beginCase("读码:没读 / 读了但是空,必须分得开;失败必须报出来");
+
+    const fs::path qrImg = g_root / "W5_OCR_QRCode" / "images" / "qrcode_test.png";
+    const cv::Mat img = cv::imread(qrImg.string(), cv::IMREAD_COLOR);
+    check(!img.empty(), "读得到 " + qrImg.string());
+    if (img.empty()) return;
+
+    // --- QR 内容对 ---
+    {
+        const w6::BoardCodes c = w6::readBoardCodes(img, false);
+        check(c.qrFound, "QR 找到了");
+        // 期望值来自 W5 自己的生成器 gen_qr.py
+        check(c.qr == "PCB-2026-001-SN:A12345X",
+              "QR 内容对(实际 \"" + c.qr + "\")");
+    }
+
+    // --- 开关关着 = "没读",不是"读了但是空" ---
+    {
+        const w6::BoardCodes c = w6::readBoardCodes(img, false);
+        check(!c.silkRead, "开关关着 -> silkRead=false");
+        check(!c.silkError.empty(), "开关关着 -> 说清是开关关着,不是空白");
+    }
+
+    // --- 指定一个不存在的 tesseract -> 必须失败并说清楚 ---
+    {
+        const std::string bogus = "D:/绝对不存在的路径/tesseract.exe";
+        const w6::BoardCodes c = w6::readBoardCodes(img, true, bogus);
+        check(!c.silkRead, "tesseract 不存在 -> silkRead=false");
+        check(c.silk.empty(), "tesseract 不存在 -> 没有返回任何文字");
+        check(c.silkError.find(bogus) != std::string::npos,
+              "失败原因里写明了路径(实际 \"" + c.silkError + "\")");
+    }
+
+    // --- 空图 ---
+    {
+        const cv::Mat empty;
+        const w6::BoardCodes c = w6::readBoardCodes(empty, true);
+        check(!c.silkRead, "空图 -> silkRead=false");
+        check(!c.silkError.empty(), "空图 -> 说清了为什么");
+    }
+}
+
+// ============================================================
+// 用例 9:批量报告里,没读成的读取必须**报出来**
+//
+// ⚠ 这条是本组用例里最要紧的:以前失败原因算出来就丢掉,
+//   报告里 silk 列空着,和"板上没丝印"分不开。
+//
+// 而且它**不能混进 skipped** ——
+//   skipped = 这块板**没判**,结论不成立;
+//   读失败 = 板判了,只是丝印那一栏是空的。
+// 混在一起会让看报告的人以为"少检了一块板",去查板型/配方 ——
+// 而真正的问题是 tesseract 没装。
+// ============================================================
+static void test_report_reports_read_failures() {
+    beginCase("批量报告:没读成的读取要单列,不能混进 skipped");
+
+    const fs::path dir = g_w6 / "images";
+    const std::string bogus = "D:/绝对不存在的路径/tesseract.exe";
+
+    const w6::ReportResult rep =
+        w6::runReport(dir, g_recipes.string(), true, bogus);
+
+    check(rep.boardCount > 0, "跑到了板(实际 " + std::to_string(rep.boardCount) + " 块)");
+    check(!rep.readFailures.empty(),
+          "OCR 全部失败 -> readFailures 不为空(实际 " +
+          std::to_string(rep.readFailures.size()) + " 条)");
+    if (!rep.readFailures.empty()) {
+        const auto& f = rep.readFailures.front();
+        check(!f.file.empty(), "失败项写了是哪张图");
+        check(f.what == "silkscreen", "失败项写了读的是什么(实际 \"" + f.what + "\")");
+        check(f.reason.find(bogus) != std::string::npos,
+              "失败原因里写明了路径(实际 \"" + f.reason + "\")");
+    }
+
+    // 关键:**不能混进 skipped**。
+    // skipped 是"板没判",读失败是"板判了但丝印没读到"。
+    check(rep.skipCount == static_cast<int>(rep.skipped.size()),
+          "skipped 的条数和 skipCount 对得上");
+    for (const auto& s : rep.skipped) {
+        check(s.reason.find("tesseract") == std::string::npos,
+              "skipped 里不含 OCR 失败(\"" + s.reason + "\")");
+    }
+
+    // --- 开关关着时,不算失败 ---
+    {
+        const w6::ReportResult off = w6::runReport(dir, g_recipes.string(), false);
+        check(off.readFailures.empty(),
+              "开关关着 -> 不算读取失败(实际 " +
+              std::to_string(off.readFailures.size()) + " 条)");
+    }
+}
+
 int main() {
     g_root = findRepoRoot();
     g_w6   = g_root / "W6_PCB_DefectProject";
@@ -829,6 +945,8 @@ int main() {
         test_rows_from_board();
         test_run_report();
         test_write_csv();
+        test_read_codes();
+        test_report_reports_read_failures();
     } catch (const std::exception& e) {
         check(false, std::string("测试抛出异常:") + e.what());
     } catch (...) {

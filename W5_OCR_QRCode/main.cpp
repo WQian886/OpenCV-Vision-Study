@@ -1,22 +1,48 @@
 // ============================================================
 // W5: OCR + 二维码
-//   - 默认 / qr  → W5a QR Code 识别
-//   - ocr        → W5b OCR 文字识别 (调用 Tesseract)
+//   - 默认 / ocr  → W5b OCR 文字识别 (调用 Tesseract)
+//   - qr          → W5a QR Code 识别
+//
 // 学习目标::
 //   W5a: cv::QRCodeDetector 检测 + 解码
 //   W5b: 调用 Tesseract OCR 读 PCB 丝印文字
+//
 // ============================================================
+// ⚠ 2026-10-20:实现搬到了 common/qr_ocr/,W5 / W6 / W7 **共用一份**
+//
+// 这个文件原来自己写了一份 QR 解码 + 一份 tesseract 调用。
+// W6 那边抄了一份(修了宽字符转换的坑),W7 的 qr_decode 算子又抄了一份 QR。
+// **三次**拷贝,而且从来没有被放在一起测过 ——
+// 所以"W6 的 --psm 11 和 W5 的 --psm 6 哪个对"这个问题没人答得上来:
+// 它们是两份拷贝,不是一份的两个参数。
+//
+// 现在:
+//   qroc::readQr(img)             -> QR 结果(内容 + 四个角点)
+//   qroc::readText(img, options)  -> 文字结果(ok / text / error)
+//
+// psm 现在是一个**参数**,W5 想用 6 就传 6,W6 想用 11 就传 11。
+//
+// ⚠ 这个文件保留的是**教学演示**(画框、显示、打印每一步),
+//   算法本身在 common/qr_ocr/ 里。
+//   保留演示而不是删掉,是因为"预处理长什么样"本身就是这周要学的东西 ——
+//   但**定义**只能有一份。
+// ============================================================
+
+#include "qr_ocr.h"
 
 #include <opencv2/opencv.hpp>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
-#include <cstdlib>      // system()
-#include <fstream>      // 读 OCR 输出文件
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+// 是否显示窗口。CI / 无显示器环境要关掉 ——
+// cv::imshow 在没有窗口系统时会抛异常。
+static bool g_showWindow = true;
 
 // ============================================================
 // W5a QR 识别
@@ -32,35 +58,35 @@ static void runQR() {
     std::cout << "===== QR 识别 =====\n";
     std::cout << "  尺寸: " << img.cols << " x " << img.rows << "\n";
 
-    cv::QRCodeDetector detector;
-    std::vector<cv::Point2f> points;
-    std::string decoded = detector.detectAndDecode(img, points);
+    const qroc::QrResult qr = qroc::readQr(img);
 
-    if (decoded.empty()) {
+    if (!qr.found) {
         std::cout << "  ❌ 没识别到二维码\n";
     } else {
-        std::cout << "  ✅ 解码: " << decoded << "\n";
+        std::cout << "  ✅ 解码: " << qr.text << "\n";
     }
 
     // 画框 + 显示
     cv::Mat marked = img.clone();
-    if (!decoded.empty() && points.size() == 4) {
+    if (qr.found && qr.corners.size() == 4) {
         for (int i = 0; i < 4; ++i) {
-            cv::line(marked, points[i], points[(i+1) % 4],
+            cv::line(marked, qr.corners[i], qr.corners[(i + 1) % 4],
                      cv::Scalar(0, 0, 255), 3);
         }
-        cv::putText(marked, decoded,
-                    cv::Point((int)points[0].x, (int)points[0].y - 10),
+        cv::putText(marked, qr.text,
+                    cv::Point((int)qr.corners[0].x, (int)qr.corners[0].y - 10),
                     cv::FONT_HERSHEY_SIMPLEX, 0.7,
                     cv::Scalar(0, 0, 255), 2);
     }
     cv::imwrite("images/w5_qr_result.png", marked);
 
-    cv::namedWindow("QR Code", cv::WINDOW_AUTOSIZE);
-    cv::imshow("QR Code", marked);
-    std::cout << "按任意键关闭窗口...\n";
-    cv::waitKey(0);
-    cv::destroyAllWindows();
+    if (g_showWindow) {
+        cv::namedWindow("QR Code", cv::WINDOW_AUTOSIZE);
+        cv::imshow("QR Code", marked);
+        std::cout << "按任意键关闭窗口...\n";
+        cv::waitKey(0);
+        cv::destroyAllWindows();
+    }
 }
 
 // ============================================================
@@ -79,60 +105,50 @@ static void runOCR() {
     std::cout << "  图像: " << imgPath << "\n";
     std::cout << "  尺寸: " << img.cols << " x " << img.rows << "\n";
 
-    // ---------- 第 1 步:OpenCV 预处理(灰度化 + 自适应阈值) ----------
-    cv::Mat gray, thresh;
-    cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
-    cv::adaptiveThreshold(gray, thresh, 255,
-                          cv::ADAPTIVE_THRESH_GAUSSIAN_C,
-                          cv::THRESH_BINARY, 31, 10);
+    // ---------- 第 1 步:OpenCV 预处理(灰度化 + 放大 + 自适应阈值) ----------
+    //
+    // 预处理在 common/qr_ocr/ 里做完了,这里拿到结果做教学展示。
+    //
+    // --psm 6 = "uniform block"(整块文字)。W5 的测试图是三行整整齐齐的字,
+    // 用 6 合适。**板丝印是散落的**,那边要用 11 —— 那只是一个参数的区别。
+    qroc::OcrOptions opt;
+    opt.psm = 6;
+    // 中间产物放 out/,**不能放 images/** ——
+    // images/ 是"待检图"的目录,往里丢中间产物,下一次扫描会把自己的
+    // 中间产物当成待检样本扫一遍(而且它没有 manifest 登记,
+    // 会被报成"跳过",看着像少检了一块板)。
+    opt.workDir = "out/ocr";
+    opt.stem = "w5_ocr";
 
-    std::string prePath = "images/ocr_preprocessed.png";
-    cv::imwrite(prePath, thresh);
-    std::cout << "  预处理图已保存: " << prePath << "\n";
+    const qroc::OcrResult r = qroc::readText(img, opt);
 
-    // ---------- 第 2 步:调用 Tesseract (用 CreateProcessW 避免空格问题) ----------
-    const std::wstring tesseract = L"D:\\Program Files\\Tesseract-OCR\\tesseract.exe";
-    const std::wstring args      = L"\"" + std::wstring(prePath.begin(), prePath.end())
-                                  + L"\" \"images\\ocr_result\" -l eng --psm 6";
+    // 第 2 步:调 tesseract(命令行为共享核心拼的,这里只展示)
+    std::cout << "  调用: " << r.commandLine << "\n\n";
 
-    std::wstring cmdLine = L"\"" + tesseract + L"\" " + args;
-    std::wcout << L"  调用: " << cmdLine << std::endl << std::endl;
-
-    STARTUPINFOW si = {};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi = {};
-    // CreateProcessW 要求命令行可写
-    std::vector<wchar_t> cmdBuf(cmdLine.begin(), cmdLine.end());
-    cmdBuf.push_back(L'\0');
-
-    BOOL ok = CreateProcessW(
-        NULL,                  // 应用名(NULL=从命令行解析)
-        cmdBuf.data(),         // 命令行
-        NULL, NULL, FALSE,     // 安全属性 + 句柄继承
-        0, NULL, NULL,         // 创建标志 + 环境 + 工作目录
-        &si, &pi);
-    if (!ok) {
-        std::cerr << "❌ CreateProcessW 失败,错误码 " << GetLastError() << "\n";
-        return;
-    }
-    // 等 Tesseract 跑完
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD ret = 0;
-    GetExitCodeProcess(pi.hProcess, &ret);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    if (ret != 0) {
-        std::cerr << "❌ Tesseract 调用失败,返回码 " << ret << "\n";
+    if (!r.ok) {
+        // ⚠ 失败必须**说出来**。
+        //   以前这里是 "❌ CreateProcessW 失败" / "❌ Tesseract 调用失败",
+        //   但 tesseract **没装**这种情况以前根本没处理 ——
+        //   CreateProcessW 失败会报出来,可是"文件不存在"和"别的错"
+        //   在旧代码里是同一条路径。
+        //   现在共享核心把每一步的原因都写成了人话,这里直接显示。
+        std::cerr << "  ❌ OCR 没跑成:" << r.error << "\n";
         return;
     }
 
-    // ---------- 第 3 步:读 OCR 输出 ----------
-    std::ifstream fin("images/ocr_result.txt");
-    std::string line, allText;
+    // 预处理图(教学用:看看送进 tesseract 的到底长什么样)
+    if (!r.preprocessed.empty()) {
+        cv::imwrite("out/ocr/w5_ocr_preprocessed.png", r.preprocessed);
+        std::cout << "  预处理图已保存: out/ocr/w5_ocr_preprocessed.png\n";
+    }
+
+    // 第 3 步:读 OCR 输出
     std::cout << "===== 识别结果 =====\n";
-    while (std::getline(fin, line)) {
-        std::cout << "  " << line << "\n";
-        allText += line + "\n";
+    std::string allText = r.text;
+    std::istringstream ss(allText);
+    std::string line;
+    while (std::getline(ss, line, ' ')) {
+        if (!line.empty()) std::cout << "  " << line << "\n";
     }
     if (allText.empty()) {
         std::cout << "  ❌ 没识别到文字\n";
@@ -140,7 +156,7 @@ static void runOCR() {
         std::cout << "\n✅ OCR 完成,共 " << allText.size() << " 字符\n";
     }
 
-    // ---------- 第 4 步:在原图上画框 + 显示 ----------
+    // 第 4 步:在原图上画框 + 显示
     cv::Mat marked = img.clone();
     cv::rectangle(marked, cv::Rect(0, 0, img.cols, img.rows),
                   cv::Scalar(0, 255, 0), 3);
@@ -150,25 +166,43 @@ static void runOCR() {
                 cv::Scalar(0, 255, 0), 2);
 
     cv::imwrite("images/w5_ocr_result.png", marked);
-    cv::namedWindow("OCR Input", cv::WINDOW_AUTOSIZE);
-    cv::imshow("OCR Input", marked);
-    std::cout << "按任意键关闭窗口...\n";
-    cv::waitKey(0);
-    cv::destroyAllWindows();
+    if (g_showWindow) {
+        cv::namedWindow("OCR Input", cv::WINDOW_AUTOSIZE);
+        cv::imshow("OCR Input", marked);
+        std::cout << "按任意键关闭窗口...\n";
+        cv::waitKey(0);
+        cv::destroyAllWindows();
+    }
 }
 
+// ============================================================
+// int main
 // ============================================================
 int main(int argc, char** argv) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
 
-    std::string mode = (argc > 1) ? argv[1] : "ocr";
+    std::string mode = "ocr";
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--no-gui") {
+            // 无显示器 / CI 环境:cv::imshow 会抛异常。
+            g_showWindow = false;
+        } else {
+            mode = a;
+        }
+    }
 
-    if (mode == "qr") {
-        runQR();   // 传 qr 跑 QR 识别
-    } else {
-        runOCR();  // 默认 = OCR 文字识别
+    try {
+        if (mode == "qr") {
+            runQR();   // 传 qr 跑 QR 识别
+        } else {
+            runOCR();  // 默认 = OCR 文字识别
+        }
+    } catch (const cv::Exception& e) {
+        std::cerr << "❌ OpenCV 异常: " << e.what() << "\n";
+        return 1;
     }
     return 0;
 }

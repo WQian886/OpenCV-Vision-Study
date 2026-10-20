@@ -79,6 +79,67 @@ add_custom_command(TARGET w6_core_test POST_BUILD
 add_test(NAME pcb_core COMMAND w6_core_test)
 
 # ============================================================
+# === 共享 QR/OCR 核心 (common/qr_ocr)
+#
+# QR 解码 + tesseract 文字识别,W5 / W6 / W7 **共用同一份**。
+#
+# 这是本项目**第五次**抄同一个副本。前三次分别长在:
+#   · W5 的 main.cpp(QR + tesseract 各一份)
+#   · W6 的 w6_cli.cpp(抄 W5 的,修了宽字符转换和 --psm)
+#   · W7 的 qr_decode 算子(又抄了一份 QR 解码)
+#
+# 抄出来的代价不是"多几行代码":
+#   · W6 的 --psm 11 和 W5 的 --psm 6 是**两个不同的答案**,
+#     谁也说不清哪个对 —— 它们是两份拷贝,不是一份的两个参数。
+#   · W6 那份修了宽字符转换的坑(路径带中文会毁),
+#     W5 那份还在逐元素窄化。修一处,另一处照旧坏着。
+#
+# 同样刻意不依赖 Qt。
+# ============================================================
+set(QR_OCR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../common/qr_ocr")
+
+add_library(w6_qr_ocr STATIC
+    ${QR_OCR_DIR}/qr_ocr.cpp
+)
+
+target_include_directories(w6_qr_ocr PUBLIC
+    ${QR_OCR_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w6_qr_ocr PUBLIC ${OpenCV_LIBS})
+
+if(MSVC)
+    target_compile_options(w6_qr_ocr PRIVATE /utf-8)
+endif()
+
+# --- QR/OCR 核心自己的测试 ---
+#
+# 合并之前这三份代码**一行测试都没有**。
+# 现在有了 —— 尤其重要的是"tesseract 没装时必须明说"那条,
+# 那正是以前没人知道的行为。
+add_executable(w6_qr_ocr_test
+    ${QR_OCR_DIR}/tests/test_qr_ocr.cpp
+)
+
+target_include_directories(w6_qr_ocr_test PRIVATE ${QR_OCR_DIR})
+
+target_link_libraries(w6_qr_ocr_test PRIVATE ${OpenCV_LIBS} w6_qr_ocr)
+
+if(MSVC)
+    target_compile_options(w6_qr_ocr_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w6_qr_ocr_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        D:/opencv-src/build/install/bin
+        $<TARGET_FILE_DIR:w6_qr_ocr_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+add_test(NAME qr_ocr COMMAND w6_qr_ocr_test)
+
+# ============================================================
 # === W6 自己的可测逻辑层 + 它的回归测试
 #
 # w6_cli.h/.cpp 是从 main.cpp 里抽出来的**纯逻辑**层
@@ -100,7 +161,7 @@ set(SOURCES
 add_executable(w6_pcb_defect ${SOURCES})
 
 target_include_directories(w6_pcb_defect PRIVATE ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(w6_pcb_defect PRIVATE ${OpenCV_LIBS} w6_pcb_core)
+target_link_libraries(w6_pcb_defect PRIVATE ${OpenCV_LIBS} w6_pcb_core w6_qr_ocr)
 
 if(MSVC)
     target_compile_options(w6_pcb_defect PRIVATE /utf-8)
@@ -117,7 +178,7 @@ target_include_directories(w6_cli_test PRIVATE
     ${OpenCV_INCLUDE_DIRS}
 )
 
-target_link_libraries(w6_cli_test PRIVATE ${OpenCV_LIBS} w6_pcb_core)
+target_link_libraries(w6_cli_test PRIVATE ${OpenCV_LIBS} w6_pcb_core w6_qr_ocr)
 
 if(MSVC)
     target_compile_options(w6_cli_test PRIVATE /utf-8)

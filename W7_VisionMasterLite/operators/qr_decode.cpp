@@ -1,4 +1,7 @@
 #include "qr_decode.h"
+
+#include "qr_ocr.h"
+
 #include <QJsonArray>
 #include <QLabel>
 
@@ -19,15 +22,20 @@ QJsonObject QRDecode::run(const QJsonObject& /*params*/, const QJsonObject& inpu
         return output;
     }
 
-    cv::QRCodeDetector detector;
-    std::vector<cv::Point2f> points;
-    std::string decoded = detector.detectAndDecode(img, points);
+    // ⚠ 2026-10-20:原来这里自己写了一份 cv::QRCodeDetector —— 
+    //   那是本项目**第五次**抄同一个副本的最后一处。
+    //   W5 的 main.cpp 一份、W6 的 w6_cli.cpp 一份、这里一份。
+    //   现在三边都调 common/qr_ocr/ 里的 qroc::readQr()。
+    //
+    //   抄出来的代价:三份各自漂。W6 那份后来修了宽字符转换的坑,
+    //   W5 那份还在逐元素窄化 —— 而三份**从来没被放在一起测过**。
+    const qroc::QrResult qr = qroc::readQr(img);
 
-    output["found"]  = !decoded.empty();
-    output["decoded"] = QString::fromStdString(decoded);
+    output["found"]  = qr.found;
+    output["decoded"] = QString::fromStdString(qr.text);
 
     QJsonArray pts;
-    for (const auto& p : points) {
+    for (const auto& p : qr.corners) {
         QJsonObject pt;
         pt["x"] = p.x;
         pt["y"] = p.y;

@@ -100,17 +100,13 @@ static void runBaseline(const Options& opt) {
         return;
     }
     fs::create_directories("report");
-    std::string silk, qr, silkErr;
     cv::Mat img = w6::loadImage("images/baseline.png");
-    if (!img.empty()) {
-        qr = w6::readQRCode(img);
-        silk = w6::readSilkscreen(img, silkErr);
-    }
+    const w6::BoardCodes codes = w6::readBoardCodes(img, true);
     // 一个元件一行。行怎么摊由 w6_cli 说了算 ——
     // baseline 和 report 两条路径必须给出**一模一样**的行,
     // 所以这里不自己再摊一遍(那才是抄副本)。
     const std::vector<w6::ReportRow> rows =
-        w6::rowsFromBoard("images/baseline.png", br, silk, qr);
+        w6::rowsFromBoard("images/baseline.png", br, codes.silk, codes.qr);
     w6::writeCSVReport("report/baseline.csv", rows, true);
 
     std::cout << "  板型:      " << br.recipeName << " (" << br.boardTitle << ")\n";
@@ -125,10 +121,17 @@ static void runBaseline(const Options& opt) {
                       << ": " << s.reason << "\n";
         }
     }
-    std::cout << "  QR:        " << (qr.empty() ? "(空)" : qr) << "\n";
-    std::cout << "  丝印:      "
-              << (silk.empty() ? ("(空)" + (silkErr.empty() ? "" : " —— " + silkErr))
-                               : silk) << "\n";
+    std::cout << "  QR:        " << (codes.qr.empty() ? "(空)" : codes.qr) << "\n";
+    // ⚠ 丝印空着的时候必须说清是"没读"还是"读了但是空"。
+    //   "没读"的原因直接写在这里 —— 以前失败原因被算出来就丢掉了,
+    //   界面上只看到一个空串,和"板上没丝印"分不开。
+    if (!codes.silkRead) {
+        std::cout << "  丝印:      ⚠ 没读到(" << codes.silkError << ")\n";
+    } else {
+        std::cout << "  丝印:      "
+                  << (codes.silk.empty() ? "(空 —— 读到了,图上没字)" : codes.silk)
+                  << "\n";
+    }
     std::cout << "  " << (br.pass ? "✅ PASS" : "❌ FAIL") << "\n";
     std::cout << "  CSV 已写:  report/baseline.csv\n";
 }
@@ -220,6 +223,18 @@ static void runReport(int argc, char** argv, const Options& opt) {
         std::cout << "\n  ⚠ 跳过 " << rep.skipped.size() << " 张(没有判定,不是合格):\n";
         for (const auto& s : rep.skipped) {
             std::cout << "    - " << s.file << " : " << s.reason << "\n";
+        }
+    }
+    // 没读成的**读取**也要逐条列出来。
+    //
+    // ⚠ 这跟"跳过"不是一回事:板判了,只是丝印那一栏是空的。
+    //   不报出来的话,看报告的人只会看到 silk 列空着,
+    //   分不清是"板上没丝印"还是"tesseract 没装"。
+    if (!rep.readFailures.empty()) {
+        std::cout << "\n  ⚠ 有 " << rep.readFailures.size()
+                  << " 项读取没成功(板判了,但那一栏是空的):\n";
+        for (const auto& f : rep.readFailures) {
+            std::cout << "    - " << f.file << " / " << f.what << " : " << f.reason << "\n";
         }
     }
     std::cout << "\n  共 " << rep.boardCount << " 张图: " << rep.passCount << " PASS / "

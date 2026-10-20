@@ -7,6 +7,8 @@
 
 #include "w6_cli.h"
 
+#include "qr_ocr.h"
+
 #include <fstream>
 #include <sstream>
 #include <map>
@@ -165,124 +167,71 @@ std::string findRecipeDir(const std::string& overrideDir) {
 }
 
 // ============================================================
-// W6d: 丝印 OCR(复用 W5 的 tesseract 调用)
+// W6d: 丝印 OCR / QR 串号
 //
-// 用 CreateProcessW 而不是 system():tesseract 的路径里有空格,
-// system() 会把它切成两半。
+// ⚠ 2026-10-20:原来这里有一份 readSilkscreen() 和一份 readQRCode(),
+//   **删掉了** —— 搬到 common/qr_ocr/,W5 / W6 / W7 共用一份。
 //
-// ⚠ tesseract 没装 / 跑不起来时**明说**,不假装读到了空串。
+//   这里是本项目**第五次**抄同一个副本。前三次分别长在:
+//     · W5 的 main.cpp(QR 解码 + tesseract 调用)
+//     · 本文件(抄 W5 的,修了宽字符转换和 --psm 11)
+//     · W7 的 qr_decode 算子(又抄了一份 QR 解码)
+//
+//   抄出来的代价不是"多几行代码":
+//     · W6 的 --psm 11 和 W5 的 --psm 6 是**两个不同的答案**,
+//       谁也说不清哪个对 —— 它们是两份拷贝,不是一份的两个参数。
+//     · 本文件修了宽字符转换的坑(路径带中文会毁),
+//       W5 那份还在逐元素窄化。修一处,另一处照旧坏着,
+//       而且没人会怀疑它们本来应该一样。
+//
+//   现在两边都是 qroc::readText() / qroc::readQr(),
+//   psm 是一个**参数**,改一处三边跟着动。
 // ============================================================
-std::string readSilkscreen(const cv::Mat& img, std::string& err) {
-#ifdef _WIN32
-    // 1. 预处理:灰度 + **放大** + 自适应阈值
-    //
-    // 放大是必须的:板上的丝印是 14~18px 的字(FONT_S / FONT_M),
-    // 直接扔给 tesseract 基本读不出来 —— 之前整板 OCR 出来是一堆乱码。
-    // 放大 3 倍之后字高到 42~54px,才进得了 tesseract 的射程。
-    const double kScale = 3.0;
-    cv::Mat gray, big, thresh;
-    cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
-    cv::resize(gray, big, cv::Size(), kScale, kScale, cv::INTER_CUBIC);
-    cv::adaptiveThreshold(big, thresh, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C,
-                          cv::THRESH_BINARY, 31, 10);
 
-    // 预处理图和 OCR 结果放 out/,**不能放 images/** ——
-    // images/ 是批量报告的输入目录,往里丢中间产物,下一次 report
-    // 就会把自己的中间产物当成待检板扫一遍(而且它没有 manifest 登记,
-    // 会被报成"跳过",看着像少检了一块板)。
-    const std::string prePath  = "out/silk/w6_silk_preprocessed.png";
-    const std::string outBase  = "out/silk/w6_silk_result";
-    const std::string outTxt   = outBase + ".txt";
-    fs::create_directories("out/silk");
-    if (!cv::imwrite(prePath, thresh)) {
-        err = "预处理图写不出去: " + prePath;
-        return "";
+// 一块板的码怎么读,只在这里定义一次。
+//
+// baseline 模式(单板)和 report 模式(批量)都要读,
+// 之前是各写一份 —— 又是抄副本,而且两份的参数已经开始漂
+// (一个 psm 11、一个 psm 6,谁也说不清哪个对)。
+BoardCodes readBoardCodes(const cv::Mat& img, bool doSilkscreen,
+                          const std::string& tesseractPath) {
+    BoardCodes out;
+    if (img.empty()) {
+        out.silkError = "图像是空的,没读";
+        return out;
     }
 
-    // 2. 调 tesseract
-    const std::wstring tesseract = L"D:\\Program Files\\Tesseract-OCR\\tesseract.exe";
-    // 宽字符转窄字符:Windows 那边是 wchar_t,这里要的是 std::string。
-    // 直接用迭代器构造会逐元素窄化(wchar_t -> char),在中文路径上会毁掉。
-    auto wideToUtf8 = [](const std::wstring& w) {
-        if (w.empty()) return std::string();
-        const int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(),
-                                          static_cast<int>(w.size()),
-                                          nullptr, 0, nullptr, nullptr);
-        std::string out(static_cast<size_t>(n), '\0');
-        WideCharToMultiByte(CP_UTF8, 0, w.c_str(), static_cast<int>(w.size()),
-                            out.data(), n, nullptr, nullptr);
+    const qroc::QrResult qr = qroc::readQr(img);
+    out.qr = qr.text;
+    out.qrFound = qr.found;
+
+    if (!doSilkscreen) {
+        // 开关关着 —— 这是"**没读**",不是"读了但是空"。
+        out.silkRead = false;
+        out.silkError = "没跑 OCR(开关关着)";
         return out;
-    };
-    const std::string tesseractPath = wideToUtf8(tesseract);
-    if (!fs::exists(fs::path(tesseractPath))) {
-        err = "没找到 tesseract(" + tesseractPath +
-              ") —— 装 Tesseract-OCR 才能读丝印";
-        return "";
     }
-    auto w = [&wideToUtf8](const std::string& s) {
-        // 窄字符 -> 宽字符。同样逐元素扩宽在非 ASCII 上会毁掉,
-        // 路径里可能带中文,所以走 WinAPI。
-        if (s.empty()) return std::wstring();
-        const int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(),
-                                          static_cast<int>(s.size()),
-                                          nullptr, 0);
-        std::wstring out(static_cast<size_t>(n), L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()),
-                            out.data(), n);
-        return out;
-    };
+
+    qroc::OcrOptions opt;
     // --psm 11 = "sparse text"(找散落的文字),不是 6("uniform block")。
     // 板上的丝印是**散落的**(板号在一角、SN 标在二维码下面、
     // 每个元件上面还有位号),按整块文本排版去解释会把版面分析带偏。
-    const std::wstring cmdLine = L"\"" + tesseract + L"\" \"" + w(prePath) +
-                                 L"\" \"" + w(outBase) + L"\" -l eng --psm 11";
-    STARTUPINFOW si = {};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi = {};
-    std::vector<wchar_t> cmdBuf(cmdLine.begin(), cmdLine.end());
-    cmdBuf.push_back(L'\0');
-    if (!CreateProcessW(NULL, cmdBuf.data(), NULL, NULL, FALSE, 0, NULL, NULL,
-                        &si, &pi)) {
-        err = "CreateProcessW 失败,错误码 " + std::to_string(GetLastError());
-        return "";
-    }
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD ret = 1;
-    GetExitCodeProcess(pi.hProcess, &ret);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
+    opt.psm = 11;
+    // 中间产物放 out/,**不能放 images/** ——
+    // images/ 是批量报告的输入目录,往里丢中间产物,下一次 report
+    // 就会把自己的中间产物当成待检板扫一遍(而且它没有 manifest 登记,
+    // 会被报成"跳过",看着像少检了一块板)。
+    opt.workDir = "out/silk";
+    opt.stem = "w6_silk";
+    // 显式指定时**不会**悄悄换一个 tesseract 去跑 ——
+    // 拿另一个程序跑出来的结果,调用方却以为是自己指定的那个。
+    opt.tesseractPath = tesseractPath;
 
-    if (ret != 0) {
-        err = "tesseract 返回码 " + std::to_string(ret);
-        return "";
-    }
-
-    // 3. 读结果
-    std::ifstream f(outTxt);
-    if (!f) {
-        err = "tesseract 跑完了但没产出 " + outTxt;
-        return "";
-    }
-    std::string all, line;
-    while (std::getline(f, line)) {
-        if (!all.empty()) all += " ";
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
-            line.pop_back();
-        }
-        all += line;
-    }
-    f.close();
-    return all;
-#else
-    err = "丝印 OCR 目前只有 Windows 实现(用 CreateProcessW 调 tesseract)";
-    return "";
-#endif
-}
-
-std::string readQRCode(const cv::Mat& img) {
-    cv::QRCodeDetector det;
-    std::vector<cv::Point2f> pts;
-    return det.detectAndDecode(img, pts);
+    const qroc::OcrResult r = qroc::readText(img, opt);
+    out.silkRead = r.ok;
+    out.silk = r.text;
+    out.silkError = r.error;
+    return out;
 }
 
 // ============================================================
@@ -402,7 +351,7 @@ std::vector<ReportRow> rowsFromBoard(const std::string& relPath,
 // 跑一批板
 // ============================================================
 ReportResult runReport(const fs::path& dir, const std::string& recipeDir,
-                       bool doSilkscreen) {
+                       bool doSilkscreen, const std::string& tesseractPath) {
     ReportResult res;
 
     for (const auto& e : fs::recursive_directory_iterator(dir)) {
@@ -430,13 +379,21 @@ ReportResult runReport(const fs::path& dir, const std::string& recipeDir,
         }
 
         cv::Mat img = loadImage(e.path());
-        std::string qr, silk, silkErr;
-        if (!img.empty()) {
-            qr = readQRCode(img);
-            if (doSilkscreen) silk = readSilkscreen(img, silkErr);
+        const BoardCodes codes = readBoardCodes(img, doSilkscreen, tesseractPath);
+
+        // ⚠ 没读成的**读取**必须报出来。
+        //
+        //   以前这里是 `silk = readSilkscreen(img, silkErr);` ——
+        //   失败原因算出来了,却直接丢掉。报告里 silk 列空着,
+        //   和"板上没丝印"长得一模一样。
+        //
+        //   开关关着不算失败(那是有意不读),所以只报真失败。
+        if (doSilkscreen && !codes.silkRead) {
+            res.readFailures.push_back({rel, "silkscreen", codes.silkError});
         }
 
-        const std::vector<ReportRow> rows = rowsFromBoard(rel, br, silk, qr);
+        const std::vector<ReportRow> rows =
+            rowsFromBoard(rel, br, codes.silk, codes.qr);
         res.rows.insert(res.rows.end(), rows.begin(), rows.end());
 
         br.pass ? ++res.passCount : ++res.failCount;
