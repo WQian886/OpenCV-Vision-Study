@@ -22,7 +22,7 @@
 //                          missingAsksBodyPresence():电容的暗像素只剩 1px 描边,
 //                          图宽千分之一的模糊就归零,好板集体误报。
 //   wrong        错件     R3 本体变成浅黄而非黑
-//   polarity     极性反   C1 白色极性条质心偏右
+//   polarity     极性反   C1 白色极性条出现在错误的一侧(左/右由配方给定)
 //   bridge       焊桥     R1 焊盘间金条连成一片
 //   insufficient 焊少     U1 某个焊盘面积远小于中位数
 //   shifted      偏移     R2 本体质心偏离应站中心
@@ -92,8 +92,6 @@ private:
     QDoubleSpinBox* m_bodyRatioMin = nullptr;  // missing(彩色本体): 占同板中位数的下限
     QSpinBox*       m_bodyMinSites = nullptr;  // 用比值所需的最少站点数
     QDoubleSpinBox* m_yellowMinPct = nullptr;  // wrong:   浅黄占 ROI 面积下限
-    QDoubleSpinBox* m_polarityR    = nullptr;  // polarity:白条质心 x 占 ROI 宽 %
-    QDoubleSpinBox* m_whiteMinPct  = nullptr;  // polarity:白色像素占 ROI 面积下限
     QDoubleSpinBox* m_bridgeMinPct = nullptr;  // bridge:  最长金段占 ROI 宽度
     QDoubleSpinBox* m_padMinPct    = nullptr;  // insufficient:焊盘噪声门槛(占 ROI 面积)
     QDoubleSpinBox* m_padDropPct   = nullptr;  // insufficient:最小焊盘比中位数低多少

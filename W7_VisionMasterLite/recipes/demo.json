@@ -14,7 +14,8 @@
       "body_h": 28,
       "checks": [
         "bridge"
-      ]
+      ],
+      "polarity_side": ""
     },
     {
       "label": "C1",
@@ -25,7 +26,8 @@
       "body_h": 28,
       "checks": [
         "polarity"
-      ]
+      ],
+      "polarity_side": "left"
     },
     {
       "label": "U1",
@@ -36,7 +38,8 @@
       "body_h": 60,
       "checks": [
         "insufficient"
-      ]
+      ],
+      "polarity_side": ""
     },
     {
       "label": "R2",
@@ -48,7 +51,8 @@
       "checks": [
         "missing",
         "shifted"
-      ]
+      ],
+      "polarity_side": ""
     },
     {
       "label": "C2",
@@ -57,7 +61,8 @@
       "cy": 480,
       "body_w": 70,
       "body_h": 28,
-      "checks": []
+      "checks": [],
+      "polarity_side": "left"
     },
     {
       "label": "R3",
@@ -68,7 +73,8 @@
       "body_h": 28,
       "checks": [
         "wrong"
-      ]
+      ],
+      "polarity_side": ""
     }
   ]
 }

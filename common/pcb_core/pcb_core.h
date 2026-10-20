@@ -75,6 +75,20 @@ struct RecipeSite {
     std::vector<std::string> checks;   // 该元件身上要跑的规则
     double shiftTolPct = 0;             // shifted 容差(% ROI 宽/高);<=0 表示用默认
     bool hasShiftTol() const { return shiftTolPct > 0; }
+
+    // 极性条应该在哪一侧("left"/"right",相对**元件本体**)。
+    //
+    // ⚠ 为什么是配方给的,不是判据猜的:
+    //   "反装"= 极性条挪到了另一边,而**哪边是对**取决于板的设计
+    //   (电容的负极标在左、二极管的阴极标在右)。
+    //   判据猜错的后果是**把好板判成反装** —— 静默误报,比漏检更难查。
+    //
+    //   配方的这一项由**生成器**带下来(画极性条的那一行代码自己登记),
+    //   不是手抄的。
+    //
+    // 空串 = 这个元件没有极性条(陶瓷电容),或者配方没写 ——
+    // 两种情况都判不了极性,必须报出来,不能装作查过了。
+    std::string polaritySide;
 };
 
 struct BoardRecipe {
@@ -115,6 +129,14 @@ struct InspectSite {
     double bodyPct = 0.0;        // ROI 内"非板面基色"像素占比
     bool hasBodyPct = false;
     double goldPct = 0.0;        // ROI 内金层像素占比
+    // 极性条应该在哪一侧("left"/"right")。从配方带下来,判定时和实测比。
+    // 空 = 没有极性条 / 配方没写 -> polarity 规则不判定。
+    //
+    // ⚠ 这个字段**放在结构体末尾**是故意的:
+    //   结构体中间插字段会让所有**位置聚合初始化**的调用点整体错位
+    //   —— 而且错位不一定编译报错,可能把 bool 塞进 double,静默变味。
+    //   放末尾,老调用点原样对得上;新字段请一律用具名赋值。
+    std::string polaritySide;
 };
 
 struct InspectResult {
@@ -147,11 +169,17 @@ struct JudgeParams {
     double bodyRatioMin = 0.714;  // 彩色本体 missing 的比值版(除以同板中位数)
     int    bodyMinSites = 4;      // 站点数下限:低于此退回绝对判据
     double yellowMinPct = 32.0;   // 错色像素占 ROI 的百分比
-    double whiteMinPct  = 0.5;    // 白色够不够,不够就别判极性
+    // ⚠ polarityRatio / whiteMinPct 已删(2026-10-20)。
+    //   它们是**旧 polarity 判据**的旋钮:白丝印质心横向位置 + 白色占比下限。
+    //   那个判据量的是"ROI 里所有白丝印的质心",而极性条只是其中一小条,
+    //   旁边还有丝印外框、符号线、十字线在抢 —— 实测连"没极性条"的电容
+    //   质心都正好 50.0%。新判据腐蚀出**极性条本身**再定侧,
+    //   不再需要这两个旋钮。
+    //   留着它们 = 界面上摆两个**调了不生效**的旋钮,骗人。
+    //   "应该在哪一侧"改由配方的 polarity_side 给(见 RecipeSite)。
     double padMinPct    = 0.46;   // 焊盘噪声门槛(占 ROI 面积)
     double padDropPct   = 33.0;   // 最小焊盘比中位数低多少算焊少
     // --- ROI 宽度 % ---
-    double polarityRatio = 60.0;  // 极性条质心横向位置,偏右为反
     double bridgeMinPct  = 60.0;   // 最长金段占 ROI 宽度
     double shiftXPct     = 8.0;    // 质心横向偏移容差
     double shiftYPct     = 10.0;   // 质心纵向偏移容差

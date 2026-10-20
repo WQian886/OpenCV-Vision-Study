@@ -151,6 +151,12 @@ def export_demo():
     而且崩了还可能悄悄少一行。
     """
     import gen_pcb_dataset as D
+    # 跑一遍 baseline,把"每个 kind 的极性条画在哪一侧"登记进 D.POLARITY_SIDE。
+    # 和 export_complex 一样 —— **让生成器自己说**,不在这个脚本里抄一张表。
+    # build_baseline() 只返回 Image,不写文件,调用它没有副作用。
+    D.build_baseline()
+    side_of = dict(D.POLARITY_SIDE)
+
     sites = []
     for label, kind, cx, cy, _pad_dx, _pad_dy, bw, bh in D.SITES:
         # demo 板是刻意造来测这六条规则的,规则集就是当年那六条
@@ -161,6 +167,7 @@ def export_demo():
         sites.append({
             "label": label, "kind": kind, "cx": cx, "cy": cy,
             "body_w": bw, "body_h": bh, "checks": checks,
+            "polarity_side": side_of.get((cx, cy), ""),
         })
     return {
         "name": "demo",
@@ -172,6 +179,10 @@ def export_demo():
 
 def export_complex(kind, builder, title):
     _, layout = builder()
+    # builder 跑完,POLARITY_SIDE 里是**这块板**登记的 kind -> 侧。
+    # 每块板建 baseline 时会先 clear(),所以不会串味。
+    side_of = dict(G.POLARITY_SIDE)
+
     sites = []
     for label, k, cx, cy in layout:
         if k not in BODY:
@@ -180,11 +191,21 @@ def export_complex(kind, builder, title):
                 "本体的宽高从哪来?" % (k, label)
             )
         bw, bh = BODY[k]
+        checks = list(CHECKS.get(k, []))
+        side = side_of.get((cx, cy), "")
+        # ⚠ **没有极性条的封装不配 polarity 检查**。
+        #   陶瓷电容没有极性标记,给它配了 polarity,规则每次都跑、
+        #   每次都"读不到极性条" —— 报告里全是"没查"的噪音,
+        #   把真正该看的"没查"淹掉。
+        #   有没有极性条,生成器登记了才知道。
+        if "polarity" in checks and not side:
+            checks.remove("polarity")
         sites.append({
             "label": label, "kind": k, "cx": cx, "cy": cy,
             "body_w": bw, "body_h": bh,
-            "checks": CHECKS.get(k, []),
+            "checks": checks,
             "shift_tol_pct": SHIFT_TOL_PCT.get(k),
+            "polarity_side": side,
         })
     return {
         "name": kind,

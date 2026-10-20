@@ -47,8 +47,11 @@ namespace w7 {
 // 括号里是"正常板实测值 ↔ 对应缺陷图实测值",新默认落在两者的几何中点,
 // 两边都留最大余量。实测来自 %TEMP%\w7probe\pcb_calib.cpp 的标定报告。
 //
-//   polarity_ratio 60  正常 16.7% ↔ 缺陷 82.2%(这条本来就是比例,语义没变,
-//                             所以名字也不变 —— 改了才没必要)
+// ⚠ 2026-10-20:极性这条**不再是阈值判据**,所以没有旋钮了。
+//   原来有 polarity_ratio(白丝印质心横向位置)和 white_min_pct(白色占比下限),
+//   两个都删了 —— 留着就是界面上摆两个**调了不生效**的旋钮。
+//   新判据:腐蚀出**极性条本身** → 定它在左还是在右 → 和配方的
+//   polarity_side 比。"应该在哪一侧"是板的设计决定的,由配方给,不是阈值。
 QJsonObject PcbDefectJudge::defaultParams() const {
     QJsonObject p;
     // --- ROI 面积 % ---
@@ -150,7 +153,6 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     //   本项目的老毛病,只不过这次是**上限**太低而不是下限太高。
     p["yellow_min_pct"]  = 32.0;
     // C1 白色像素占 ROI 4.17%;这是"白色够不够,不够就别判极性"的门槛。
-    p["white_min_pct"]   = 0.5;
     // U1 焊盘噪声门槛 —— **这一条我错过两次,都是因为只量了 1x**。
     //
     // 第一次:按"正常焊盘占 0.80%"想当然取 0.2%,噪声斑(0.38%)被放进来了,
@@ -219,7 +221,6 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     p["pad_drop_pct"]    = 33.0;
 
     // --- ROI 宽度 % ---
-    p["polarity_ratio"]  = 60.0;  // 见上
     // R1 最长金段占 ROI 宽度。原来只按 demo 一张图定:正常 15.83 ↔
     // 焊桥 100,几何中点 ~40。四块板全部接入后必须重算(2026-10-10):
     //
@@ -428,8 +429,6 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     // 都报错色** —— 实测三块好板各报 3/8/4 个 wrong。
     // 这个数是 demo 板一张图上量出来的,换板型就整片失效(老毛病)。
     const double yellowMinPct = params.value("yellow_min_pct").toDouble(32.0);
-    const double polarityRatio= params.value("polarity_ratio").toDouble(60.0);
-    const double whiteMinPct  = params.value("white_min_pct").toDouble(0.5);
     // ⚠ 这个 60 是上面 defaultParams 里那份的第二份副本(老毛病:同一个数
     //   在一个文件里抄多处,改一处忘一处,界面和实际跑的就会不一样)。
     //   改的时候两处一起改。
@@ -495,6 +494,15 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
             s.hasShiftTol  = true;
             s.shiftTolPct  = c.value("shift_tol_pct").toDouble();
         }
+        // 极性条应该在哪一侧。上游(pcb_inspect)传下来,这里原样带走。
+        //
+        // ⚠ 漏了这一句,后果不是"少报一个缺陷",是**整条 polarity 规则
+        //   变成"没查"**:core 那边拿不到基准就只能跳过,跳过的条目
+        //   混在报告里没人看,好板照样 PASS —— 而极性反的废板也 PASS。
+        //   这是"字段存在 ≠ 字段被验证"的又一次:W7 的回归测试红了
+        //   才发现,核心和 W6 一直是对的,坏的是这一跳。
+        if (c.contains("polarity_side"))
+            s.polaritySide = c.value("polarity_side").toString().toStdString();
         if (c.contains("body_pct")) {
             s.hasBodyPct = true;
             s.bodyPct    = c.value("body_pct").toDouble();
@@ -513,8 +521,6 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     jp.bodyRatioMin = bodyRatioMin;
     jp.bodyMinSites = bodyMinSites;
     jp.yellowMinPct = yellowMinPct;
-    jp.polarityRatio= polarityRatio;
-    jp.whiteMinPct  = whiteMinPct;
     jp.padMinPct    = padMinPct;
     jp.padDropPct   = padDropPct;
     jp.bridgeMinPct = bridgeMinPct;
@@ -683,8 +689,6 @@ void PcbDefectJudgeForm::buildUI() {
     m_bodyMinSites->setRange(1, 999);
     m_bodyMinSites->setValue(static_cast<int>(dflt("body_min_sites", 4)));
     m_yellowMinPct = mk(dflt("yellow_min_pct", 32.0),  2);
-    m_polarityR    = mk(dflt("polarity_ratio", 60.0), 2);
-    m_whiteMinPct  = mk(dflt("white_min_pct",  0.5),   2);
     m_bridgeMinPct = mk(dflt("bridge_min_pct", 60.0),  2);
     m_padMinPct    = mk(0.46,  2);
     m_padDropPct   = mk(33.0,  2);
@@ -708,8 +712,6 @@ void PcbDefectJudgeForm::buildUI() {
     m_layout->addRow(tr("缺件(彩色本体):占同板中位数下限"), m_bodyRatioMin);
     m_layout->addRow(tr("缺件:用比值所需最少站点数"), m_bodyMinSites);
     m_layout->addRow(tr("错件:浅黄占 ROI 下限 %"),     m_yellowMinPct);
-    m_layout->addRow(tr("极性:白条质心 占 ROI 宽 %"), m_polarityR);
-    m_layout->addRow(tr("极性:白色像素占 ROI 下限 %"), m_whiteMinPct);
     m_layout->addRow(tr("焊桥:最长金段占 ROI 宽 %"),   m_bridgeMinPct);
     m_layout->addRow(tr("焊少:焊盘噪声门槛 占 ROI %"), m_padMinPct);
     m_layout->addRow(tr("焊少:比中位数低 %"),          m_padDropPct);
@@ -747,8 +749,6 @@ void PcbDefectJudgeForm::setParams(const QJsonObject& params) {
     m_bodyRatioMin->setValue(params.value("body_ratio_min").toDouble(d.value("body_ratio_min").toDouble()));
     m_bodyMinSites->setValue(params.value("body_min_sites").toInt(d.value("body_min_sites").toInt()));
     m_yellowMinPct->setValue(params.value("yellow_min_pct").toDouble(d.value("yellow_min_pct").toDouble()));
-    m_polarityR->setValue(params.value("polarity_ratio").toDouble(d.value("polarity_ratio").toDouble()));
-    m_whiteMinPct->setValue(params.value("white_min_pct").toDouble(d.value("white_min_pct").toDouble()));
     m_bridgeMinPct->setValue(params.value("bridge_min_pct").toDouble(d.value("bridge_min_pct").toDouble()));
     m_padMinPct->setValue(params.value("pad_min_pct").toDouble(d.value("pad_min_pct").toDouble()));
     m_padDropPct->setValue(params.value("pad_drop_pct").toDouble(d.value("pad_drop_pct").toDouble()));
@@ -777,8 +777,6 @@ QJsonObject PcbDefectJudgeForm::collect() const {
     p["body_ratio_min"]  = m_bodyRatioMin->value();
     p["body_min_sites"]  = m_bodyMinSites->value();
     p["yellow_min_pct"]  = m_yellowMinPct->value();
-    p["polarity_ratio"]  = m_polarityR->value();
-    p["white_min_pct"]   = m_whiteMinPct->value();
     p["bridge_min_pct"]  = m_bridgeMinPct->value();
     p["pad_min_pct"]     = m_padMinPct->value();
     p["pad_drop_pct"]    = m_padDropPct->value();

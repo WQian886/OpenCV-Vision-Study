@@ -98,6 +98,27 @@ def silk(d, text, cx, cy, color=WHITE, font=FONT_S):
 # 抄第二份的账这个项目已经吃过好几次(kOffColorMul、EXPECTS、lo[0] 守卫)。
 _BODIES = []
 
+# ============================================================
+# 极性条画在哪一侧 —— 由画它的那一行代码自己登记
+#
+# 为什么要登记,而不是在导出脚本里写一张表:
+# 导出脚本里已经有一张 BODY 表(本体宽高),它自己的注释写着
+# "**这是一份会漂的副本**"。再加一张"极性侧"表就是第二份同类表 ——
+# 而"极性条在哪边"是**画它的那一行**才知道的事,别处猜就是猜。
+#
+# 登记的键是 **(cx, cy)**,不是 kind ——
+# 因为**同一个 kind 里有的有极性条、有的没有**:
+# power 板的 C3/C4/C5 是有极性条的贴片电容,C6/C7 是没有极性条的
+# 陶瓷电容,两者 kind 都是 CAP_SMALL。按 kind 登记会把"有"传染给"没有",
+# 于是报告里每个陶瓷电容都"查了极性、读不到标记"。
+#
+# 按位置登记和本文件里 _BODIES / _hidden() 是同一个路子:
+# 位置就是实例的身份。
+#
+# 值: "left" / "right" —— 相对元件本体,不是相对图。
+# ============================================================
+POLARITY_SIDE = {}
+
 
 def opaque(cx, cy, w, h):
     """登记一个不透明本体矩形(居中 w×h)。画本体时调用。"""
@@ -185,6 +206,7 @@ def draw_cap_small(d, cx, cy, w=36, h=18, color=YELLOW, polarity=False):
     d.rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=color, outline=BLACK)
     if polarity:
         d.rectangle([cx-w//2+2, cy-h//2+2, cx-w//2+6, cy+h//2-2], fill=WHITE)
+        POLARITY_SIDE[(cx, cy)] = "left"   # 极性条在本体左侧
     opaque(cx, cy, w, h)
 
 
@@ -200,6 +222,7 @@ def draw_cap_big(d, cx, cy, r=20, polarity=True):
     d.line([(cx, cy-r+4),(cx, cy+r-4)], fill=(180,180,180), width=1)
     if polarity:
         d.rectangle([cx-r+3, cy-3, cx-r+7, cy+3], fill=WHITE)  # 极性条
+        POLARITY_SIDE[(cx, cy)] = "left"      # 极性条在本体左侧
 
 
 def draw_inductor(d, cx, cy, w=50, h=24):
@@ -222,6 +245,7 @@ def draw_diode(d, cx, cy, w=40, h=14):
     d.rectangle([cx-w//2, cy-h//2, cx+w//2, cy+h//2], fill=BLACK)
     # 极性条(阴极侧)
     d.rectangle([cx+2, cy-h//2+2, cx+6, cy+h//2-2], fill=WHITE)
+    POLARITY_SIDE[(cx, cy)] = "right"          # 二极管的极性条在本体右侧
     # 二极管符号
     d.line([(cx-12, cy),(cx+12, cy)], fill=WHITE, width=1)
     opaque(cx, cy, w, h)
@@ -347,6 +371,7 @@ def draw_qr(d, img, data, size=110, pos=None):
 # ============================================================
 def build_power_baseline():
     _BODIES.clear()
+    POLARITY_SIDE.clear()   # 这块板用哪些 kind,重新登记
     img = Image.new("RGB", (W, H), GREEN_PCB)
     draw_pcb_base(img, "Power Supply v1 — LM2596 Buck")
     d = ImageDraw.Draw(img)
@@ -445,6 +470,7 @@ def defect_power_missing(base, layout):
 # ============================================================
 def build_mcu_baseline():
     _BODIES.clear()
+    POLARITY_SIDE.clear()   # 这块板用哪些 kind,重新登记
     img = Image.new("RGB", (W, H), GREEN_PCB)
     draw_pcb_base(img, "MCU Core v1 — STM32F103 QFP-64")
     d = ImageDraw.Draw(img)
@@ -544,6 +570,7 @@ def defect_mcu_bridge(base, layout):
 # ============================================================
 def build_signal_baseline():
     _BODIES.clear()
+    POLARITY_SIDE.clear()   # 这块板用哪些 kind,重新登记
     img = Image.new("RGB", (W, H), GREEN_PCB)
     draw_pcb_base(img, "Signal Chain v1 — Dual Op-Amp Filter")
     d = ImageDraw.Draw(img)

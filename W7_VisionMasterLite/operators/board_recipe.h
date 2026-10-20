@@ -73,6 +73,15 @@ struct RecipeSite {
     QStringList checks;      // 该元件身上要跑的规则
     double shiftTolPct = 0;  // shifted 容差(% ROI 宽/高);<=0 表示用算子默认
     bool hasShiftTol() const { return shiftTolPct > 0; }
+    // 极性条应该在哪一侧("left"/"right",相对**元件本体**)。
+    //
+    // "反装"= 极性条挪到了另一边,而**哪边是对**取决于板的设计
+    // (电容负极标左、二极管阴极标右)。判据不猜 —— 猜错就是把好板
+    // 判成反装,那是静默误报,比漏检更难查。所以由配方给。
+    //
+    // 空串 = 这个元件没有极性条(陶瓷电容) -> polarity 规则不判定,
+    // 但会在报告里报"没查",不能装作查过了。
+    QString polaritySide;
 };
 
 struct BoardRecipe {

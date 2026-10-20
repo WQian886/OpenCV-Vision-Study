@@ -58,6 +58,18 @@ RED         = (40, 40, 220)    # 极性标记
 YELLOW      = (40, 200, 230)   # 电容黄
 BLUE_DARK   = (180, 80, 30)    # IC 蓝（棕褐色也行）
 
+# ============================================================
+# 极性条画在哪一侧 —— 由画它的那一行代码自己登记
+#
+# 和 gen_complex_pcb.py 里的同名表是同一个道理:
+# "极性条在哪边"只有画它的那一行知道,别处写就是猜 ——
+# 而猜错的后果是**判据把好板判成反装**(静默误报)。
+#
+# 键是 (cx, cy):位置就是实例的身份(同一个 kind 里也可能有带条/不带条的)。
+# 值 "left"/"right" 相对**元件本体**,不是相对图。
+# ============================================================
+POLARITY_SIDE = {}
+
 # 字体（Pillow 自带 bitmap 字体,避免 Windows 字体缺失）
 def _font(size):
     try:
@@ -174,6 +186,7 @@ def draw_capacitor(d, cx, cy, w, h, color=YELLOW, polarity_dot=False):
     d.rectangle([x0, y0, x1, y1], fill=color, outline=(5, 5, 5))
     # 极性条（一侧白条,代表负极）
     d.rectangle([x0+2, y0+2, x0+8, y1-2], fill=WHITE)
+    POLARITY_SIDE[(cx, cy)] = "left"   # 极性条在本体左侧
     if polarity_dot:
         d.ellipse([x1-6, y0+2, x1-2, y0+6], fill=RED)
 

@@ -319,6 +319,19 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
                 checks.append(QString::fromUtf8(c.c_str()));
             }
             cj["checks"] = checks;
+            // 极性条应该在哪一侧("left"/"right")。**必须往下游传**。
+            //
+            // ⚠ 2026-10-20 真踩过:这个字段漏在这里,后果是
+            //   判定算子(从 components JSON 重建站点)拿不到基准 ->
+            //   整条 polarity 规则静悄悄地变成"没查"(skipped)。
+            //   界面上看不出区别:缺陷列表少了一条,报告还是 PASS,
+            //   好板和"没查极性"的坏板长得一模一样。
+            //   判据本身(core)一直是对的,坏的是这一跳的边界。
+            //
+            //   空串 = 这个元件没有极性条,那就**不发这个字段**
+            //   (不是发空串)—— 判定那边分得清"没写"和"写了但是空"。
+            if (!s.polaritySide.empty())
+                cj["polarity_side"] = QString::fromUtf8(s.polaritySide.c_str());
             // 偏移容差按封装给(配方里可省,省了用算子默认)。
             // 写死成一个数等于"所有元件一样灵":小电阻挪 20px 可能
             // 还没出框,QFP64 挪 20px 就是大事。

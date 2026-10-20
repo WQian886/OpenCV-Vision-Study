@@ -13,7 +13,8 @@
       "body_w": 32,
       "body_h": 30,
       "checks": [],
-      "shift_tol_pct": null
+      "shift_tol_pct": null,
+      "polarity_side": ""
     },
     {
       "label": "R1",
@@ -28,7 +29,8 @@
         "wrong",
         "bridge"
       ],
-      "shift_tol_pct": 15.0
+      "shift_tol_pct": 15.0,
+      "polarity_side": ""
     },
     {
       "label": "C1",
@@ -41,7 +43,8 @@
         "missing",
         "polarity"
       ],
-      "shift_tol_pct": 15.0
+      "shift_tol_pct": 15.0,
+      "polarity_side": "left"
     },
     {
       "label": "U1",
@@ -54,7 +57,8 @@
         "missing",
         "insufficient"
       ],
-      "shift_tol_pct": null
+      "shift_tol_pct": null,
+      "polarity_side": ""
     },
     {
       "label": "R2",
@@ -69,7 +73,8 @@
         "wrong",
         "bridge"
       ],
-      "shift_tol_pct": 15.0
+      "shift_tol_pct": 15.0,
+      "polarity_side": ""
     },
     {
       "label": "C2",
@@ -82,7 +87,8 @@
         "missing",
         "polarity"
       ],
-      "shift_tol_pct": 15.0
+      "shift_tol_pct": 15.0,
+      "polarity_side": "left"
     },
     {
       "label": "C3",
@@ -95,7 +101,8 @@
         "missing",
         "polarity"
       ],
-      "shift_tol_pct": 15.0
+      "shift_tol_pct": 15.0,
+      "polarity_side": "left"
     },
     {
       "label": "R3",
@@ -110,7 +117,8 @@
         "wrong",
         "bridge"
       ],
-      "shift_tol_pct": 15.0
+      "shift_tol_pct": 15.0,
+      "polarity_side": ""
     },
     {
       "label": "U2",
@@ -123,7 +131,8 @@
         "missing",
         "insufficient"
       ],
-      "shift_tol_pct": null
+      "shift_tol_pct": null,
+      "polarity_side": ""
     },
     {
       "label": "R4",
@@ -138,7 +147,8 @@
         "wrong",
         "bridge"
       ],
-      "shift_tol_pct": 15.0
+      "shift_tol_pct": 15.0,
+      "polarity_side": ""
     },
     {
       "label": "D1",
@@ -152,7 +162,8 @@
         "shifted",
         "polarity"
       ],
-      "shift_tol_pct": null
+      "shift_tol_pct": null,
+      "polarity_side": "right"
     },
     {
       "label": "D2",
@@ -166,7 +177,8 @@
         "shifted",
         "polarity"
       ],
-      "shift_tol_pct": null
+      "shift_tol_pct": null,
+      "polarity_side": "right"
     },
     {
       "label": "C4",
@@ -179,7 +191,8 @@
         "missing",
         "polarity"
       ],
-      "shift_tol_pct": 15.0
+      "shift_tol_pct": 15.0,
+      "polarity_side": "left"
     },
     {
       "label": "J2",
@@ -189,7 +202,8 @@
       "body_w": 32,
       "body_h": 30,
       "checks": [],
-      "shift_tol_pct": null
+      "shift_tol_pct": null,
+      "polarity_side": ""
     },
     {
       "label": "C5",
@@ -199,10 +213,10 @@
       "body_w": 36,
       "body_h": 18,
       "checks": [
-        "missing",
-        "polarity"
+        "missing"
       ],
-      "shift_tol_pct": 15.0
+      "shift_tol_pct": 15.0,
+      "polarity_side": ""
     },
     {
       "label": "C6",
@@ -212,10 +226,10 @@
       "body_w": 36,
       "body_h": 18,
       "checks": [
-        "missing",
-        "polarity"
+        "missing"
       ],
-      "shift_tol_pct": 15.0
+      "shift_tol_pct": 15.0,
+      "polarity_side": ""
     },
     {
       "label": "C7",
@@ -225,10 +239,10 @@
       "body_w": 36,
       "body_h": 18,
       "checks": [
-        "missing",
-        "polarity"
+        "missing"
       ],
-      "shift_tol_pct": 15.0
+      "shift_tol_pct": 15.0,
+      "polarity_side": ""
     },
     {
       "label": "C8",
@@ -238,10 +252,10 @@
       "body_w": 36,
       "body_h": 18,
       "checks": [
-        "missing",
-        "polarity"
+        "missing"
       ],
-      "shift_tol_pct": 15.0
+      "shift_tol_pct": 15.0,
+      "polarity_side": ""
     }
   ]
 }

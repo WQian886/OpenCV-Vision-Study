@@ -401,6 +401,76 @@ static void test_recipe_validation() {
         }
     }
 
+    // --- polarity_side 的校验 ---
+    //
+    // ⚠ 这一段是 2026-10-20 补的,补的原因是**变异验证发现的**:
+    //   判据里有"polarity_side 写错必须报错"这条守卫,但**没有任何断言**
+    //   钉它 —— 把那条守卫删掉,整套测试照样全绿。
+    //   一条没人验证的守卫,等于没有守卫。
+    //
+    // 为什么"写错"必须报错、不能当"没写"处理:
+    //   "没写" = 判不了极性 -> 报"没查",至少是诚实的;
+    //   写错   = 判据拿着一个看不懂的基准去比 -> 可能把**好板**判成反装。
+    //   后者是静默误报,比漏检更难查(漏检会被"没查"暴露出来)。
+    {
+        // --- 合法值必须真的落到字段上 ---
+        //
+        // 用普通字符串拼,不用 R"(...)" —— 原始字符串字面量的结束符是 )",
+        // 而这里要拼的 JSON 里恰好会出现 )",提前结束就测了个不存在的东西
+        // (断言恒真比没有还坏)。
+        struct Good { const char* side; };
+        const Good goods[] = {{"left"}, {"right"}, {""}};
+        for (const auto& g : goods) {
+            const std::string json =
+                std::string("{\"name\":\"t\",\"ref_w\":1000,\"ref_h\":700,\"sites\":[")
+                + "{\"label\":\"C1\",\"kind\":\"CAP_SMALL\",\"cx\":400,\"cy\":200,"
+                + "\"body_w\":70,\"body_h\":28,\"polarity_side\":\"" + g.side + "\"}]}";
+            BoardRecipe r;
+            std::string reason;
+            const bool ok = parseRecipeJson(json, &r, &reason);
+            check(ok, std::string("polarity_side=\"") + g.side + "\" 是合法值,必须能加载" +
+                       (ok ? "" : ("(" + reason + ")")));
+            if (ok) {
+                check(!r.sites.empty() && r.sites[0].polaritySide == g.side,
+                      std::string("polarity_side=\"") + g.side + "\" 必须落到字段上(实际 \"" +
+                      (r.sites.empty() ? std::string("(没站点)") : r.sites[0].polaritySide) + "\")");
+            }
+        }
+
+        // --- 非法值必须加载失败,而且要说清是哪一条 ---
+        //
+        // 报错消息要能直接定位到人:哪个站点、写的是什么值。
+        struct Bad { const char* json; const char* what; };
+        const Bad bads[] = {
+            {"{\"name\":\"t\",\"ref_w\":1000,\"ref_h\":700,\"sites\":["
+             "{\"label\":\"C1\",\"kind\":\"CAP_SMALL\",\"cx\":400,\"cy\":200,"
+             "\"body_w\":70,\"body_h\":28,\"polarity_side\":\"up\"}]}",
+             "polarity_side=\"up\""},
+            {"{\"name\":\"t\",\"ref_w\":1000,\"ref_h\":700,\"sites\":["
+             "{\"label\":\"C1\",\"kind\":\"CAP_SMALL\",\"cx\":400,\"cy\":200,"
+             "\"body_w\":70,\"body_h\":28,\"polarity_side\":\"Left\"}]}",
+             "polarity_side=\"Left\"(大小写不对)"},
+            {"{\"name\":\"t\",\"ref_w\":1000,\"ref_h\":700,\"sites\":["
+             "{\"label\":\"C1\",\"kind\":\"CAP_SMALL\",\"cx\":400,\"cy\":200,"
+             "\"body_w\":70,\"body_h\":28,\"polarity_side\":123}]}",
+             "polarity_side 是数字(不是字符串)"},
+        };
+        for (const auto& b : bads) {
+            BoardRecipe r;
+            std::string reason;
+            const bool ok = parseRecipeJson(b.json, &r, &reason);
+            check(!ok, std::string("必须失败:") + b.what);
+            if (!ok) {
+                check(reason.find("polarity_side") != std::string::npos,
+                      std::string("报错要点名字段:") + b.what +
+                      "(实际 \"" + reason + "\")");
+                check(reason.find("C1") != std::string::npos,
+                      std::string("报错要点名站点:") + b.what +
+                      "(实际 \"" + reason + "\")");
+            }
+        }
+    }
+
     // --- 文件读不到 ---
     {
         BoardRecipe r;
@@ -599,19 +669,34 @@ static void test_end_to_end() {
             }
 
             // 已知漏检:原因见 common/pcb_core/pcb_core.cpp 里对应规则的注释
+            //
+            // ⚠ 这张表是**当前真实行为**的登记,不是期望行为的清单。
+            //   哪天判据重做完了,把条目删掉,断言会立刻转红,
+            //   逼你补上"必须命中"那条 —— 否则就是改好了却没人知道。
+            //
+            // 📌 2026-10-20:signal_polarity.png 从这张表里**划掉了**。
+            //   旧判据量的是"ROI 里所有白丝印的质心",而极性条只是其中
+            //   4~7px 宽的一小条,旁边还有丝印外框、二极管符号线在抢 ——
+            //   实测"根本没有极性条"的电容,质心也正好 50.0%,单边阈值
+            //   根本没有余量。现在改成:腐蚀出极性条本身 -> 定侧 -> 和
+            //   配方给的 polarity_side 比。这张图现在必须命中 polarity。
             struct KnownMiss { const char* file; const char* why; };
             const KnownMiss misses[] = {
-                {"signal_polarity.png",
-                 "极性判据是单边的(只报质心偏右);这张图反装后极性条挪到左边,"
-                 "单边阈值根本不看那边。改成双边实测无可用容差区间。"},
                 {"power_short.png",
                  "短路判据找的是蓝紫**圆环**,而 power 这张图画的是一条**金条** —— "
                  "面积 0.1992% 撞出上界 0.08%,宽 41.4% 对角线也撞出上界 8%。"
                  "不是阈值没调好,是缺陷定义与判据不匹配。"},
             };
-            auto isKnownMiss = [&](const std::string& f) {
-                for (const auto& m : misses) if (f == m.file) return true;
-                return false;
+            // 命中已知漏检时把**原因一起带出来**。
+            //
+            // ⚠ why 这个字段不能只摆着不用:
+            //   一个从不被人读的"原因"就是**会骗人的注释** ——
+            //   判据改好了它不会变,半年后没人知道该不该删这条。
+            //   把它塞进断言消息,谁看到红就知道当时为什么漏、现在该不该修。
+            //   返回空串 = 不是已知漏检。
+            auto knownMissWhy = [&](const std::string& f) {
+                for (const auto& m : misses) if (f == m.file) return std::string(m.why);
+                return std::string();
             };
 
             for (size_t r = 1; r < rows.size(); ++r) {
@@ -645,11 +730,18 @@ static void test_end_to_end() {
                                            : (jr.defects.empty() ? "PASS" : "FAIL");
                 const std::string who = kind + "/" + file;
 
-                if (isKnownMiss(file)) {
+                const std::string missWhy = knownMissWhy(file);
+                if (!missWhy.empty()) {
                     // 记的是**当前真实行为**,不是期望行为。
+                    //
+                    // 这条断言同时是一张**过期检测器**:
+                    // 一旦判据修好了(这张图开始 FAIL),这条会立刻转红,
+                    // 提醒你把它从 misses 里删掉,换成上面的"必须命中"那条。
+                    // 不这么做的话,修好了也没人知道,漏检就变成了第二张好板。
                     check(gotResult == "PASS",
                           who + " 是【已知漏检】,当前表现为 PASS(实际 " +
-                          gotResult + ")");
+                          gotResult + ")。当初漏的原因:" + missWhy +
+                          " —— 如果判据修好了,这条会转红,把它从 misses 里删掉");
                     continue;
                 }
                 check(gotResult == (wantFail ? "FAIL" : "PASS"),

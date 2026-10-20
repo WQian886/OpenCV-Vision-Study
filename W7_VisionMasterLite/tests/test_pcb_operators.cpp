@@ -1290,14 +1290,16 @@ static void test_board_switch_defect_boards() {
     beginCase("三块板的 6 张废板:能抓的必须抓,抓不到的必须写明");
     // 期望值来自 W6 的真值表 complex_manifest.csv,不另抄一份。
     //
-    // knownMiss=true 的两条是**已知的漏检**(废板被判成合格)。
+    // knownMiss=true 的是**已知的漏检**(废板被判成合格)。
     // 写在这里是为了让它**可见** —— 漏检在界面上跟真合格一模一样,
     // 光看 result=="PASS" 分不出"查过了没问题"和"根本没看见"。
     // 各条为什么调阈值解决不了,实测数据记在 pcb_defect_judge.cpp
     // 的 polarity / short 两段,不在这儿重复。
     //
-    // ⚠ 这两条记的是**当前真实行为**,不是"期望行为"。
+    // ⚠ 这些记的是**当前真实行为**,不是"期望行为"。
     //   哪天判据重做完了,把它改成 caught,并补上命中类型的断言。
+    //   (2026-10-20 的 polarity 就是这么转正的:knownMiss 那条断言
+    //    自己先红了,提醒我把条目撤掉 —— 这张表是过期检测器。)
     struct Bad {
         const char* recipe;  const char* file;
         bool knownMiss;                          // true = 已知漏检,期望 PASS
@@ -1323,10 +1325,16 @@ static void test_board_switch_defect_boards() {
         {"mcu.json",    "mcu_wrong.png",       false, "wrong",   "R2", ""},
         {"mcu.json",    "mcu_bridge.png",      false, "bridge",  "Y1", ""},
         {"signal.json", "signal_shifted.png",  false, "shifted", "R3", ""},
-        {"signal.json", "signal_polarity.png", true,  "polarity", "",
-         "polarity 判据是单边的(只在质心偏右时报),"
-         "这张图把极性条挪到**左侧**:51.95% -> 29.87%,"
-         "而好板 power D1 在 41.84% —— 双边化所需的容差区间(8.16, 20.13)无解"},
+        // 📌 2026-10-20:这条原来是 knownMiss(极性判据是单边的,抓不到
+        //   挪到左边的反装),现在**判据重做之后能抓到了**,改成 caught。
+        //   改动留下的痕迹:knownMiss 那条断言自己先红了(期望 PASS,实际 FAIL),
+        //   这正是那张表该有的作用 —— 判据修好了它就提醒你把条目撤掉。
+        //
+        //   新判据:腐蚀出极性条本身 -> 定它在左还是在右 -> 和配方的
+        //   polarity_side 比。"应该在哪一侧"由生成器登记、配方带下来,
+        //   判据不猜(猜错就把好板判成反装)。
+        //   site 钉 D1:这张图反装的是 D1 二极管,点名到它才算抓到。
+        {"signal.json", "signal_polarity.png", false, "polarity", "D1", ""},
     };
     for (const auto& b : bads) {
         const QString dir = kComplexDir;

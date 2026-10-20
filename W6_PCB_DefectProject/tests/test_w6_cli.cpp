@@ -467,6 +467,25 @@ static void test_csv_escape() {
 // (比如错色 + 焊桥),**两种都要写出来** ——
 // 只写一种,看报告的人会以为只有那一种缺陷。
 // ============================================================
+
+// 手工造一个站点。
+//
+// ⚠ 用**具名字段赋值**,不用位置聚合初始化 `{...}`:
+//   InspectSite 有十几个字段,位置初始化要求**顺序和个数全对**。
+//   结构体中间插一个字段,所有位置初始化整体错位 ——
+//   错到 bool 塞进 bool 还能编过,行为却悄悄变了。
+//   (2026-10-20 加 polaritySide 时真踩了:插入位置不对,
+//    MSVC 直接报"无法把 bool 转成 std::string",当场暴露;
+//    但那只是运气好 —— 换成两个同类型字段就会静默错位。)
+static pcbcore::InspectSite makeSite(const std::string& label,
+                                     const std::string& kind) {
+    pcbcore::InspectSite s;
+    s.label = label;
+    s.kind = kind;
+    s.checksExplicit = true;   // 配方说了算(哪怕 checks 是空的)
+    return s;
+}
+
 static void test_rows_from_board() {
     beginCase("摊行:一个元件一行,多个缺陷全写出来");
 
@@ -475,9 +494,9 @@ static void test_rows_from_board() {
         w6::BoardResult br;
         br.recipeName = "demo";
         br.pass = false;
-        br.sites.push_back({"R1", "RES", cv::Rect(), {}, true, false, 0.0, false, 0.0, 0.0});
-        br.sites.push_back({"C1", "CAP_SMALL", cv::Rect(), {}, true, false, 0.0, false, 0.0, 0.0});
-        br.sites.push_back({"U1", "QFP64", cv::Rect(), {}, true, false, 0.0, false, 0.0, 0.0});
+        br.sites.push_back(makeSite("R1", "RES"));
+        br.sites.push_back(makeSite("C1", "CAP_SMALL"));
+        br.sites.push_back(makeSite("U1", "QFP64"));
         br.defects.push_back({"R1", "wrong", "本体错色"});
         br.defects.push_back({"R1", "bridge", "焊盘间金条连片"});
         br.defects.push_back({"", "short", "全图短路"});   // 全局缺陷
@@ -527,7 +546,7 @@ static void test_rows_from_board() {
         w6::BoardResult br;
         br.recipeName = "demo";
         br.pass = true;
-        br.sites.push_back({"R1", "RES", cv::Rect(), {}, true, false, 0.0, false, 0.0, 0.0});
+        br.sites.push_back(makeSite("R1", "RES"));
         const auto rows = w6::rowsFromBoard("ok.png", br, "", "");
         check(rows.size() == 1, "合格板 1 个元件 = 1 行");
         if (!rows.empty()) {

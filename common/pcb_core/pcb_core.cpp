@@ -340,6 +340,31 @@ bool parseRecipeJson(const std::string& text, BoardRecipe* out, std::string* rea
             }
         }
 
+        // polarity_side 可选:"left"/"right",相对元件本体。
+        //
+        // ⚠ 写错的值必须**报错**,不能当"没写"处理:
+        //   "没写" = 判不了极性(会报"没查",算诚实);
+        //   写错   = 判据拿着一个看不懂的基准去比,可能把好板判成反装。
+        //   后者是**静默误报**,比漏检更难查。
+        if (const mini_json::Value* pv = sv1.find("polarity_side")) {
+            if (!pv->isString()) {
+                if (reason) {
+                    *reason = at + "(" + s.label + ") 的 polarity_side 不是字符串(实际是" +
+                              typeName(*pv) + ")";
+                }
+                return false;
+            }
+            const std::string side = pv->asString();
+            if (!side.empty() && side != "left" && side != "right") {
+                if (reason) {
+                    *reason = at + "(" + s.label + ") 的 polarity_side=\"" + side +
+                              "\" 不认(只能是 left / right,或空串表示没有极性条)";
+                }
+                return false;
+            }
+            s.polaritySide = side;
+        }
+
         r.sites.push_back(s);
     }
 
@@ -431,6 +456,7 @@ InspectResult inspect(const cv::Mat& img, const BoardRecipe& recipe,
         site.checksExplicit = true;   // 配方说了算
         site.hasShiftTol = s.hasShiftTol();
         site.shiftTolPct = s.shiftTolPct;
+        site.polaritySide = s.polaritySide;
 
         // ROI 内的金像素占比。与下游所有阈值同一量纲。
         site.goldPct = 100.0 * cv::countNonZero(res.goldMask(roi))
@@ -653,39 +679,96 @@ JudgeResult judge(const cv::Mat& img,
             }
         }
 
-        // ---------- polarity: 白色极性条偏右 ----------
+        // ---------- polarity: 极性条在不在该在的那一侧 ----------
         //
-        // ⚠⚠ 这条判据**只能抓到一半的极性反**,另一半在结构上抓不到。
-        //   判据是**单边**的(只在 cxPct > polarityRatio 时报),而"反装"
-        //   是把极性条挪到**另一边** —— 挪到右边撞上单边阈值(抓得到),
-        //   挪到左边单边阈值根本不看那边(抓不到)。
-        //   直觉上应该改成双边,实测**没有可用的容差**:
-        //   不误报 power D1(好板 41.84) 要容差 < 8.16,
-        //   抓到 signal D1(废板 29.87) 要容差 > 20.13 —— 8.16 < T < 20.13 无解。
+        // ⚠⚠ 原来的判据(白丝印质心横向位置 > 60%)**只能抓到一半的极性反**,
+        //   而且它漏掉的那一半是**结构性的**,调阈值调不出来:
+        //
+        //   · 判据是**单边**的(只在 cxPct > polarityRatio 时报),
+        //     而"反装"是把极性条挪到**另一边** ——
+        //     挪到右边撞上单边阈值(抓得到),挪到左边根本不看那边(抓不到)。
+        //   · 直觉上改成双边,实测**没有可用的容差**:
+        //     不误报 power D1(好板 41.84) 要容差 < 8.16,
+        //     抓到 signal D1(废板 29.87) 要容差 > 20.13 —— 8.16 < T < 20.13 无解。
+        //
+        //   根因**不是阈值,是量错了东西**:
+        //   原来量的是"ROI 里所有白丝印的质心",而极性条只是其中一小条
+        //   (4~7px 宽)。旁边还有丝印外框(1px 细线)、二极管符号线、
+        //   电解电容的十字线 —— 全是白的,全在抢这个质心。
+        //   实测:signal 板上**没有极性条**的电容,质心正好 50.0%
+        //   (丝印外框对称,把质心拽回中间)。
+        //
+        // 现在量的是**极性条本身**:
+        //   ① 白丝印掩膜
+        //   ② **腐蚀**掉 1px 的细线(丝印外框/符号线/十字线全灭,
+        //      4~7px 宽的极性条完整留下)—— W3 形态学的老本行
+        //   ③ 连通域取最大块 = 极性条
+        //   ④ 它完全落在 ROI 中线的哪一侧
+        //
+        // "应该在哪一侧"由**配方**给(site.polaritySide):
+        // 哪边是对的取决于板的设计(电容负极标左、二极管阴极标右),
+        // 生成器知道,配方带下来。**判据不猜** ——
+        // 猜错就是把好板判成反装,那是静默误报,比漏检更难查。
         if (hasRule(rule::kPolarity)) {
-            const cv::Mat whiteMask = maskBy(img(roi), [&](const cv::Vec3b& p) {
-                return pcbcolor::isWhiteSilk(p, boardBase, params.brightVMul,
-                                             params.neutralMax);
-            });
-            cv::Moments m = cv::moments(whiteMask, true);
-            const double whitePct = 100.0 * m.m00 / roiArea;
-            // 白色占比不够时这条规则**不判定** —— 这是第三种状态:
-            // 既没报缺陷,也没说"查过了"。必须记一笔,免得看起来像合格。
-            if (whitePct >= params.whiteMinPct) {
-                const double cx = m.m00 > 0 ? m.m10 / m.m00 : 0.0;
-                const double cxPct = roi.width > 0 ? 100.0 * cx / roi.width : 0.0;
-                res.metrics.push_back({label, rule::kPolarity, cxPct,
-                                       params.polarityRatio, "% ROI 宽(偏右为反)"});
-                if (m.m00 > 0 && cxPct > params.polarityRatio) {
-                    res.defects.push_back({label, "polarity",
-                        "极性条质心 x=" + fmtInt(static_cast<long long>(cx)) + " > " +
-                        fmt(params.polarityRatio, 0) + "% 宽度(极性反)"});
-                    cv::rectangle(res.marked, roi, cv::Scalar(255, 0, 255), 3);
-                }
-            } else {
+            if (s.polaritySide.empty()) {
+                // 配方没写期望侧 -> 不知道该往哪边比 -> 不判定。
+                // 这跟"查过了没问题"是两回事,必须报出来。
                 res.skipped.push_back({label, rule::kPolarity,
-                    "白色丝印只占 " + fmt(whitePct, 2) + "% < 门槛 " +
-                    fmt(params.whiteMinPct, 2) + "%,读不到极性条,本规则不判定"});
+                    "配方没写这个元件的极性条应该在哪一侧,没基准可比,本规则不判定"});
+            } else {
+                // ① 白丝印掩膜
+                const cv::Mat whiteMask = maskBy(img(roi), [&](const cv::Vec3b& p) {
+                    return pcbcolor::isWhiteSilk(p, boardBase, params.brightVMul,
+                                                 params.neutralMax);
+                });
+                // ② 腐蚀:1px 细线全灭,4~7px 的极性条留下
+                cv::Mat eroded;
+                cv::erode(whiteMask, eroded,
+                          cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
+                // ③ 连通域取最大块
+                cv::Mat plabels, pstats, pcentroids;
+                const int pn = cv::connectedComponentsWithStats(eroded, plabels, pstats,
+                                                               pcentroids);
+                int best = -1, bestArea = 0;
+                for (int i = 1; i < pn; ++i) {
+                    const int a = pstats.at<int>(i, cv::CC_STAT_AREA);
+                    if (a > bestArea) { bestArea = a; best = i; }
+                }
+                if (best < 0) {
+                    res.skipped.push_back({label, rule::kPolarity,
+                        "腐蚀掉丝印细线后 ROI 里没有实心白块 —— 读不到极性条,本规则不判定"});
+                } else {
+                    const int bl = pstats.at<int>(best, cv::CC_STAT_LEFT);
+                    const int bw = pstats.at<int>(best, cv::CC_STAT_WIDTH);
+                    const int bh = pstats.at<int>(best, cv::CC_STAT_HEIGHT);
+                    const int mid = roi.width / 2;
+                    // ④ 块必须**完全**落在中线一侧。
+                    //    跨中线说明位置说不清 -> 不猜(宁可不判,也不判错)。
+                    std::string got;
+                    if (bl + bw <= mid)      got = "left";
+                    else if (bl >= mid)       got = "right";
+                    if (got.empty()) {
+                        res.skipped.push_back({label, rule::kPolarity,
+                            "极性条横跨 ROI 中线,说不清在哪一侧,本规则不判定"});
+                    } else {
+                        // 读数 = 极性条中心相对 ROI 中线的**带符号**偏移。
+                        // 负=偏左,正=偏右。调阈值/看板上表现时用这个。
+                        const double centre = bl + bw / 2.0;
+                        const double offsetPct =
+                            roi.width > 0 ? 100.0 * (centre - mid) / roi.width : 0.0;
+                        res.metrics.push_back({label, rule::kPolarity, offsetPct, 0.0,
+                            std::string("% ROI 宽(带符号,负=偏左 正=偏右;期望在") +
+                            (s.polaritySide == "left" ? "左" : "右") + ")"});
+                        if (got != s.polaritySide) {
+                            res.defects.push_back({label, "polarity",
+                                std::string("极性条在") + (got == "left" ? "左" : "右") +
+                                "边,期望在" + (s.polaritySide == "left" ? "左" : "右") +
+                                "边(极性反;实测 " + fmtInt(bw) + "x" + fmtInt(bh) +
+                                " 实心块,中心相对中线 " + fmt(offsetPct, 1) + "%)"});
+                            cv::rectangle(res.marked, roi, cv::Scalar(255, 0, 255), 3);
+                        }
+                    }
+                }
             }
         }
 
