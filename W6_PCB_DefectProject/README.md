@@ -43,7 +43,7 @@ W6_PCB_DefectProject/
 ├── w6_cli.h                    # ← W6 的可测逻辑层（纯逻辑，不打印）
 ├── w6_cli.cpp                  #   查板型 / 找配方 / 跑一块板 / 跑一批板 / 摊 CSV 行
 ├── tests/
-│   └── test_w6_cli.cpp         # W6 CLI 层的回归测试（142 条断言）
+│   └── test_w6_cli.cpp         # W6 CLI 层的回归测试（163 条断言）
 ├── gen_pcb_dataset.py          # 用 Pillow 合成 baseline + 7 张缺陷图
 ├── gen_complex_pcb.py          # 三种复杂板（power / mcu / signal）
 ├── README.md                   # 本文件
@@ -66,7 +66,9 @@ W6_PCB_DefectProject/
 │   └── w6_inspect_marked.png   ← inspect 输出
 ├── out/                        # OCR 中间产物（**不放 images/**，否则会被当成待检板）
 ├── report/                     # CSV 报告输出
-└── ../common/pcb_core/         # ← 共享判定核心（W6/W7 共用）
+└── ../common/
+    ├── pcb_core/               # ← 共享判定核心（W6/W7 共用）
+    └── qr_ocr/                 # ← 共享 QR/OCR 核心（W5/W6/W7 共用）
 ```
 
 ## 🛠️ 构建（VS 方式，同 W5）
@@ -116,7 +118,7 @@ W6 不复制一份配方（复制就是抄副本），但构建时会把 `W7_Vis
 
 ## 🧪 跑测试
 
-W6 有 **2 个 ctest 套件、322 条断言**（2026-10-20 之前是 **0 个**）。
+W6 有 **3 个 ctest 套件、379 条断言**（2026-10-20 之前是 **0 个**）。
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W6_PCB_DefectProject
@@ -129,8 +131,9 @@ ctest --test-dir build -C Release --output-on-failure
 
 | 套件 | 断言 | 测什么 |
 |---|---|---|
-| `pcb_core` | 163 | 共享判定核心：JSON 解析、配方校验、拒绝判定、端到端对照真值表 |
-| `w6_cli` | 142 | W6 自己的 CLI 行为：查板型、递归扫描、跳过必须报原因、CSV 转义、per-component 行 |
+| `pcb_core` | 180 | 共享判定核心：JSON 解析、配方校验、拒绝判定、端到端对照真值表 |
+| `qr_ocr` | 36 | 共享 QR/OCR 核心：QR 解码、tesseract 调用、**失败必须说出来** |
+| `w6_cli` | 163 | W6 自己的 CLI 行为：查板型、递归扫描、跳过必须报原因、CSV 转义、per-component 行、读码 |
 
 `pcb_core` 的**源码在 `common/pcb_core/tests/`**，W6 和 W7 链的是同一份 ——
 两边都跑才能说明"判定是对的，而且 W6 真的用上了它"。
@@ -202,7 +205,9 @@ images/<board>.png (BGR)
    ↓      └─ 规则被守卫挡掉时**必须报出来**(skipped),不能默默不跑
    ↓ ═══════════════════════════════════════════════════
    ↓
-   ↓ ┌─── W6d: OCR 丝印(放大 3 倍 + tesseract --psm 11)+ QR 串号(W5)
+   ↓ ┌─── W6d: OCR 丝印(放大 3 倍 + tesseract --psm 11)+ QR 串号
+   ↓ │      └─ 实现来自 common/qr_ocr/(W5/W6/W7 共用一份)
+   ↓ │      └─ **没读成的要报出来**(readFailures),不能悄悄留空
    ↓ └─── W6e: 写 CSV 报告(per-board-per-component)
 ```
 
@@ -236,8 +241,8 @@ images/<board>.png (BGR)
 | `cv::connectedComponentsWithStats` | W3 | **短路判定** + 焊盘中位数 |
 | `cv::moments` | W3 | 本体质心（偏移判定） |
 | `cv::erode` + `cv::connectedComponentsWithStats` | W3 | **极性判定**（腐蚀掉 1px 丝印细线，剩下的实心块就是极性条）|
-| `cv::QRCodeDetector` | W5 | 读序列号 |
-| `CreateProcessW + tesseract` | W5 | 读丝印文字（`--psm 11` 散落文本模式） |
+| `cv::QRCodeDetector` | W5 | 读序列号（实现已搬到 `common/qr_ocr/`）|
+| `CreateProcessW + tesseract` | W5 | 读丝印文字（`--psm 11` 散落文本模式，实现同上）|
 | `cv::adaptiveThreshold` | W2 | 丝印 OCR 预处理（**先放大 3 倍**） |
 
 ## ⚠️ 已知限制
@@ -270,13 +275,16 @@ images/<board>.png (BGR)
 3. **新缺陷类型**：加 "元件倾斜 45°" 作为第 8 类缺陷
 
 ### 进阶
-4. **给 signal 板补上极性反**：给配方加 `polarity_side` 字段，
-   让极性判据变成双边（详见 `common/pcb_core/pcb_core.cpp` 里的注释）
+4. ~~**给 signal 板补上极性反**~~ —— **2026-10-20 已完成**：
+   配方加了 `polarity_side` 字段，判据改成「腐蚀出极性条本身 → 定侧 → 和配方比」，
+   `signal_polarity.png` 现在能抓到了。详见 `notes/notes_PCB_Polarity_2026-10.md`。
+   **接下来可以做的**：给 mcu 板也补上带极性条的电容（现在 mcu 一个都没有，
+   它的极性检查是空的 —— 补之前得先在生成器里画出极性条）。
 5. **重做短路判据**：power 板那张是金条不是环 ——
    改成"不该存在的跨区导体"（见核心里 short 那段的分析）
 6. **给 complex 三块板补 insufficient 真值图**：生成器里画几块焊少的板，
    **9 张图全部要重量一遍**（这条在那段注释里挂了很久了）
-7. **给 W6 的 CLI 再加一条断言**：W6 现在有 2 个套件 322 条断言了
+7. **给 W6 的 CLI 再加一条断言**：W6 现在有 3 个套件 379 条断言了
    （`tests/test_w6_cli.cpp`）。挑一条现在没覆盖的行为补上 ——
    比如"`--recipes` 指向一个只有部分配方的目录"该报什么
 8. **让路径编码这条路也能测**：现在 `w6_cli` 里已经有 `pathText()` / `loadImage()`

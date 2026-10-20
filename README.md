@@ -18,12 +18,19 @@
 
 ## 🏆 两个综合项目
 
-- **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**2 个无头回归测试 / 322 条断言**
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，13 个无头回归测试共 1065 条断言
+- **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 379 条断言**
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，14 个无头回归测试共 1101 条断言
 
-## 🔗 共享判定核心（common/pcb_core）
+## 🔗 两个共享核心（common/）
 
-W6 和 W7 的 PCB 判定**共用同一份实现**（`common/pcb_core/`，无 Qt 依赖）：
+W6 和 W7 的 PCB 判定、QR/OCR 读取**共用同一份实现**（`common/`，无 Qt 依赖）：
+
+| 目录 | 作用 |
+|---|---|
+| `common/pcb_core/` | 板型配方解析 + 元件定位 + 六条判据（missing/wrong/polarity/bridge/insufficient/shifted）+ 短路 |
+| `common/qr_ocr/` | QR 解码 + tesseract 文字 OCR（**W5/W6/W7 共用**，2026-10-20 合并） |
+
+`common/pcb_core/` 的文件：
 
 | 文件 | 作用 |
 |---|---|
@@ -37,6 +44,11 @@ W6 和 W7 的 PCB 判定**共用同一份实现**（`common/pcb_core/`，无 Qt 
 抄出来的那份会随 W7 的标定一起漂，漂了没人知道。
 
 现在 W6 的 17 张测试图（8 张 demo + 9 张 complex）和 W7 算子走**同一份**判定。
+
+`common/qr_ocr/` 是第二块共享核心：**QR 解码 + tesseract 调用**，
+W5 / W6 / W7 三边共用一份（合并前是**三份**拷贝，而且三份从来没被放在一起测过）。
+它钉住的是同一类契约：**"没读"和"读了但是空"必须分得开**，
+tesseract 没装时必须**明说**原因，不能悄悄返回空串。
 
 
 ### W7 最终版补上的东西
@@ -59,7 +71,7 @@ cd W7_VisionMasterLite
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
-13 个套件 / 1065 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+14 个套件 / 1101 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试，
 `pcb_core` 则是共享判定核心自己的测试（**W6 和 W7 链的是同一份源码**）。
 
@@ -79,7 +91,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 12 份 + 19 张 atomic 卡，~260 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 13 份 + 20 张 atomic 卡，~280 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -93,12 +105,14 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 - `notes_PCB_SharedCore_2026-10.md` (15 KB) — 共享判定核心 + W6 可测层 + 路径编码 bug
 - `notes_W7_EngineeringLessons_2026-10.md` (35 KB) — W7 工程经验汇总
 - `notes_PCB_Polarity_2026-10.md` (17 KB) — 极性判据重做：从「量错东西」到「量对东西」
+- `notes_QR_OCR_SharedCore_2026-10.md` (14 KB) — QR/OCR 合并成共享核心（第 5 次抄副本）
 
-`notes/atomic/` 里是**单条教训卡片**（19 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（20 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
 - `at-criterion-must-not-guess-the-baseline.md` — 判据不猜：期望值由知道真相的那一方登记
+- `at-test-leaves-residue-permanently-red.md` — 测试自己制造的失败：一次坏掉，永久变红
 - `at-reported-vs-named.md` — 「报了缺陷」≠「报的是那个缺陷」
 - `at-mutation-ruler-broken.md` — 变异尺子本身坏了
 
@@ -126,7 +140,7 @@ out/build/x64-Release/w6_pcb_defect.exe report images
 OpenCV/
 ├── W1-W7/                 # 7 个学习项目
 ├── common/pcb_core/       # W6/W7 共用的判定核心(无 Qt 依赖)
-├── notes/                 # 变更日志（12 份 + 19 张 atomic 卡）
+├── notes/                 # 变更日志（13 份 + 20 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -135,9 +149,9 @@ OpenCV/
 
 ## 📊 统计
 
-- 7 个 C++ 项目 + 1 个共享核心
+- 7 个 C++ 项目 + 2 个共享核心
 - 96 个 C++ 文件 / ~17700 行代码
-- 12 份变更日志 + 19 张 atomic 卡 / ~260 KB
-- **15 个无头回归测试 / 1387 条断言**（W7 13 个 / 1065，W6 2 个 / 322；
-  其中 `pcb_core` 一套源码链进两个项目，两边都跑）
+- 13 份变更日志 + 20 张 atomic 卡 / ~280 KB
+- **17 个无头回归测试 / 1480 条断言**（W7 14 个 / 1101，W6 3 个 / 379；
+  其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

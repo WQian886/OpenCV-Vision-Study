@@ -10,10 +10,11 @@
 ## 📁 工程结构
 ```
 W5_OCR_QRCode/
-├── CMakeLists.txt           # Release-only / OpenCV / utf-8
-├── main.cpp                 # qr / ocr 两个子模式
+├── CMakeLists.txt           # Release-only / OpenCV / utf-8 / 链 common/qr_ocr
+├── main.cpp                 # qr / ocr 两个子模式(实现已搬到 common/qr_ocr)
 ├── gen_qr.py                # 生成 QR 测试图
 ├── gen_ocr_test.py          # 生成 OCR 测试图（带丝印文字）
+├── out/ocr/                 # OCR 的中间产物（**不放 images/**,见下)
 ├── images/
 │   ├── qrcode_test.png      ← QR 测试图
 │   ├── ocr_test.png         ← OCR 测试图
@@ -28,7 +29,11 @@ W5_OCR_QRCode/
 2. CMake 自动配置 → **配置切到 x64-Release**（必须 Release！Debug 会触发 OpenCV ABI 不匹配）
 3. F7 编译 → Ctrl+F5 运行（不要 F5）
 
-> 💡 Tesseract 路径在 `main.cpp` 里硬编码 `D:\Program Files\Tesseract-OCR\tesseract.exe`，改机器请同步改这个常量。
+> 💡 **2026-10-20 起**：QR 解码和 tesseract 调用搬到了 `common/qr_ocr/`，
+> W5 / W6 / W7 **共用一份**（本项目第 5 次抄副本，这次真的合并了）。
+> tesseract 路径的默认值在 `common/qr_ocr/qr_ocr.cpp` 的 `defaultTesseractPath()`，
+> **不再硬编码在 `main.cpp` 里** —— 而且会自动找 PATH，装在别处也能用。
+> 找不到时会**明说**原因，不会悄悄返回空串。
 
 ## 🛠️ 命令行构建（备选）
 ```powershell
@@ -39,7 +44,31 @@ build\w5_ocr_qrcode.exe qr    # 跑 QR 识别
 build\w5_ocr_qrcode.exe ocr   # 跑 OCR（默认也是 ocr）
 ```
 
+> 💡 **`--no-gui`**：无显示器 / CI 环境下 `cv::imshow` 会抛异常。
+> ```powershell
+> build\w5_ocr_qrcode.exe ocr --no-gui
+> build\w5_ocr_qrcode.exe qr  --no-gui
+> ```
+
 ## 📚 知识点笔记
+
+### 🔗 共享核心（2026-10-20 起）
+
+QR 解码和 tesseract 调用的**实现**现在在 `common/qr_ocr/`，
+W5 / W6 / W7 共用一份。这个 `main.cpp` 保留的是**教学演示**
+（画框、显示、打印每一步），不是另一份实现。
+
+```cpp
+// 以前:这里自己写了一份 cv::QRCodeDetector 和一份 CreateProcessW
+// 现在:
+const qroc::QrResult  qr = qroc::readQr(img);              // 内容 + 4 个角点
+const qroc::OcrResult  r  = qroc::readText(img, opt);      // ok / text / error
+```
+
+`opt.psm` 是**一个参数**：W5 传 `6`（三行整齐字），W6 传 `11`（板上的散落丝印）。
+合并之前这两个数分别硬编码在两份拷贝里，谁也说不清哪个对。
+
+详细过程见 `notes/notes_QR_OCR_SharedCore_2026-10.md`。
 
 ### cv::QRCodeDetector（核心模块自带，不依赖 contrib）
 
@@ -117,7 +146,7 @@ WaitForSingleObject(pi.hProcess, INFINITE);
 |---|---|---|
 | `Debug` 编译失败 | OpenCV ABI 不匹配 | 切到 x64-Release |
 | QR 解码为空 | 图太模糊 / QR 被遮挡 | 先 `GaussianBlur` 预处理，或换大尺寸 QR |
-| `CreateProcessW` 失败 (错误码 2) | Tesseract 路径不存在 | 改 `main.cpp` 里的硬编码路径 |
+| `CreateProcessW` 失败 (错误码 2) | Tesseract 路径不存在 | 现在会**明说**是哪个路径找不到（改 `common/qr_ocr/qr_ocr.cpp` 的 `defaultTesseractPath()`，或装到 PATH 里）|
 | OCR 输出乱码 | 控制台不是 UTF-8 | 头里加 `SetConsoleOutputCP(CP_UTF8)` + CMake 加 `/utf-8` |
 | OCR 识别率低 | 字体 / 光照不均 | 加大二值化核或换 `--psm` 模式 |
 
@@ -131,8 +160,10 @@ WaitForSingleObject(pi.hProcess, INFINITE);
 5. **生成真实串号**：用 `gen_qr.py` 生成 `PCB-2026-001` 这种格式
 
 ### 进阶（W5b OCR）
-6. **PSM 模式切换**：把 `--psm 6` 改成 `--psm 7`（单行）看输出变化
-7. **多语言**：Tesseract 装了中文包就加 `-l eng+chi_sim` 试试
+6. **PSM 模式切换**：`--psm` 现在是**一个参数**（`OcrOptions::psm`），
+   把 W5 传的 `6` 改成 `7`（单行）看输出变化 —— 顺便体会"一份实现、多个参数"
+   和"两份拷贝"的区别
+7. **多语言**：Tesseract 装了中文包就加 `-l eng+chi_sim` 试试（`OcrOptions::lang`）
 8. **白名单**：加 `-c tessedit_char_whitelist=0123456789RCOK-` 限制识别字符
 9. **置信度**：用 Tesseract 的 `TSV` 输出模式拿到每个字符的置信度
 10. **实战 OCR PCB**：找一张真实 PCB 照片，跑 OCR 读元件丝印

@@ -46,7 +46,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 13 个无头回归测试(1065 断言)
+├── tests/                      # 14 个无头回归测试(1101 断言)
 ├── images/                     # 测试图(复用 W6)
 ├── recipes/                    # 板型配方 JSON(由 W6 的生成器导出,**与 W6 共用一份**)
 ├── frame_record.h              # 帧接线:"记一笔" + 序号→帧号换算(可行为测试)
@@ -174,7 +174,7 @@ CMake 会真实探测并在 configure 时打印结果:
 | `blob_count` | Blob 分析 | `connectedComponentsWithStats` | 图像 → 数据 | 连通域计数 + 面积过滤 |
 | `count_check` | 数量判定 | 无(纯逻辑) | 数据 → 文本 | 区间判定 PASS/FAIL |
 | `template_match` | 模板匹配 | `matchTemplate` | 图像 → 数据 | 找模板位置 + 得分 |
-| `qr_decode` | 二维码识别 | `QRCodeDetector` | 图像 → 文本 | 解 QR 内容 + 4 角点 |
+| `qr_decode` | 二维码识别 | `QRCodeDetector` | 图像 → 文本 | 解 QR 内容 + 4 角点（实现来自 `common/qr_ocr/`，W5/W6/W7 共用一份）|
 | `pcb_inspect` | — | `findContours`/`moments` | 图像 → 数据 | PCB 元件定位(真值坐标 / 自动轮廓) |
 | `pcb_defect_judge` | — | `inRange`/`morphologyEx` | 数据 → 文本 | 7 类缺陷判定,7 个阈值可调 |
 | `line_fit` | 直线测量 | 无(纯几何) | 图像 → 数据 | 给两点,量长度 + 角度(0~180°) |
@@ -322,7 +322,7 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,1065 断言 / 13 个套件)
+## 🧪 回归测试(无头,1101 断言 / 14 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
