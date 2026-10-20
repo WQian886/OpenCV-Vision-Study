@@ -46,8 +46,12 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 14 个无头回归测试(1101 断言)
-├── images/                     # 测试图(复用 W6)
+├── tests/                      # 14 个无头回归测试(1162 断言)
+├── (无 images/)                # 测试图**只有一份**,在 W6_PCB_DefectProject/images/
+│                               #   (那边才是生成器所在地)。构建时暂存进
+│                               #   build/test_work/<套件名>/images/。
+│                               #   2026-10-20 之前这儿还摆着一份**副本**,
+│                               #   结果它停在旧版图上,测试拿旧图判还判得"对"。
 ├── recipes/                    # 板型配方 JSON(由 W6 的生成器导出,**与 W6 共用一份**)
 ├── frame_record.h              # 帧接线:"记一笔" + 序号→帧号换算(可行为测试)
 ├── ../common/pcb_core/         # ← 判定核心(W6/W7 共用,无 Qt 依赖)
@@ -322,7 +326,7 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,1101 断言 / 14 个套件)
+## 🧪 回归测试(无头,1162 断言 / 14 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
@@ -954,11 +958,14 @@ $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
 
 - **MVS SDK / ONNX Runtime 未装**:两个算子在当前机器上编译成空实现,
   点 Run 会给出明确提示。装好 SDK + 设环境变量后重新 configure 即自动启用。
-- **PCB 判定沿用 W6 的样本数据**:`short.png` 会同时报出 `short` 和 `wrong`
-  两种缺陷。这不是搬算子时搬出来的 bug,W6 当时就是这样,原因在样本:
-  生成脚本里 `GOLD = (30,180,220)` BGR 也就是**青色**,而 `judgeWrong` 的
-  BGR 范围 `(150,150,0)-(255,255,80)` 青色也满足。已用特征测试钉住,
-  免得它无声漂移。换真实产线数据时要重新标定。
+- ~~**PCB 判定沿用 W6 的样本数据**:`short.png` 会同时报出 `short` 和 `wrong`~~
+  —— **2026-10-20 已修**:短路图重画成"两脚被铜条连通"之后,铜条是金色不是青色,
+  `short.png` 现在只报 `short`(点名 R2),不再串扰 `wrong`。
+  根因还是那句老话:生成器画给人看的**标记**被当成了缺陷本身。
+  详见 `notes/notes_PCB_Short_2026-10.md`。
+- **短路目前只给双端子元件配了**:电阻/电容/二极管/电感。
+  三脚以上的封装(TO-220 / QFP64)没有"两脚之间"的概念,配了会判不出。
+  代价是这些元件的**两脚短路没有被检查** —— 这是"诚实的不检查",不是"假装检查过了"。
 - **复杂子板 / 不同尺寸布局**未适配,PCB 判定用的是固定 ROI。
 - **只在 Windows + MSVC + Release 验证过**。Linux/macOS 移植没做:
   `CMakeLists.txt` 里 Qt/OpenCV 路径是硬编码的,测试文件里有
@@ -997,8 +1004,10 @@ PCB 判定的实现(配方解析 + 定位 + 六条判据 + 短路)搬到了 `com
 1. **加新算子**:照着 `color_segment.h/.cpp` 加一个 `circle_find`(用 `cv::HoughCircles`),
    记得声明 `inputPinType` / `outputPinType`,并注册到三处:
    `operator_factory.cpp`、`mainwindow.cpp::registerOperators()`、`CMakeLists.txt`
-2. **改 `short.png` 的青色串扰**:重新标定 `judgeWrong` 的 BGR 范围,
-   然后更新 `test_pcb_operators.cpp` 里那条特征测试
+2. ~~**改 `short.png` 的青色串扰**~~ **已做**（2026-10-20,随短路判据重做一起解决):
+   短路图重画成"两脚被铜条连通",铜条是金色不再串扰 `wrong` 判据。
+   根因是生成器画给人看的**标记**被当成了缺陷本身,不是 BGR 范围没标定好 ——
+   重新标定只是把症状按住,根还在。详见 `notes/notes_PCB_Short_2026-10.md`。
 3. **多前驱合并策略**:现在多个前驱的 output 是"后写覆盖"简单合并,
    改成按字段优先级或让用户在连线上标顺序
 4. ~~**把帧循环的结果也缓存下来**~~ **已做**(`step_frame_cache.h` + 帧选择器):
