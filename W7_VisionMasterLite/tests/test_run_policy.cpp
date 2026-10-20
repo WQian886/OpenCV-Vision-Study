@@ -27,7 +27,6 @@
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QFile>
-#include <QDir>
 #include <windows.h>
 
 #include "run_policy.h"
@@ -955,27 +954,36 @@ static QString stripLineComments(const QString& src) {
 // ============================================================
 // 找 mainwindow.cpp
 //
-// ⚠ 2026-10-20:不能写死相对路径 "mainwindow.cpp"。
+// ⚠ 这里**不是**"从当前目录往上找"。
 //
-//   以前工作目录是工程根(W7_VisionMasterLite/),相对路径恰好能打开。
-//   现在工作目录改成了 build 里的测试目录
-//   (为了不让测试产物落进源码树),相对路径就**打不开了**。
+//   往上找的前提是"CWD 在源码树里",而这个前提已经不成立了:
+//     · 2026-10-20 起,测试工作目录挪到了 build/test_work/<套件名>/
+//     · CI 的构建目录是 build/ci/W7_VisionMasterLite/ ——
+//       它和**源码目录同名**。
+//   从 build/ci/W7_VisionMasterLite/test_work/ 往上走,经过的是
+//   **构建目录**那个 W7_VisionMasterLite/,一路走到 E:/ 都不会碰到
+//   源码目录。
 //
-//   而"打不开"这件事本身有段血案史:
-//   第一版是 `if (!opened) return;` —— 找不到文件就直接返回,
-//   于是一条断言都没跑,测试照样全绿。
-//   那是**恒真的空断言**:比没有守卫更坏,因为它让人以为守卫在生效。
+//   实测后果(2026-10-20 CI 第一次跑):
+//     [FAIL] 能打开 mainwindow.cpp —— 打不开说明它不在预期位置
+//            (找过 .../build/ci/W7_VisionMasterLite/test_work/run_policy
+//             往上 8 层)
+//   红是真的红(不是恒真空断言),但消息把人引向完全错误的方向:
+//   源码**就在 6 层外**,只是那个 6 层是**另一个**同名目录。
 //
-//   所以现在:路径自己往上找,找不到就**报红**。
+//   所以现在不猜了:**构建系统知道源码在哪,直接告诉测试**。
+//   CMake 那边的定义:
+//       target_compile_definitions(w7_run_test PRIVATE
+//           W7_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+//
+//   找不到定义就编译不过(#error)—— 不会"安静地退化成一个空断言"。
 // ============================================================
+#ifndef W7_SOURCE_DIR
+#error "W7_SOURCE_DIR is not defined. The build system must tell the test where the sources are."
+#endif
+
 static QString findMainWindowCpp() {
-    QDir dir = QDir::current();
-    for (int i = 0; i < 8; ++i) {
-        const QString cand = dir.filePath("mainwindow.cpp");
-        if (QFile::exists(cand)) return cand;
-        if (!dir.cdUp()) break;
-    }
-    return QString();
+    return QString(W7_SOURCE_DIR) + "/mainwindow.cpp";
 }
 
 static void test_mainwindow_records_every_frame() {
@@ -985,18 +993,16 @@ static void test_mainwindow_records_every_frame() {
     QFile f(mwPath);
     const bool opened = f.open(QIODevice::ReadOnly | QIODevice::Text);
     // 打不开文件**必须报红**,不能 return 了事。
-    // 第一版写的是 "if (!opened) return;" —— 而 CMake 里
-    // add_test(run_policy) 没给 WORKING_DIRECTORY,ctest 在 build/ 下跑,
-    // 找不到 mainwindow.cpp,于是这条守卫每次都提前 return,
-    // 一条断言都没跑,测试照样全绿。
     //
-    // 那是"恒真的空断言":比没有守卫更坏,因为它让人以为守卫在生效。
+    // 这条守卫第一版写的是 "if (!opened) return;" —— 找不到文件就直接
+    // 返回,于是一条断言都没跑,测试照样全绿。那是**恒真的空断言**:
+    // 比没有守卫更坏,因为它让人以为守卫在生效。
+    //
     // 所以这里 check 的是 false 分支 —— 路径找不到就当场报红,
     // 而不是"这条守卫今天不算数"。
     check(opened,
-          "能打开 mainwindow.cpp —— 打不开说明它不在预期位置("
-          "找过 " + QDir::currentPath() + " 往上 8 层),"
-          "这条源码守卫会变成恒真的空断言");
+          "能打开 mainwindow.cpp(" + mwPath + ")—— 打不开说明构建时没把"
+          "源码目录告诉测试(W7_SOURCE_DIR),这条源码守卫会变成恒真的空断言");
     if (!opened) return;
     const QString src = stripLineComments(QString::fromUtf8(f.readAll()));
     f.close();
@@ -1058,9 +1064,8 @@ static void test_mainwindow_frame_selector_maps_through_framesOf() {
     QFile f(findMainWindowCpp());
     const bool opened = f.open(QIODevice::ReadOnly | QIODevice::Text);
     check(opened,
-          "能打开 mainwindow.cpp —— 打不开说明它不在预期位置("
-          "找过 " + QDir::currentPath() + " 往上 8 层),"
-          "这条源码守卫会变成恒真的空断言");
+          "能打开 mainwindow.cpp(" + findMainWindowCpp() + ")—— 打不开说明构建时"
+          "没把源码目录告诉测试(W7_SOURCE_DIR),这条源码守卫会变成恒真的空断言");
     if (!opened) return;
     const QString src = stripLineComments(QString::fromUtf8(f.readAll()));
     f.close();

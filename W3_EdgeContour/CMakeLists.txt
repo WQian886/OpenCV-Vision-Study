@@ -15,8 +15,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         "  详细原因见 memory: opencv-debug-abi-mismatch")
 endif()
 
-# ===== OpenCV 路径（必须指 install/lib/,理由见 opencv-cmake-dir-quirk memory）=====
-set(OpenCV_DIR "D:/opencv-src/build/install/lib")
+# ===== OpenCV 路径 =====
+# 路径是**这台机器**的事实,不是项目的事实 ——
+# 所以默认值写在 common/cmake/ThirdParty.cmake 里,CI 用 -D 覆盖。
+include(${CMAKE_CURRENT_SOURCE_DIR}/../common/cmake/ThirdParty.cmake)
 find_package(OpenCV REQUIRED)
 
 # ===== 源文件 =====
@@ -47,7 +49,7 @@ add_custom_command(TARGET w3_edge_contour POST_BUILD
 # ===== 复制 OpenCV DLLs 到 exe 目录（Windows 必做）=====
 add_custom_command(TARGET w3_edge_contour POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w3_edge_contour>
     COMMENT "Copying OpenCV DLLs to output directory"
 )

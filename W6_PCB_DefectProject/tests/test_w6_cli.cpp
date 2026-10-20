@@ -15,7 +15,7 @@
 //
 // 特别要命的是第 1 条:**查不到板型**的后果不是"报错退出",
 // 而是"拿不到配方 -> 判定不出东西 -> 报告里少一块板"。
-// 而报告里少一块板,在界面��和"这块板合格"**长得一模一样**。
+// 而报告里少一块板,在界面上和"这块板合格"**长得一模一样**。
 // 这就是本项目反复强调的"静默失效优先于崩溃排查"——
 // 所以"必须跳过并且必须报出来"本身就得是一条断言。
 //
@@ -110,13 +110,20 @@ static bool writePng(const fs::path& p, const cv::Mat& img) {
 
 // 找仓库根
 //
-// 往上找,直到看见 W6_PCB_DefectProject 和 W7_VisionMasterLite。
 // ctest 的工作目录是构建目录,写死相对路径会找不到文件。
+//
+// ⚠ 判据是 **common/ 存在**,不是"工程目录名存在"。
+//   2026-10-20 上 CI 第一次跑就撞上了:CI 的构建目录是
+//   build/ci/<工程名>/,build/ci/ 下面正好摆着一份
+//   W6_PCB_DefectProject 和 W7_VisionMasterLite —— 循环在那一层就停了,
+//   把**构建目录当成了仓库根**,于是报"找不到图"。
+//   common/ 只有仓库根有,构建树里不可能有同名子目录。
 // ============================================================
 static fs::path findRepoRoot() {
     fs::path p = fs::current_path();
     for (int i = 0; i < 8; ++i) {
-        if (fs::exists(p / "W6_PCB_DefectProject") &&
+        if (fs::exists(p / "common" / "pcb_core" / "pcb_core.h") &&
+            fs::exists(p / "W6_PCB_DefectProject") &&
             fs::exists(p / "W7_VisionMasterLite")) {
             return p;
         }

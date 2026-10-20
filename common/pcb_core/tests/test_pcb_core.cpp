@@ -78,16 +78,33 @@ static void check(bool cond, const std::string& what) {
 // 找仓库根
 //
 // 同一个测试文件会被链进 W6 和 W7 两个目标,两个目标的 ctest
-// 工作目录不同(CWD = 各自源码目录)。所以**不能写死相对路径** ——
+// 工作目录不同(CWD = 各自的测试工作目录)。所以**不能写死相对路径** ——
 // 写死的话,在其中一个项目里跑就会"找不到文件",而找不到文件时
 // 断言会红(而不是空转),但红的原因很难看懂。
 //
-// 往上找,直到看见 W6_PCB_DefectProject 和 W7_VisionMasterLite。
+// ⚠⚠ 判据是 **common/ 存在**,不是"工程目录名存在"。
+//
+//   原来是"看见 W6_PCB_DefectProject 和 W7_VisionMasterLite 就算根"。
+//   2026-10-20 上 CI 第一次跑就把它骗了:
+//   CI 的构建目录是 build/ci/<工程名>/,于是 build/ci/ 下面
+//   **正好有一份 W6_PCB_DefectProject 和 W7_VisionMasterLite**
+//   (构建树的根,一个工程一个子目录)。
+//   往上找的循环在 build/ci/ 就停了,把**构建目录当成了仓库根**。
+//
+//   后果不是崩,是"找不到图":
+//     [FAIL] 读得到 E:\...\build\ci\W5_OCR_QRCode\images\qrcode_test.png
+//   报的是"文件不存在",而真正的原因是"根找错了"——
+//   查错方向完全不同。
+//
+// common/ 只有仓库根有(共享判定核心和共享 QR/OCR 核心都在那),
+// 构建树里不可能有同名子目录。用它当判据,就不会被"长得像"骗到。
+//
 // ============================================================
 static fs::path findRepoRoot() {
     fs::path p = fs::current_path();
     for (int i = 0; i < 8; ++i) {
-        if (fs::exists(p / "W6_PCB_DefectProject") &&
+        if (fs::exists(p / "common" / "pcb_core" / "pcb_core.h") &&
+            fs::exists(p / "W6_PCB_DefectProject") &&
             fs::exists(p / "W7_VisionMasterLite")) {
             return p;
         }

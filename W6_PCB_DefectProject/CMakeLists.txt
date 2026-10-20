@@ -9,7 +9,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         "W6 must use Release. Debug triggers cv::debug_build_guard ABI mismatch.")
 endif()
 
-set(OpenCV_DIR "D:/opencv-src/build/install/lib")
+# 路径是**这台机器**的事实,不是项目的事实 ——
+# 所以默认值写在 common/cmake/ThirdParty.cmake 里,CI 用 -D 覆盖。
+include(${CMAKE_CURRENT_SOURCE_DIR}/../common/cmake/ThirdParty.cmake)
 find_package(OpenCV REQUIRED)
 
 # ============================================================
@@ -109,7 +111,7 @@ endif()
 
 add_custom_command(TARGET w6_core_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w6_core_test>
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
@@ -169,7 +171,7 @@ endif()
 
 add_custom_command(TARGET w6_qr_ocr_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w6_qr_ocr_test>
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
@@ -223,7 +225,7 @@ endif()
 
 add_custom_command(TARGET w6_cli_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w6_cli_test>
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
@@ -259,7 +261,7 @@ add_custom_command(TARGET w6_pcb_defect POST_BUILD
 # 拷 OpenCV DLL 到产物目录
 add_custom_command(TARGET w6_pcb_defect POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w6_pcb_defect>
     COMMENT "Copying OpenCV DLLs to output directory"
 )

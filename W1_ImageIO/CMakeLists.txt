@@ -15,12 +15,12 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         "  详细原因见 memory: opencv-debug-abi-mismatch")
 endif()
 
-# ===== OpenCV 路径（你已装在 D 盘，不走 C 盘）=====
-# 注意: 指向 install/lib/ 而不是 install/ !
-# 原因: install/ 下的 OpenCVConfig.cmake 是 vcpkg 风格的包装器,会做平台/运行时检测
-#       但 install/lib/OpenCVConfig.cmake 才是真正的 config,直接含 include/lib 路径
-#       包装器的正则 ^19[34][0-9]$ 不识别 MSVC 19.51 (VS 2026 / VS 18)
-set(OpenCV_DIR "D:/opencv-src/build/install/lib")
+# ===== OpenCV 路径 =====
+# 路径是**这台机器**的事实,不是项目的事实 ——
+# 所以默认值写在 common/cmake/ThirdParty.cmake 里,CI 用 -D 覆盖。
+# (OpenCV_DIR 为什么必须指向 install/lib 而不是 install/,
+#  以及"为什么必须用 CACHE 变量",见那个文件的注释。)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../common/cmake/ThirdParty.cmake)
 find_package(OpenCV REQUIRED)
 
 # ===== 源文件（跟 hmi 工程一样显式列出）=====
@@ -51,10 +51,10 @@ add_custom_command(TARGET w1_imageio POST_BUILD
 
 # ===== 复制 OpenCV DLLs 到 exe 目录（Windows 必做，否则启动报"找不到 DLL"）=====
 # OpenCV 是动态库 (DLL),exe 运行时 Windows 会按: exe 同目录 → 系统目录 → PATH 顺序查找
-# 不复制就要把 D:/opencv-src/build/install/bin 加进 PATH,容易污染环境
+# 不复制就要把 OpenCV 的 bin 目录加进 PATH,容易污染环境
 add_custom_command(TARGET w1_imageio POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w1_imageio>
     COMMENT "Copying OpenCV DLLs to output directory"
 )

@@ -63,13 +63,18 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     message(FATAL_ERROR "W7 must use Release. Debug triggers cv::debug_build_guard ABI mismatch.")
 endif()
 
+# === 三方依赖路径(Qt6 / OpenCV) ===
+# 路径是**这台机器**的事实,不是项目的事实 ——
+# 所以默认值写在 common/cmake/ThirdParty.cmake 里,CI 用 -D 覆盖:
+#     -DCMAKE_PREFIX_PATH=<qt6 根目录>
+#     -DOpenCV_DIR=<opencv>/lib  -DOpenCV_BIN_DIR=<opencv>/bin
+include(${CMAKE_CURRENT_SOURCE_DIR}/../common/cmake/ThirdParty.cmake)
+
 # === Qt6 ===
-set(CMAKE_PREFIX_PATH "D:/Qt/6.8.3/msvc2022_64")
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 qt_standard_project_setup()
 
 # === OpenCV (与 W1–W6 完全一致) ===
-set(OpenCV_DIR "D:/opencv-src/build/install/lib")
 find_package(OpenCV REQUIRED)
 
 # ============================================================
@@ -207,7 +212,7 @@ endif()
 
 add_custom_command(TARGET w7_qr_ocr_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w7_qr_ocr_test>
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
@@ -243,7 +248,7 @@ endif()
 
 add_custom_command(TARGET w7_core_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w7_core_test>
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
@@ -371,7 +376,7 @@ set_target_properties(w7_vm_lite PROPERTIES
 # 拷 OpenCV DLL + 测试图(与 W1–W6 一致)
 add_custom_command(TARGET w7_vm_lite POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w7_vm_lite>
     COMMENT "Copying OpenCV DLLs to output directory"
 )
@@ -456,7 +461,7 @@ endif()
 
 add_custom_command(TARGET w7_pcb_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w7_pcb_test>
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
@@ -513,7 +518,7 @@ endif()
 
 add_custom_command(TARGET w7_dl_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w7_dl_test>
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
@@ -552,7 +557,7 @@ endif()
 
 add_custom_command(TARGET w7_source_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w7_source_test>
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
@@ -647,7 +652,7 @@ endif()
 
 add_custom_command(TARGET w7_line_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w7_line_test>
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
@@ -689,7 +694,7 @@ endif()
 
 add_custom_command(TARGET w7_measure_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w7_measure_test>
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
@@ -722,6 +727,26 @@ target_include_directories(w7_run_test PRIVATE
 )
 
 target_link_libraries(w7_run_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+
+# === 告诉测试源码目录在哪 ===
+#
+# run_policy 里有两条**源码级守卫**,它们要读 mainwindow.cpp 的源码。
+# 以前是"从当前目录往上找 mainwindow.cpp" —— 那个做法有个前提:
+# **CWD 在源码树里**。
+#
+# 2026-10-20 这个前提不成立了:
+#   · 测试工作目录挪到了 build/test_work/<套件名>/
+#   · CI 的构建目录是 build/ci/W7_VisionMasterLite/ ——
+#     它和**源码目录同名**!从 build/ci/W7_VisionMasterLite/test_work/
+#     往上走,经过的是**构建目录**,一路走到 E:/ 都不会碰到源码目录。
+#
+# 于是守卫直接失效(而且是"恒真式地失效":报红,但红得莫名其妙 ——
+# 消息说"往上 8 层都找不到",其实源码就在 6 层外,只是那个 6 层
+# 是**另一个**同名目录)。
+#
+# 现在不猜了:**构建系统知道源码在哪,直接告诉测试**。
+target_compile_definitions(w7_run_test PRIVATE
+    W7_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 if(MSVC)
     target_compile_options(w7_run_test PRIVATE /utf-8)
@@ -774,7 +799,7 @@ endif()
 
 add_custom_command(TARGET w7_detect_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w7_detect_test>
     COMMENT "Copying OpenCV DLLs to test output directory"
 )
@@ -819,7 +844,7 @@ endif()
 
 add_custom_command(TARGET w7_tpl_test POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        D:/opencv-src/build/install/bin
+        ${OpenCV_BIN_DIR}
         $<TARGET_FILE_DIR:w7_tpl_test>
     COMMENT "Copying OpenCV DLLs to test output directory"
 )

@@ -22,6 +22,19 @@ Makefile
 .ninja_deps
 .ninja_log
 *.cmake
+# ⚠ ⚠ 上面那条 *.cmake 太宽,会把**源码**也藏起来!
+#
+#   2026-10-20 加 common/cmake/ThirdParty.cmake 时踩了:
+#   `git add` 直接报 "The following paths are ignored by one of your
+#   .gitignore files" —— 一个**要被提交**的源码文件,被构建产物的规则
+#   悄悄藏了。
+#
+#   ignore 规则不只会藏测试产物,也会藏**源码**。
+#   而且藏源码比藏产物更危险:藏产物只是难看,藏源码是**文件丢了**。
+#
+#   所以这里显式把它捞回来。common/cmake/ 里放的是共享的三方依赖
+#   路径配置(源码),不是 CMake 生成的中间文件。
+!common/cmake/*.cmake
 
 # ===== Qt 自动生成（仅 W7） =====
 w7_vm_lite_autogen/

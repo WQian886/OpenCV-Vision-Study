@@ -92,12 +92,19 @@ static bool contains(const std::string& hay, const std::string& needle) {
 // 找仓库根
 //
 // 同一个测试文件会被链进多个目标,各目标的 ctest 工作目录不同。
-// 往上找,直到看见 W5_OCR_QRCode 和 W6_PCB_DefectProject。
+//
+// ⚠ 判据是 **common/ 存在**,不是"工程目录名存在"。
+//   2026-10-20 上 CI 第一次跑就撞上了:CI 的构建目录是
+//   build/ci/<工程名>/,build/ci/ 下面正好摆着一份
+//   W5_OCR_QRCode 和 W6_PCB_DefectProject —— 循环在那一层就停了,
+//   把**构建目录当成了仓库根**,于是报"找不到图"。
+//   common/ 只有仓库根有,构建树里不可能有同名子目录。
 // ============================================================
 static fs::path findRepoRoot() {
     fs::path p = fs::current_path();
     for (int i = 0; i < 8; ++i) {
-        if (fs::exists(p / "W5_OCR_QRCode") &&
+        if (fs::exists(p / "common" / "qr_ocr" / "qr_ocr.h") &&
+            fs::exists(p / "W5_OCR_QRCode") &&
             fs::exists(p / "W6_PCB_DefectProject")) {
             return p;
         }
