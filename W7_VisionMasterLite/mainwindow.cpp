@@ -5,6 +5,7 @@
 #include "operator_library_groups.h"   // 算子库分组:不变式是"没有算子会消失"
 #include "pipeline_serialize.h"   // 存盘/读盘(已搬出,无头测试直接用)
 #include "step_scope.h"   // 单步执行的"跑哪些节点"(纯逻辑,见头文件里的说明)
+#include "frame_record.h" // 帧循环"记一笔" + 序号→帧号换算(可行为测试)
 
 #include <QDockWidget>
 #include <QToolBar>
@@ -411,8 +412,12 @@ void MainWindow::setupResultPanel() {
             this, [this](int pos) {
         if (m_viewNodeId.isEmpty() || pos < 1) return;
         const QList<int> fs = m_stepCache.framesOf(m_viewNodeId);
-        if (pos > fs.size()) return;
-        showStepFrame(m_viewNodeId, fs.at(pos - 1));
+        // ⚠ 序号 ≠ 帧号:缓存满了会丢最早的帧,剩下的帧号是 7,8,9,...
+        //   这时"第 3 个"对应的是真实帧 9,不是 2。
+        //   换算在 frame_record.h 里(可行为测试),越界返回 -1。
+        const int frame = w7::frameNumberForPosition(fs, pos);
+        if (frame < 0) return;
+        showStepFrame(m_viewNodeId, frame);
     });
     m_frameBar->setVisible(false);   // 初始是"最终结果",没有帧可选
 
@@ -1137,15 +1142,24 @@ void MainWindow::runPipeline(OperatorNode* target) {
         // ============================================================
         {
             const QString id = n->uuid().toString(QUuid::WithoutBraces);
-            const int dropped = m_stepCache.put(
-                id, frame, out,
-                tr("第 %1 步 · %2").arg(step + 1).arg(n->displayName()));
-            // 撞上限必须报出来 —— 静默丢帧的话,界面一切正常,
-            // 只是用户要查的那一帧的数字**不在了**,而他不知道。
-            if (dropped > 0) {
-                appendLog(tr("  ⚠️ 每步结果缓存已满(%1 帧/节点),丢弃了最早的 %2 帧"
-                             "的数字 —— 这些帧还能看日志,但回看不到了")
-                    .arg(w7::kStepCacheMaxFrames).arg(m_stepCache.evictedCount()));
+            // "这一帧要不要记"这个决定在 frame_record.h 里
+            // (可行为测试,以前只能靠 lint 读源码,变异 M4 实测 12/12 全绿)。
+            //
+            // ⚠ 这里**不能**写成 `if (!shouldCacheFrame(...)) continue;` ——
+            //   continue 会跳过下面状态点/日志那几行,等于"不缓存"顺手
+            //   把这个节点的其它 bookkeeping 也跳了。两个后果捆在一起,
+            //   将来真要加"只缓存关键帧"策略时,会很难查。
+            if (w7::shouldCacheFrame(frame, totalFrames)) {
+                const int dropped = w7::recordFrameResult(
+                    &m_stepCache, id, frame, out,
+                    tr("第 %1 步 · %2").arg(step + 1).arg(n->displayName()));
+                // 撞上限必须报出来 —— 静默丢帧的话,界面一切正常,
+                // 只是用户要查的那一帧的数字**不在了**,而他不知道。
+                if (dropped > 0) {
+                    appendLog(tr("  ⚠️ 每步结果缓存已满(%1 帧/节点),丢弃了最早的 %2 帧"
+                                 "的数字 —— 这些帧还能看日志,但回看不到了")
+                        .arg(w7::kStepCacheMaxFrames).arg(m_stepCache.evictedCount()));
+                }
             }
         }
         n->setHasCachedResult(true);

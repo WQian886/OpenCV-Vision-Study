@@ -154,6 +154,7 @@ set(SOURCES
     select_delete_plan.h   # 批量删除的"计划"层:所有裸指针读取只发生在这一个函数里
     operator_library_groups.h  # 算子库分组:不变式是"没有算子会消失"
     run_policy.h           # Run 帧循环的三条"不许 runaway"规则,无头测试要 include
+    frame_record.h         # 帧循环"记一笔" + 序号→帧号换算(可行为测试,见头文件)
     commands/command.cpp
     commands/node_commands.cpp
     commands/edge_commands.cpp

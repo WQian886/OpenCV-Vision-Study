@@ -33,6 +33,7 @@
 #include "step_scope.h"
 #include "artifact_path.h"
 #include "step_frame_cache.h"
+#include "frame_record.h"   // 帧接线的可测入口(见该文件头的变异 M4 记录)
 
 using namespace w7;
 
@@ -972,16 +973,28 @@ static void test_mainwindow_records_every_frame() {
     const QString src = stripLineComments(QString::fromUtf8(f.readAll()));
     f.close();
 
-    // 锚点:多帧缓存真正落地的那次 put 调用
-    const int putAt = src.indexOf(QStringLiteral("m_stepCache.put("));
-    check(putAt >= 0, "mainwindow.cpp 里有 m_stepCache.put() 调用");
+    // 锚点:多帧缓存真正落地的那次调用
+    //
+    // ⚠ 2026-10-20:锚点从 "m_stepCache.put(" 改成了
+    //   "recordFrameResult(" —— 因为"记一笔"这一步已经抽到
+    //   frame_record.h 里,现在**有行为测试**覆盖它
+    //   (见 test_frame_record_behaviour)。
+    //
+    //   这条 lint 的职责因此也变了:从"禁止某种写法"变成
+    //   "**必须用这个可测的入口**"。后者比前者强 ——
+    //   禁止某个字符串会被等价写法绕过,要求某个入口不会。
+    const int putAt = src.indexOf(QStringLiteral("recordFrameResult("));
+    check(putAt >= 0,
+          "mainwindow.cpp 里调的是 recordFrameResult() —— "
+          "\"每帧都记\"这条不变量现在有行为测试覆盖,"
+          "绕开这个入口就绕开了测试");
 
     // 老 bug 的判据。改动前这行就在 put 调用正上方,
     // 把每一次 put 都关在"只留最后一帧"的条件里。
     const int stale = src.indexOf(QStringLiteral("totalFrames - 1"));
     check(stale < 0,
           QString("mainwindow.cpp 代码里没有 'totalFrames - 1' 这个 "
-                  "last-frame-only 判据(它会把 put 关成只缓存最后一帧 —— "
+                  "last-frame-only 判据(它会把记缓存关成只缓存最后一帧 —— "
                   "实测把它加回去,12 个套件全绿,没有任何行为测试会发现)"
                   "(已剔除注释,所以本文件里记录这段历史的那段说明不会误报)"));
 
@@ -1030,6 +1043,14 @@ static void test_mainwindow_frame_selector_maps_through_framesOf() {
           "mainwindow.cpp 里有 m_stepCache.framesOf() 调用"
           "(负向断言的正锚点,证明它不是在校验一个没人写的字符串)");
 
+    // ⚠ 2026-10-20:换算本身抽到了 frame_record.h 的
+    //   frameNumberForPosition(),现在**有行为测试**覆盖
+    //   (含"丢过帧之后序号≠帧号"这个关键场景)。
+    //   所以这条 lint 的职责变成"必须走那个可测的换算函数"。
+    check(src.contains(QStringLiteral("frameNumberForPosition(")),
+          "帧选择器走的是 frameNumberForPosition() —— "
+          "序号→帧号的换算有行为测试覆盖(含丢帧后的错位场景)");
+
     // 负锚点:把 pos-1 直接当帧号传进去。
     // 注意匹配的是 "showStepFrame(m_viewNodeId, pos - 1)" 这种
     // **完整的调用形态**,不是裸的 "pos - 1" —— 后者在无关的地方
@@ -1040,6 +1061,103 @@ static void test_mainwindow_frame_selector_maps_through_framesOf() {
           "(实测没有任何行为测试会发现:mainwindow.cpp 不在测试目标里)");
 }
 
+// ============================================================
+// 用例:帧接线的**行为**测试(不只是 lint)
+// ============================================================
+//
+// 上面那两条 lint 守的是"mainwindow.cpp 里有没有这么写"。
+// 它们挡不住"换个等价写法"—— 这是 lint 的固有上限,注释里写清楚了。
+//
+// 2026-10-20:帧循环里"记一笔"和"序号→帧号换算"抽到了
+// frame_record.h,于是这两件事**本身**可以被行为测试覆盖 ——
+// 不再只能读源码。
+//
+// 变异 M4(把"每帧都记"改回"只记最后一帧")现在会让
+// 下面第 2 条断言**立刻变红**,而不是像以前那样 12/12 全绿。
+//
+// ------------------------------------------------------------
+static void test_frame_record_behaviour() {
+    beginCase("帧接线:每帧都记 + 序号→帧号换算(行为测试)");
+
+    // --- 1. shouldCacheFrame:每一帧都要记 ---
+    //
+    // 变异 M4 把它改回 "frame == totalFrames - 1" 时,这一条立刻变红。
+    bool allCached = true;
+    for (int f = 0; f < 30; ++f) {
+        if (!w7::shouldCacheFrame(f, 30)) allCached = false;
+    }
+    check(allCached,
+          "30 帧里每一帧都判为\"要记\"(不是只记最后一帧 —— "
+          "只记末帧的话,第 7 帧判 FAIL 而末帧 PASS 时,"
+          "\"回看\"这个查错入口反而掩盖了要查的那一帧)");
+
+    // --- 2. recordFrameResult:真的驱动它跑 30 帧 ---
+    StepFrameCache cache;
+    const QString node = "bbbbbbbb-0000-0000-0000-00000000000f";
+    for (int f = 0; f < 30; ++f) {
+        QJsonObject out;
+        out["value"] = f;
+        out["image_path"] = QString("images/x_f%1.png").arg(f);
+        w7::recordFrameResult(&cache, node, f, out, QString("第 1 步"));
+    }
+
+    const QList<int> ks = cache.framesOf(node);
+    check(ks.size() == 30,
+          QString("跑完 30 帧,缓存里应该有 30 帧(实际 %1)")
+              .arg(ks.size()));
+
+    // 每一帧的**数字**都必须还在(数字全帧留,图才只留最近 N 帧)。
+    int missing = 0, wrongValue = 0;
+    for (int f = 0; f < 30; ++f) {
+        if (!cache.hasFrame(node, f)) { ++missing; continue; }
+        const StepFrameResult r = cache.at(node, f);
+        if (r.output.value("value").toInt(-1) != f) ++wrongValue;
+    }
+    check(missing == 0,
+          QString("30 帧的数字一个都不能少(少了 %1 帧)—— "
+                  "用户在右键里看不到的那一帧,就是查不出来的那一帧")
+              .arg(missing));
+    check(wrongValue == 0,
+          QString("每一帧存的数字要和它自己的帧号对得上(错了 %1 帧)")
+              .arg(wrongValue));
+
+    // --- 3. frameNumberForPosition:序号 ≠ 帧号 ---
+    //
+    // 关键场景:**丢过帧之后**。缓存满了会丢最早的帧,
+    // 于是剩下的帧号是 1,2,3,... 这时"第 1 个"对应真实帧 1,不是 0。
+    // 拿 pos-1 当帧号用,平时(没丢帧)看不出问题,炸了才错。
+    QList<int> frames{0, 1, 2};
+    check(w7::frameNumberForPosition(frames, 1) == 0,
+          "没丢帧时:序号 1 -> 真实帧 0");
+    check(w7::frameNumberForPosition(frames, 3) == 2,
+          "没丢帧时:序号 3 -> 真实帧 2");
+
+    // 丢过帧:真实帧号是 7,8,9
+    QList<int> gapped{7, 8, 9};
+    check(w7::frameNumberForPosition(gapped, 1) == 7,
+          "丢过帧时:序号 1 -> 真实帧 7(不是 0 —— 帧 0 已经被丢掉了)");
+    check(w7::frameNumberForPosition(gapped, 3) == 9,
+          "丢过帧时:序号 3 -> 真实帧 9(不是 2)");
+
+    // 越界
+    check(w7::frameNumberForPosition(gapped, 0) == -1,
+          "序号 0 -> 越界(-1),不猜");
+    check(w7::frameNumberForPosition(gapped, -3) == -1,
+          "负序号 -> 越界(-1),不猜");
+    check(w7::frameNumberForPosition(gapped, 4) == -1,
+          "序号超出缓存帧数 -> 越界(-1),不猜");
+    check(w7::frameNumberForPosition(QList<int>{}, 1) == -1,
+          "没有帧 -> 越界(-1),不猜");
+
+    // --- 4. 空输入不能崩 ---
+    // 调用点在帧循环里,每一帧都要走一遍 —— 这里抛异常就会带崩整次 Run。
+    int dropped = w7::recordFrameResult(nullptr, node, 0, QJsonObject{}, QString());
+    check(dropped == 0, "cache 为空时不崩、返回 0");
+    dropped = w7::recordFrameResult(&cache, QString(), 0, QJsonObject{}, QString());
+    check(dropped == 0, "nodeId 为空时不崩、返回 0");
+}
+
+// ------------------------------------------------------------
 int main(int argc, char* argv[]) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     SetConsoleOutputCP(CP_UTF8);
@@ -1069,6 +1187,7 @@ int main(int argc, char* argv[]) {
     test_primary_image_path_priority();
     test_cache_frame_cap_reports();
     test_frame_selector_positions();
+    test_frame_record_behaviour();
     test_mainwindow_records_every_frame();
     test_mainwindow_frame_selector_maps_through_framesOf();
 
