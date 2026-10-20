@@ -686,13 +686,34 @@ static void test_run_report() {
     }
 
     // --- 跳过的必须逐条有原因 ---
+    //
+    // ⚠ 这里**自己造**一张 inspect 叠加图,而不是指望仓库 images/ 里正好有一张。
+    //
+    // 以前这条断言是"images/ 里躺着 w6_inspect_*.png(inspect 的旧产物),
+    // 所以 report 会跳过它" —— 它断言的是**仓库里恰好有的脏东西**。
+    // 2026-10-20 把 inspect 的产物从 images/ 搬到 out/ 之后,这条断言就红了:
+    // 它红的不是判据变了,是**它依赖的那个偶然没了**。
+    //
+    // 依赖"仓库里正好有脏文件"的断言本身就是脆的:哪天有人清理了 images/,
+    // 测试就红,而代码一行没改。行为要测,就用测试自己造的输入去测。
     {
-        check(!rep.skipped.empty(), "有图被跳过(inspect 生成的叠加图)");
-        for (const auto& s : rep.skipped) {
-            check(!s.file.empty(), "跳过项要说明是哪张图");
-            check(!s.reason.empty(),
-                  "跳过项 " + s.file + " 必须给原因(不能一声不吭)");
-        }
+        const fs::path overlay =
+            fs::current_path() / "w6_cli_test_tmp" / "overlay";
+        fs::create_directories(overlay);
+        cv::Mat blank(120, 160, CV_8UC3, cv::Scalar(40, 90, 40));
+        writePng(overlay / "w6_inspect_probe.png", blank);
+
+        const w6::ReportResult o =
+            w6::runReport(overlay, g_recipes.string(), false);
+        check(o.skipCount == 1,
+              "inspect 的叠加图被跳过,没被当成板子判(实际跳过 " +
+              std::to_string(o.skipCount) + " 张)");
+        check(o.rows.empty(), "叠加图不产出任何行");
+        check(!o.skipped.empty() &&
+                  o.skipped[0].file.find("w6_inspect_probe") != std::string::npos,
+              "跳过项写明是哪张图");
+        check(!o.skipped.empty() && !o.skipped[0].reason.empty(),
+              "跳过项必须给原因(不能一声不吭)");
     }
 
     // --- 一个都不许漏:每张 PNG 要么被判、要么被报为跳过 ---

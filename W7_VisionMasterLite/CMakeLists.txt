@@ -47,6 +47,12 @@ set(CMAKE_AUTOUIC ON)
 #   配方和图都只存在于源码树一处,这里只是拷一份给测试用。
 # 暂存由文件末尾的 w7_test_data 目标完成,**每次构建都重拷** ——
 # 理由见那个目标的注释(POST_BUILD 会留下陈旧数据)。
+#
+# ⚠ "只存在于源码树一处"这句话,以前**对图是假的**:
+#   W7_VisionMasterLite/images/ 里躺着 demo 板的另一份拷贝,
+#   和 W6_PCB_DefectProject/images/ 一模一样 —— 那是生成器真正住的地方。
+#   两份都进 git,改动只发生在 W6 那份上,W7 那份就静悄悄地停在原地。
+#   2026-10-20 把 W7 那份删了:图只有一份,在生成器那里。
 # ============================================================
 
 # 套件名累积(给末尾的暂存目标用)
@@ -383,7 +389,7 @@ add_custom_command(TARGET w7_vm_lite POST_BUILD
 
 add_custom_command(TARGET w7_vm_lite POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/images
+        ${CMAKE_SOURCE_DIR}/../W6_PCB_DefectProject/images
         $<TARGET_FILE_DIR:w7_vm_lite>/images
     COMMENT "Copying test images to output directory"
 )
@@ -930,13 +936,19 @@ foreach(_suite IN LISTS W7_TEST_SUITES)
         # 板型配方(pcb_inspect 按相对路径 "recipes/xxx.json" 读)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${CMAKE_SOURCE_DIR}/recipes" "${_d}/recipes"
-        # demo 板的测试图(顺便给测试一个能写的 images/ 目录)
+        # 测试图:**唯一来源是 W6 的 images/**(那边才是生成器所在地)。
+        # 一次拷全 —— complex/ 三块板本来就在这个目录下面,不用再单独拷一次。
+        #
+        # ⚠ 2026-10-20 之前这里拷的是 "${CMAKE_SOURCE_DIR}/images",
+        #   也就是 W7 自己那份**副本**。那份副本停在 2026-09-14:
+        #   W6 那边重画了短路缺陷图、改了配方,W7 的测试拿到的还是**旧图**,
+        #   旧图判出来的结论"照样自洽" —— 没人知道数据根本没跟上。
+        #   判据变了而数据没变,现象和"判据写错了"一模一样,
+        #   这就是最贵的那类 bug:看起来是代码问题,其实是数据问题。
+        #
+        # 所以这里只允许有一份图,生成器说在哪就在哪。
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CMAKE_SOURCE_DIR}/images" "${_d}/images"
-        # complex 三块板的图(数据在 W6 那边 —— 那边才是生成器所在地)
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CMAKE_SOURCE_DIR}/../W6_PCB_DefectProject/images/complex"
-                "${_d}/images/complex")
+                "${CMAKE_SOURCE_DIR}/../W6_PCB_DefectProject/images" "${_d}/images")
 endforeach()
 
 add_custom_target(w7_test_data ALL ${_stage_cmds}

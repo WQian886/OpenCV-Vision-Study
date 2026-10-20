@@ -364,6 +364,12 @@ ReportResult runReport(const fs::path& dir, const std::string& recipeDir,
         const std::string name = pathText(e.path().filename());
 
         // 过滤掉 inspect 生成的 marked 图(带叠加层,会污染检测)
+        //
+        // ⚠ 这条规则现在是**兜底**,不是主力:
+        //   inspect 的标注图从 2026-10-20 起写进 out/ 了,不再落 images/。
+        //   但老目录里可能还留着以前写在这儿的 w6_inspect_*.png ——
+        //   那些图带着叠加层,当板子扫会得出莫名其妙的结论。
+        //   留着这条,老目录扫出来的结果还是对的。
         if (name.rfind("w6_inspect_", 0) == 0) {
             res.skipped.push_back({rel, "inspect 生成的叠加标注图,不是待检样本"});
             ++res.skipCount;

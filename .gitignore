@@ -57,12 +57,13 @@ Thumbs.db
 desktop.ini
 
 # ===== W6 标记图 / 运行输出 =====
-images/*_marked*.png
-images/w6_inspect_*.png
-images/w7_*.png
-# gitignore 里带 "/" 的模式是锚定到 .gitignore 所在目录的,
-# 上面那条管不到 W7_VisionMasterLite/images/ 下的算子输出图。
-# **/ 才能匹配任意层级。
+# ⚠ pattern 里**带 /** 的,git 是**锚定到 .gitignore 所在目录**的:
+#   `images/w6_inspect_*.png` 只管得住仓库根的 images/,管不住
+#   W6_PCB_DefectProject/images/ —— 规则看着有,其实一直没生效
+#   (那几个文件就是被它"漏"进来,才进了 git 的)。
+#   要管任意层级,前面得写 **/。
+**/images/*_marked*.png
+**/images/w6_inspect_*.png
 **/images/w7_*.png
 # ⚠ 这里**不再**有 _test_src.avi / _srcframe_*.png 的规则。
 #   以前有 —— 因为测试把它们写进了源码树,只能靠 ignore 藏起来。
@@ -71,9 +72,9 @@ images/w7_*.png
 #   CMakeLists),源码树不再被污染,所以规则直接删掉。
 #   万一哪天又有人往源码树里写,git status 会**当场报出来** ——
 #   这比"藏起来"有用得多。
-images/complex/marked*.png
-report/*.csv
-report/*.log
+**/images/complex/marked*.png
+**/report/*.csv
+**/report/*.log
 
 # ===== W7 marked 图（运行时生成） =====
 build/w7_*.png

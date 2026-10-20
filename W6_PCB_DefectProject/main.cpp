@@ -173,8 +173,17 @@ static void runInspect(int argc, char** argv, const Options& opt) {
     }
     std::cout << "  " << (br.pass ? "✅ PASS" : "❌ FAIL") << "\n";
 
-    const std::string outPath = "images/w6_inspect_marked.png";
-    fs::create_directories("images");
+    // 标注图落 out/,**不落 images/**。
+    //
+    // images/ 是**待检样本目录** —— report 会把里面每一张 .png 都当板子扫。
+    // 标注图写在那儿,等于把自己的产物混进下一批样本里,
+    // 于是 w6_cli.cpp 那边得专门加一条"跳过 w6_inspect_*"的过滤规则兜着 ——
+    // 那条规则本身就是"输入目录和输出目录混用"留下的疤。
+    //
+    // out/ 是本项目早就定下的产物目录(OCR 中间产物也在那儿,见 README)。
+    // 目录分开了,疤也就不用再靠规则去遮。
+    const std::string outPath = "out/w6_inspect_marked.png";
+    fs::create_directories("out");
     cv::imwrite(outPath, br.marked);
     std::cout << "  标注图已保存: " << outPath << "\n";
 
