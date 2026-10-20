@@ -14,6 +14,11 @@
 #include <algorithm>
 #include <cmath>
 
+// 共享判定核心不带 Qt。`using namespace pcbcore;` 之后,
+// 原来写的 `pcbcolor::estimateBoardBase(...)` 照常解析 ——
+// 那边也是 pcbcore::pcbcolor。
+using namespace pcbcore;
+
 namespace w7 {
 
 // ============================================================
@@ -278,57 +283,47 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
     } else {
         // --- 真值模式:按配方构造 ROI(W6 已验证路径) ---
         //
-        // 站点几何按图像尺寸等比缩放。**基准从固定的 1000x700 换成了
-        // 配方自己的 ref_w/ref_h** —— 换板型时基准也跟着换,
-        // 否则一块 1200x900 的板会拿 1000x700 的坐标去切,全错。
+        // 站点几何、body_pct、gold_pct 的算法**全部在共享核心里**
+        // (common/pcb_core)—— W6 命令行也要用同一份。
+        // 这里只负责把核心的结果搬回 QJson。
         //
-        // 余量取**较小**的那个缩放比:ROI 撑大只会稀释下游的比例阈值,
-        // 留窄一点最多是贴边,不会把元件切掉 —— 宁可保守。
-        const double sx = static_cast<double>(img.cols) / recipe.refW;
-        const double sy = static_cast<double>(img.rows) / recipe.refH;
-        const int buf = std::max(1, static_cast<int>(
-            std::lround(recipe.buffer * std::min(sx, sy))));
+        // ⚠ 2026-10-20:原来这段是本文件里自己的实现,和核心那份是
+        //   同一套算法的两份拷贝。两边改一处忘一处,定位和判定就会
+        //   对不上 —— 而两边都在动的时候,没人会怀疑它们本来应该一样。
+        const pcbcore::InspectResult ir =
+            pcbcore::inspect(img, toCoreRecipe(recipe), band);
+        // 核心算出来的金层掩膜 / 板面基色 / 标注图,和本文件自己算的
+        // 是同一份定义(共用 pcb_color_ref.h)。以核心那份为准。
+        //
+        // boardBase 不赋值:上面那个 const 变量就是
+        // pcbcolor::estimateBoardBase(img),而核心算的是**同一个函数、
+        // 同一张图**,值必然相同 —— 赋一次反而是"两处各自算一遍"。
+        goldMask  = ir.goldMask;
+        marked    = ir.marked;
 
-        // 站点被丢掉的要记账。以前是"越界就 continue",于是
-        // 上游少给几个元件,下游照样报 PASS,没人知道少算了。
-        QStringList skipped;
-        // 本体检测:每个站点的框里到底有没有东西。见下面那道闸。
-        int sitesWithBody = 0;
-
-        for (const auto& s : recipe.sites) {
-            const int cx = static_cast<int>(std::lround(s.cx * sx));
-            const int cy = static_cast<int>(std::lround(s.cy * sy));
-            const int bw = static_cast<int>(std::lround(s.bodyW * sx));
-            const int bh = static_cast<int>(std::lround(s.bodyH * sy));
-            cv::Rect roi(cx - bw / 2 - buf, cy - bh / 2 - buf,
-                         bw + 2 * buf, bh + 2 * buf);
-            // ROI 与图像边界求交,换分辨率也不会越界
-            roi &= cv::Rect(0, 0, img.cols, img.rows);
-            if (roi.width <= 0 || roi.height <= 0) {
-                skipped << s.label;
-                continue;
-            }
-
+        for (const auto& s : ir.sites) {
             QJsonObject cj;
-            cj["label"] = s.label;
-            cj["kind"]  = s.kind;
-            cj["x"]     = roi.x;
-            cj["y"]     = roi.y;
-            cj["w"]     = roi.width;
-            cj["h"]     = roi.height;
-            // 这一行是这次改动的核心:判定规则随元件一起下发。
+            cj["label"] = QString::fromUtf8(s.label.c_str());
+            cj["kind"]  = QString::fromUtf8(s.kind.c_str());
+            cj["x"]     = s.roi.x;
+            cj["y"]     = s.roi.y;
+            cj["w"]     = s.roi.width;
+            cj["h"]     = s.roi.height;
+            // 判定规则随元件一起下发。
             //
             // 以前规则写死在判定算子里(`if (label == "R2")`),
             // 于是换块板那七处一条都匹配不上。现在由配方决定,
             // 判定算子只认这个名字 —— 换板子不改代码。
             QJsonArray checks;
-            for (const QString& c : s.checks) checks.append(c);
+            for (const auto& c : s.checks) {
+                checks.append(QString::fromUtf8(c.c_str()));
+            }
             cj["checks"] = checks;
             // 偏移容差按封装给(配方里可省,省了用算子默认)。
             // 写死成一个数等于"所有元件一样灵":小电阻挪 20px 可能
             // 还没出框,QFP64 挪 20px 就是大事。
-            if (s.hasShiftTol()) cj["shift_tol_pct"] = s.shiftTolPct;
-            // ROI 内的金像素数。⚠ 这个字段**曾经是死的**:
+            if (s.hasShiftTol) cj["shift_tol_pct"] = s.shiftTolPct;
+            // ROI 内的金像素**占比**。⚠ 这个字段**曾经是死的**:
             // 写了但全仓库没有任何消费者(2026-10-09 实测 grep),
             // 而它恰好是唯一能暴露"定位算子与判定算子的金层掩膜已经
             // 漂开"的字段 —— 判据那边早改成相对 V 下界了,这边的绝对
@@ -336,51 +331,18 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
             //
             // 现在给的是**占 ROI 面积的比例**,和下游所有阈值同一量纲;
             // 像素数留着只会被误当成能跨分辨率用的数。
-            cj["gold_pct"] = 100.0 * cv::countNonZero(goldMask(roi))
-                           / (roi.width * roi.height);
-
-            // --- 这道闸:这份配方跟这张图是一块板吗? ---
-            //
-            // 框里**完全**是板面基色 = 这个站点上没有元件。
-            // 一块板上一个都找不到,只可能是配方配错了图。
-            //
-            // 以前没有这道闸,实测后果(2026-10-09,三块好板):
-            //   16 个站点全空 -> 下游 16 条 "missing" -> 很自信地判废,
-            //   而废板报的是同样的 missing,两者**逐字相同**。
-            //   程序错了,但表现得像在正常工作。
-            //
-            // 判据用"与板面基色的距离",不写死像素差 —— 后者就是
-            // 我们这个项目反复踩的绝对值坑:换个亮度/材质就整片失效。
-            const cv::Vec3b bb = boardBase;
-            int nonBoard = 0;
-            for (int y = roi.y; y < roi.y + roi.height; ++y) {
-                const cv::Vec3b* row = img.ptr<cv::Vec3b>(y);
-                for (int x = roi.x; x < roi.x + roi.width; ++x) {
-                    const cv::Vec3b& p = row[x];
-                    if (std::abs(p[0] - bb[0]) > 12 ||
-                        std::abs(p[1] - bb[1]) > 12 ||
-                        std::abs(p[2] - bb[2]) > 12) {
-                        ++nonBoard;
-                    }
-                }
-            }
-            const double bodyPct = 100.0 * nonBoard
-                                  / (roi.width * roi.height);
-            cj["body_pct"] = bodyPct;
-            // 1% 是保守取值:真元件再怎么小,本体也远不止占框内 1%。
-            // 定高了会把"元件被整体擦掉"的真缺陷也当成"配方不匹配",
-            // 那就变成漏检了 —— 两边都要顾。
-            if (bodyPct >= 1.0) ++sitesWithBody;
-
+            cj["gold_pct"] = s.goldPct;
+            // 框里"非板面基色"像素占比。缺件判据(彩色本体)读的就是它。
+            cj["body_pct"] = s.bodyPct;
             compsJson.append(cj);
-
-            cv::rectangle(marked, roi, cv::Scalar(0, 220, 0), 2);
-            cv::putText(marked,
-                        QString("%1(%2)").arg(s.label, s.kind).toStdString(),
-                        cv::Point(roi.x, std::max(12, roi.y - 4)),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                        cv::Scalar(0, 220, 0), 1);
         }
+
+        // 站点被丢掉的要记账。以前是"越界就 continue",于是
+        // 上游少给几个元件,下游照样报 PASS,没人知道少算了。
+        QStringList skipped;
+        for (const auto& s : ir.skippedSites) skipped << QString::fromUtf8(s.c_str());
+        // 本体检测:每个站点的框里到底有没有东西。见下面那道闸。
+        const int sitesWithBody = ir.sitesWithBody;
 
         if (!skipped.isEmpty()) {
             output["warning"] = QString(

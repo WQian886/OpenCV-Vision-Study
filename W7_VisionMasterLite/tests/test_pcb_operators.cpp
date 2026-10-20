@@ -44,9 +44,34 @@
 
 #include "operators/pcb_inspect.h"
 #include "operators/pcb_defect_judge.h"
-#include "operators/pcb_color_ref.h"
+
+// ⚠ 颜色判据搬到共享核心了(common/pcb_core/pcb_color_ref.h),
+//   命名空间 w7::pcbcolor -> pcbcore::pcbcolor。
+//   这里 include 的是**核心里那一份**,路径靠 w7_pcb_core 的 PUBLIC
+//   include 目录解析 —— 不要再 include "operators/pcb_color_ref.h",
+//   那个文件已经不存在了。
+//
+//   ⚠ 下面那行 using 是**为了让下面的 pcbcolor:: 写法一个字都不用改** ——
+//   抄副本的另一种形式是"连调用点一起抄一遍",那才是真的漂开。
+#include "pcb_color_ref.h"
 
 using namespace w7;
+using namespace pcbcore;
+
+// ============================================================
+// 复杂板样本目录
+//
+// ⚠ 这里原来写的是绝对路径 "E:/qianwie/00study/OpenCV/W6_PCB_DefectProject/
+//   images/complex/",6 处。写死盘符的问题不是"难看",是**仓库一挪位置就断** ——
+//   而且断的方式很阴:路径拼不出来,断言照样报"通过"(读不到图不等于
+//   判据不成立),整套复杂板用例变成空转,测试全绿。
+//
+// 这个仓库其它测试一律用相对路径("images/xxx.png"),基准是 ctest 给的
+// WORKING_DIRECTORY = W7_VisionMasterLite/。这里跟着同一套约定:
+//   ../W6_PCB_DefectProject/images/complex/
+// 仓库整体搬到哪,这个相对关系都成立。
+// ============================================================
+static const char* kComplexDir = "../W6_PCB_DefectProject/images/complex/";
 
 // ============================================================
 // 极简断言(与 test_undo_redo.cpp 保持同一套风格)
@@ -1245,8 +1270,7 @@ static void test_board_switch_good_boards_clean() {
         {"signal.json", "signal_baseline.png", 18},
     };
     for (const auto& g : goods) {
-        const QString dir =
-            "E:/qianwie/00study/OpenCV/W6_PCB_DefectProject/images/complex/";
+        const QString dir = kComplexDir;
         RunResult r = runBoard(QString::fromUtf8(g.recipe), dir + QString::fromUtf8(g.file));
         const QString who = QString::fromUtf8(g.file);
         check(!r.inspectOut.contains("error"),
@@ -1305,8 +1329,7 @@ static void test_board_switch_defect_boards() {
          "而好板 power D1 在 41.84% —— 双边化所需的容差区间(8.16, 20.13)无解"},
     };
     for (const auto& b : bads) {
-        const QString dir =
-            "E:/qianwie/00study/OpenCV/W6_PCB_DefectProject/images/complex/";
+        const QString dir = kComplexDir;
         RunResult r = runBoard(QString::fromUtf8(b.recipe), dir + QString::fromUtf8(b.file));
         const QString who = QString::fromUtf8(b.file);
         const QString got = r.judgeOut.value("result").toString("无结论");
@@ -1352,8 +1375,7 @@ static void test_board_switch_defect_boards() {
 //      gold_px 和 body_pct 都是这么潜伏了很久的。
 // ============================================================
 static void test_cap_missing_uses_body_pct() {
-    const QString dir =
-        "E:/qianwie/00study/OpenCV/W6_PCB_DefectProject/images/complex/";
+    const QString dir = kComplexDir;
 
     // 从 metrics 里取出某个站点某条规则的读数;找不到返回 NaN。
     auto metricOf = [](const QJsonObject& judgeOut, const QString& label,
@@ -1522,8 +1544,8 @@ static void test_skipped_rules_are_reported() {
 
     for (const auto& im : imgs) {
         const QString dir = im.complex
-            ? QString("E:/qianwie/00study/OpenCV/W6_PCB_DefectProject/images/complex/")
-            : QString("E:/qianwie/00study/OpenCV/W7_VisionMasterLite/images/");
+            ? QString::fromUtf8(kComplexDir)
+            : QString("images/");
         RunResult r = runBoard(QString::fromUtf8(im.recipe),
                                dir + QString::fromUtf8(im.file));
         const QString who = QString::fromUtf8(im.file);
@@ -1593,8 +1615,7 @@ static void test_skipped_rules_are_reported() {
 
     // ---- 具体数字:哪块板、哪个站点的哪条规则没跑(量出来的,不是推的) ----
     {
-        const QString dir =
-            "E:/qianwie/00study/OpenCV/W6_PCB_DefectProject/images/complex/";
+        const QString dir = kComplexDir;
         struct Expect { const char* recipe; const char* file; const char* keys; };
         const Expect exp[] = {
             {"demo.json",   "baseline.png",        ""},

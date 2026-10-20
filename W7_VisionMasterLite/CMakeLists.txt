@@ -68,6 +68,79 @@ else()
     message(STATUS "⚠️  ONNX Runtime 未找到 (找过 ${_ort_root}) — dl_infer 编译为空实现")
 endif()
 
+# ============================================================
+# === 共享判定核心 (common/pcb_core)
+#
+# PCB 判定的真值(板型配方、颜色判据、逐条规则)在 common/pcb_core/ 下,
+# W6(命令行)和 W7(算子)**共用同一份**。
+#
+# 为什么要共用:W6 那边原本是 `if (label == "R2")` 七处硬编码,
+# 换块板规则全空转 —— 三块好板全被判废、两块废板输出与好板逐字相同。
+# W7 这边把规则改成配方驱动 + 逐条标定,花了不少功夫。
+# 也就是说能力在 W7、数据在 W6,而 W6 自己用不上。
+#
+# 硬把 W7 的算法抄一份到 W6,就是本项目栽过四遍的"抄副本" ——
+# 抄出来的那份会随 W7 的标定一起漂,漂了没人知道。
+#
+# 这一层刻意不依赖 Qt:W6 不引 Qt,引了就是给一个学习项目加依赖;
+# W7 的算子只做一层薄适配(QJsonObject <-> 纯 C++ 结构体)。
+# ============================================================
+set(PCB_CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../common/pcb_core")
+
+add_library(w7_pcb_core STATIC
+    ${PCB_CORE_DIR}/pcb_core.cpp
+    ${PCB_CORE_DIR}/mini_json.cpp
+)
+
+target_include_directories(w7_pcb_core PUBLIC
+    ${PCB_CORE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w7_pcb_core PUBLIC ${OpenCV_LIBS})
+
+if(MSVC)
+    target_compile_options(w7_pcb_core PRIVATE /utf-8)
+endif()
+
+# ------------------------------------------------------------
+# 共享核心**自己**的测试
+#
+# 为什么单独有一个套件:
+#   ① mini_json 是新写的 200 行 JSON 解析器,写它的时候一行测试都没有。
+#      解析器"静默解析错"的代价特别大:配方被解析成半个样子 ->
+#      判定输出"零缺陷 PASS" -> 废板判合格,整条链上**没有一处会报错**。
+#   ② parseRecipeJson 的 6 类错误分支(缺字段 / 位号重复 / 规则名拼错 ...)
+#      W7 原来那份 board_recipe.cpp 里也有,但同样没被测过 ——
+#      现有套件只走 happy path。
+#
+# ⚠ 这个套件**不依赖 Qt**:共享核心本身就不依赖 Qt,测试要能证明
+#   "核心能脱离 Qt 单独用"(这正是 W6 的用法)。
+#   所以这里用普通的 add_executable,不是 qt_add_executable。
+# ------------------------------------------------------------
+add_executable(w7_core_test
+    ${PCB_CORE_DIR}/tests/test_pcb_core.cpp
+)
+
+target_include_directories(w7_core_test PRIVATE ${PCB_CORE_DIR})
+
+target_link_libraries(w7_core_test PRIVATE ${OpenCV_LIBS} w7_pcb_core)
+
+if(MSVC)
+    target_compile_options(w7_core_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_core_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        D:/opencv-src/build/install/bin
+        $<TARGET_FILE_DIR:w7_core_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+# 不给 WORKING_DIRECTORY:测试自己从当前目录往上找仓库根
+# (它会被链进 W6 和 W7 两个目标,两个目标的 ctest 工作目录不同)。
+add_test(NAME pcb_core COMMAND w7_core_test)
+
 # === 源码 ===
 set(SOURCES
     main.cpp
@@ -157,6 +230,7 @@ target_include_directories(w7_vm_lite PRIVATE
 target_link_libraries(w7_vm_lite PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets
     ${OpenCV_LIBS}
+    w7_pcb_core
 )
 
 if(MSVC)
@@ -258,6 +332,7 @@ target_include_directories(w7_pcb_test PRIVATE
 target_link_libraries(w7_pcb_test PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets
     ${OpenCV_LIBS}
+    w7_pcb_core
 )
 
 if(MSVC)

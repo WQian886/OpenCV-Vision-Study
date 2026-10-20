@@ -2,6 +2,18 @@
 // 颜色判据去绝对化 —— 相对板面基色的那套量,只保留一份定义
 // ============================================================
 //
+// 📁 这个文件原来在 W7_VisionMasterLite/operators/ 下,2026-10-20
+//    移到 common/pcb_core/ —— 因为 W6 也要用同一份颜色判据。
+//
+//    理由和 pcb_core.h 一样:两边各写一份颜色判据,改一处忘一处,
+//    判据就会悄悄漂开(这个项目已经栽过四遍)。
+//    它本来就是无 Qt 依赖的纯 OpenCV 头文件,搬过来零成本。
+//
+//    命名空间从 w7 改成 pcbcore —— 它不再是"W7 专属"的了。
+//    W7 里原来写 `pcbcolor::isDark(...)` 的地方不用改:
+//    那些文件里加了 `using namespace pcbcore;`,`pcbcolor::` 照常解析。
+// ============================================================
+//
 // 为什么要有这个文件:pcb_defect_judge 里原本有四处 inRange 写着
 // 写死的颜色(RGB<=60 / (150,150,0)~(255,255,80) / >=200 ...)。
 // 光照一变这些数就全废,而每一处都得单独重新标定 —— 这个项目里
@@ -45,7 +57,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace w7 {
+namespace pcbcore {
 namespace pcbcolor {
 
 // 错色判据的倍数。**不是**原来那个 1.8 —— 表11 实测的二维扫描:
@@ -94,14 +106,14 @@ inline constexpr double kNeutralMax    = 1.15;  // 中性度 max/min,越接近 1
 
 // 像素的 V(HSV 里的 V):max(R,G,B)
 inline int valOf(const cv::Vec3b& p) {
-    return std::max(int(p[0]), std::max(int(p[1]), int(p[2])));
+    return (std::max)(int(p[0]), (std::max)(int(p[1]), int(p[2])));
 }
 
 // 中性度 = max通道 / min通道。接近 1 = 灰白,远大于 1 = 有彩色。
 // min 为 0 时返回极大值(明确判成"有彩色"),不去做 0 除法。
 inline double neutralness(const cv::Vec3b& p) {
     const int mx = valOf(p);
-    const int mn = std::min(int(p[0]), std::min(int(p[1]), int(p[2])));
+    const int mn = (std::min)(int(p[0]), (std::min)(int(p[1]), int(p[2])));
     if (mn <= 0) return 1e9;
     return double(mx) / double(mn);
 }
@@ -153,16 +165,16 @@ inline cv::Vec3b estimateBoardBase(const cv::Mat& img) {
 // missing / shifted 用:本体够不够暗
 inline bool isDark(const cv::Vec3b& p, const cv::Vec3b& base,
                    double mul = kDarkMul) {
-    return double(valOf(p)) < mul * double(std::max(1, valOf(base)));
+    return double(valOf(p)) < mul * double((std::max)(1, valOf(base)));
 }
 
 // polarity 用:够亮,而且近中性(丝印白)
 inline bool isWhiteSilk(const cv::Vec3b& p, const cv::Vec3b& base,
                         double brightMul = kBrightMul,
                         double neutralMax = kNeutralMax) {
-    const int vb = std::max(1, valOf(base));
+    const int vb = (std::max)(1, valOf(base));
     return double(valOf(p)) >= brightMul * double(vb)
-        && neutralness(p) <= std::max(kNeutralFloor, neutralMax);
+        && neutralness(p) <= (std::max)(kNeutralFloor, neutralMax);
 }
 
 // wrong 用:错色件 —— 蓝、绿都远超板面,红远低于板面。
@@ -170,9 +182,9 @@ inline bool isWhiteSilk(const cv::Vec3b& p, const cv::Vec3b& base,
 inline bool isOffColor(const cv::Vec3b& p, const cv::Vec3b& base,
                        double mul = kOffColorMul,
                        double rMax = kOffColorRMax) {
-    const double rb = std::max(1.0, double(base[0]));
-    const double gb = std::max(1.0, double(base[1]));
-    const double bb = std::max(1.0, double(base[2]));
+    const double rb = (std::max)(1.0, double(base[0]));
+    const double gb = (std::max)(1.0, double(base[1]));
+    const double bb = (std::max)(1.0, double(base[2]));
     return double(p[0]) >= mul * bb
         && double(p[1]) >= mul * gb
         && double(p[2]) <= rMax * rb;
@@ -191,14 +203,14 @@ inline bool isOffColor(const cv::Vec3b& p, const cv::Vec3b& base,
 // 实际上守卫还按 1.6 在算,新阈值早就撞墙了。这是一处会静默失效的不一致。
 inline bool ceilingBreached(const cv::Vec3b& base,
                             double mul = kOffColorMul) {
-    const double mx = std::max({double(base[0]), double(base[1]), double(base[2]), 1.0});
+    const double mx = (std::max)({double(base[0]), double(base[1]), double(base[2]), 1.0});
     return mul * mx > 255.0;
 }
 
 // 越线时能报出多少 —— 给人看的,不是给机器判的。
 inline double ceilingHeadroomK(const cv::Vec3b& base,
                                double mul = kOffColorMul) {
-    const double mx = std::max({double(base[0]), double(base[1]), double(base[2]), 1.0});
+    const double mx = (std::max)({double(base[0]), double(base[1]), double(base[2]), 1.0});
     return 255.0 / (mul * mx);
 }
 
@@ -222,8 +234,8 @@ inline double ceilingHeadroomK(const cv::Vec3b& base,
 inline constexpr double kMaskVMul = 0.8;
 
 inline uchar maskVLower(const cv::Vec3b& base, double mul = kMaskVMul) {
-    const double v = mul * double(std::max(1, valOf(base)));
-    return static_cast<uchar>(std::min(255.0, std::max(0.0, v)));
+    const double v = mul * double((std::max)(1, valOf(base)));
+    return static_cast<uchar>((std::min)(255.0, (std::max)(0.0, v)));
 }
 
 // ---------- HSV 掩膜本体 ----------
@@ -272,7 +284,7 @@ inline cv::Mat bandMask(const cv::Mat& hsv, const cv::Vec3b& base,
 // getStructuringElement + morphologyEx。核尺寸跟着图缩放 ——
 // 原来写死 3x3,在 2x 图上等于噪点比原来大一倍,0.5x 上又比原来小一倍。
 inline cv::Mat opened(const cv::Mat& mask, double scale = 1.0) {
-    int n = std::max(1, static_cast<int>(std::lround(3.0 * scale)));
+    int n = (std::max)(1, static_cast<int>(std::lround(3.0 * scale)));
     if (n % 2 == 0) ++n;               // 必须是奇数,才有中心
     cv::Mat k = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(n, n));
     cv::Mat out;
@@ -284,9 +296,9 @@ inline cv::Mat opened(const cv::Mat& mask, double scale = 1.0) {
 // 实测:baseline 1000x700 上 3x3 正好;换分辨率时固定 3x3 会让
 // 噪点过滤的相对强度跟着变(0.5x 变强、2x 变弱)。
 inline double kernelScale(const cv::Mat& img, int refW = 1000, int refH = 700) {
-    return std::min(static_cast<double>(img.cols) / refW,
+    return (std::min)(static_cast<double>(img.cols) / refW,
                     static_cast<double>(img.rows) / refH);
 }
 
 } // namespace pcbcolor
-} // namespace w7
+} // namespace pcbcore

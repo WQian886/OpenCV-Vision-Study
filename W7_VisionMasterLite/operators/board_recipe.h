@@ -35,18 +35,30 @@
 #include <QStringList>
 #include <QVector>
 
+#include "pcb_core.h"
+
 namespace w7 {
 
 // 一条规则的名字。判定算子按这个字符串分派,不再认元件标签。
 // ⚠ 这些字符串是**算子与配方之间的接口**:加一条规则要同时改两边,
 //   所以每个名字都必须真有一条同名分支在跑 —— 见 kKnownChecks。
+//
+// ⚠ 2026-10-20:定义搬到 common/pcb_core/pcb_core.h 去了(那边不依赖 Qt,
+//   W6 也要用同一份)。这里只是**转发**,不重新定义一遍 ——
+//   同一批字符串写两遍,改一边忘一边就是下一次事故。
+//
+//   注意类型是 `const char*` 而不是 `const char[]`:
+//   constexpr 数组**不能**拿另一个 constexpr 数组来初始化
+//   (编译器报 C2131:表达式的计算结果不是常数)。
+//   用指针就只是一个别名,调用方 `QString::fromUtf8(recipe_rule::kMissing)`
+//   的写法一个字都不用改。
 namespace recipe_rule {
-inline constexpr char kMissing[]     = "missing";      // 本体像素过少(疑似被擦除)
-inline constexpr char kShifted[]     = "shifted";      // 本体质心偏离应站中心
-inline constexpr char kWrong[]       = "wrong";        // 本体错色(装错件)
-inline constexpr char kPolarity[]    = "polarity";     // 极性条偏向反了
-inline constexpr char kBridge[]      = "bridge";       // 焊盘间金条连片
-inline constexpr char kInsufficient[]= "insufficient"; // 焊盘面积远低于同侪
+inline constexpr const char* kMissing      = pcbcore::rule::kMissing;
+inline constexpr const char* kShifted      = pcbcore::rule::kShifted;
+inline constexpr const char* kWrong        = pcbcore::rule::kWrong;
+inline constexpr const char* kPolarity     = pcbcore::rule::kPolarity;
+inline constexpr const char* kBridge       = pcbcore::rule::kBridge;
+inline constexpr const char* kInsufficient = pcbcore::rule::kInsufficient;
 } // namespace recipe_rule
 
 // 判定算子真正实现了的规则。配方里出现表以外的规则名 = 拼错了,
@@ -88,5 +100,12 @@ bool loadRecipe(const QString& path, BoardRecipe* out, QString* reason);
 // 目录读不到就返回空列表 —— 这时界面自己构造一个"自定义路径"输入框,
 // 不因为"没有列表"就让算子起不来。
 QStringList listRecipes(const QString& dir = QStringLiteral("recipes"));
+
+// Qt 结构体 -> 共享核心结构体。
+//
+// 只搬数据,不改语义。判据、校验规则全在核心那边。
+// 放在这里是因为**转换也只留一份** —— 转换写两遍,改一边忘一边
+// 同样是抄副本(这个项目栽过四遍)。
+pcbcore::BoardRecipe toCoreRecipe(const BoardRecipe& r);
 
 } // namespace w7
