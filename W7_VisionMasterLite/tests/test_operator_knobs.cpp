@@ -327,6 +327,171 @@ static QString maskDeadLines(const QString& src, const QSet<int>& live) {
 }
 
 // ============================================================
+// 兜底读法:params.value("KEY").toXxx(EXPR)
+// ============================================================
+//
+// EXPR 就是"这个 key 缺了的时候,算子拿哪个值顶上" ——
+// 它是默认值的**第二份**,第一份在 defaultParams() 里。
+//
+// ⚠ 为什么必须跨行找:
+//   pcb_inspect.cpp 写的是
+//       params.value("mode").toString(
+//           QString::fromUtf8(PcbInspectDefaults::kMode));
+//   表达式在下一行。正则写成单行就看不见这条兜底 ——
+//   而"看不见"等于"没检查"。
+//
+// ⚠ 为什么不能简单地"整个 run() 里不许有数字":
+//   run() 里全是算法常量(面积换算、颜色阈值、像素偏移),
+//   那些数字不是默认值,是算法本身。禁掉它们等于把算法也禁了。
+//   所以这里只盯**兜底表达式**那一小段 ——
+//   那一段里的数字,按定义就是"某个旋钮的默认值"。
+// ============================================================
+struct FallbackRead {
+    QString key;      // 读的是哪个旋钮
+    QString expr;     // 兜底值表达式(toXxx 的那个参数)
+};
+
+static QVector<FallbackRead> parseFallbackReads(const QString& body) {
+    QVector<FallbackRead> out;
+    const QRegularExpression re(
+        QStringLiteral("params\\s*\\.\\s*value\\s*\\(\\s*\"([^\"]+)\"\\s*\\)"));
+    auto it = re.globalMatch(body);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        int i = m.capturedEnd();
+        while (i < body.size() && body[i].isSpace()) ++i;   // 换行也算空白
+        if (i >= body.size() || body[i] != QLatin1Char('.')) continue;
+        ++i;
+        const int idStart = i;
+        while (i < body.size() &&
+               (body[i].isLetterOrNumber() || body[i] == QLatin1Char('_'))) ++i;
+        const QString method = body.mid(idStart, i - idStart);
+        if (!method.startsWith(QLatin1String("to"))) continue;  // 不是 toXxx(...)
+        while (i < body.size() && body[i].isSpace()) ++i;
+        if (i >= body.size() || body[i] != QLatin1Char('(')) continue;
+        const int close = matchBracket(body, i, QLatin1Char('('), QLatin1Char(')'));
+        if (close < 0) continue;
+        FallbackRead fr;
+        fr.key = m.captured(1);
+        fr.expr = body.mid(i + 1, close - i - 1).trimmed();
+        out.append(fr);
+    }
+    return out;
+}
+
+// ============================================================
+// 面板初值:setValue(EXPR)
+// ============================================================
+//
+// buildUI() 里每个 setValue(...) 的参数 —— 那是"界面上初值那份"。
+// ============================================================
+static QStringList parseSetValueArgs(const QString& body) {
+    QStringList out;
+    const QRegularExpression re(QStringLiteral("\\bsetValue\\s*\\("));
+    auto it = re.globalMatch(body);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        const int open = m.capturedEnd() - 1;
+        const int close = matchBracket(body, open, QLatin1Char('('), QLatin1Char(')'));
+        if (close < 0) continue;
+        out.append(body.mid(open + 1, close - open - 1).trimmed());
+    }
+    return out;
+}
+
+// ============================================================
+// 表达式里有没有"裸字面量"
+// ============================================================
+//
+// 判据:先把下标和标识符都抹掉,剩下的东西里还有数字/引号 → 有裸字面量。
+//
+// 为什么先抹下标:lo[0] 里的 0 是**下标**,不是值。
+//   当成值来报,审计第一天就会对 color_segment 误报 ——
+//   而一个对自家代码误报的守卫,下一个人只会把它关掉。
+//
+// 为什么先抹标识符:kMinArea、pcbcolor::kMaskVMul 这些是**具名常量**,
+//   它们正是我们要的。裸字面量指的是 0.9 / 85 / "*.png" 这种
+//   手抄的、没有名字的值。
+static QString exprWithoutSubscripts(const QString& expr) {
+    QString t = expr;
+    t.remove(QRegularExpression(QStringLiteral("\\[[^\\]]*\\]")));
+    return t;
+}
+
+static QString exprWithoutIdentifiers(const QString& expr) {
+    QString t = exprWithoutSubscripts(expr);
+    t.remove(QRegularExpression(QStringLiteral("[A-Za-z_][A-Za-z_0-9]*")));
+    return t;
+}
+
+// 裸数字字面量?
+static bool exprHasBareNumber(const QString& expr) {
+    return exprWithoutIdentifiers(expr).contains(QRegularExpression(QStringLiteral("[0-9]")));
+}
+
+// 裸字符串字面量?(只认双引号。字符字面量不算 —— 它常是分隔符,不是默认值)
+static bool exprHasBareString(const QString& expr) {
+    return exprWithoutIdentifiers(expr).contains(QLatin1Char('"'));
+}
+
+// ============================================================
+// 算子自己的 Defaults 结构体名
+// ============================================================
+//
+//   pcb_inspect.cpp      -> PcbInspectDefaults
+//   image_source_camera  -> ImageSourceCameraDefaults
+//
+// 规则:文件名按 "_" 拆开,每段首字母大写,再接 "Defaults"。
+// 这条规则只用来**核对引用** —— 真正的定义在 operator_defaults.h,
+// 3b 那条会验它真的在那儿。
+// ============================================================
+static QString ownDefaultsStructName(const QString& fileBaseName) {
+    QString out;
+    const QStringList parts = fileBaseName.split(QLatin1Char('_'));
+    for (const QString& p : parts) {
+        if (p.isEmpty()) continue;
+        out += p.at(0).toUpper() + p.mid(1);
+    }
+    return out + QStringLiteral("Defaults");
+}
+
+// ============================================================
+// operator_defaults.h 里的常量(带类型)
+// ============================================================
+struct DefaultsMember {
+    QString structName;
+    QString memberName;
+    bool isString = false;     // const char* 的算字符串型
+};
+
+static QVector<DefaultsMember> parseDefaultsMembers(const QString& header) {
+    QVector<DefaultsMember> out;
+    const QRegularExpression structRe(QStringLiteral("struct\\s+(\\w+Defaults)\\s*\\{"));
+    auto it = structRe.globalMatch(header);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        const QString name = m.captured(1);
+        const int open = m.capturedEnd() - 1;
+        const int close = matchBracket(header, open, QLatin1Char('{'), QLatin1Char('}'));
+        if (close < 0) continue;
+        const QString body = header.mid(open, close - open + 1);
+        const QRegularExpression memberRe(
+            QStringLiteral("static\\s+constexpr\\s+"
+                           "(const\\s+char\\s*\\*|int|double|float|bool)\\s+(k\\w+)\\s*="));
+        auto mit = memberRe.globalMatch(body);
+        while (mit.hasNext()) {
+            const auto mm = mit.next();
+            DefaultsMember dm;
+            dm.structName = name;
+            dm.memberName = mm.captured(2);
+            dm.isString = mm.captured(1).contains(QLatin1String("char"));
+            out.append(dm);
+        }
+    }
+    return out;
+}
+
+// ============================================================
 // 一个算子源码的解析结果
 // ============================================================
 struct OperatorSource {
@@ -336,6 +501,9 @@ struct OperatorSource {
     QVector<QPair<QString, QString>> defaultExprs;  // key -> 右值表达式
     QSet<QString> readsLive;      // 当前构建的 run() 读到的 key
     QSet<QString> readsAll;       // 所有分支的 run() 读到的 key
+    QVector<FallbackRead> fallbacks;   // run() 里的兜底读法(见下)
+    QString buildUi;              // buildUI() 的函数体(没有面板就空)
+    QStringList setValueArgs;     // buildUI() 里每个 setValue(...) 的参数
 };
 
 // defaultParams() 里登记的 key 与右值表达式
@@ -498,6 +666,22 @@ static bool parseOperator(const QString& path, bool hasOnnx, bool hasMvs,
         op.readsLive.unite(parseReads(body));
     for (const auto& body : functionBodies(allSrc, QStringLiteral("run")))
         op.readsAll.unite(parseReads(body));
+
+    // 兜底读法:**所有分支**都收。
+    //
+    // 为什么不是只收当前构建那一支:dl_infer 的 6 个旋钮在当前构建里
+    // 读不到(整段在 #ifdef HAS_ONNXRUNTIME 里),但那一支的兜底
+    // 是**装上 SDK 之后立刻生效**的代码 —— 那时候它要是抄了第二份,
+    // 审计现在就该报出来,而不是等 SDK 装上才被人发现。
+    for (const auto& body : functionBodies(allSrc, QStringLiteral("run")))
+        op.fallbacks += parseFallbackReads(body);
+
+    // 面板:buildUI() 的函数体 + 里面每个 setValue(...) 的参数
+    const QStringList uiBodies = functionBodies(liveSrc, QStringLiteral("buildUI"));
+    if (!uiBodies.isEmpty()) {
+        op.buildUi = uiBodies.first();
+        op.setValueArgs = parseSetValueArgs(op.buildUi);
+    }
     return true;
 }
 
@@ -619,9 +803,10 @@ static void test_no_undeclared_knobs(const QVector<OperatorSource>& ops) {
 static bool exprHasBareLiteral(const QString& expr) {
     // 去掉所有标识符之后剩下的就是标点/数字/引号。
     // 剩下里有数字 → 有裸数字字面量;有引号 → 有裸字符串字面量。
-    QString t = expr;
-    t.remove(QRegularExpression(QStringLiteral("[A-Za-z_][A-Za-z_0-9]*")));
-    return t.contains(QRegularExpression(QStringLiteral("\\d"))) || t.contains(QLatin1Char('"'));
+    //
+    // (下标也一并抹掉 —— lo[0] 里的 0 是下标,不是值。理由见
+    //  exprWithoutSubscripts 那段。)
+    return exprHasBareNumber(expr) || exprHasBareString(expr);
 }
 
 static void test_defaults_have_single_source(const QVector<OperatorSource>& ops) {
@@ -707,6 +892,201 @@ static void test_defaults_have_single_source(const QVector<OperatorSource>& ops)
         }
     }
     check(true, "Defaults 结构体只在 operator_defaults.h 里定义");
+}
+
+// ============================================================
+// operator_defaults.h 的常量清单(只读一次)
+// ============================================================
+static QVector<DefaultsMember> g_defaultsMembers;
+static bool g_defaultsMembersLoaded = false;
+
+static const QVector<DefaultsMember>& defaultsMembers() {
+    if (!g_defaultsMembersLoaded) {
+        g_defaultsMembersLoaded = true;
+        bool ok = false;
+        const QString header = readAll(operatorsDir() + "/operator_defaults.h", &ok);
+        if (ok) g_defaultsMembers = parseDefaultsMembers(header);
+    }
+    return g_defaultsMembers;
+}
+
+// ============================================================
+// 用例 3d:兜底不许抄第二份
+// ============================================================
+//
+// 欠账 1 的正身:以前这条审计只看 defaultParams() ——
+// 兜底(run() 里读不到 key 时用的值)是**第二份**,它抄了没人管。
+//
+// 这条查两件事:
+//   (a) 兜底表达式里不许有裸字面量 —— 必须指向具名常量
+//   (b) 引用的 Defaults 必须是**本算子**的结构体 ——
+//       拿别的算子的默认值来顶自己的旋钮,那也是抄副本,
+//       而且比抄成字面量更隐蔽:它看着像"引用了常量",其实引用错了。
+//
+// ⚠ 这条查的是**所有分支**的 run(),不只当前构建那一支。
+//   dl_infer 那 6 个旋钮在当前构建里读不到(整段在 #ifdef 里),
+//   但那一支的兜底是装上 SDK 之后立刻生效的代码 ——
+//   那时候它要是抄了第二份,现在就该报出来。
+//
+// ⚠ 这条**查不出**兜底表达式外面还套了一层运算的情况:
+//   image_source_video 写的是
+//       std::max(1, params.value("frame_step").toInt(...))
+//   那个 1 在 toInt 的参数外面,看不见。
+//   那一层是**安全下限**(防 frame_step=0 把帧循环卡死),
+//   不是默认值的副本 —— 但它确实让"声明值"和"实际兜底值"
+//   在运行时才相等,而不是在源码里就相等。记在欠账里,没消掉。
+// ============================================================
+static void test_fallbacks_have_single_source(const QVector<OperatorSource>& ops) {
+    beginCase("3d. 兜底不许抄第二份:run() 里的兜底值必须来自同一份常量");
+
+    if (ops.isEmpty()) {
+        check(false, "没扫到任何算子 —— 这条审计等于没跑(恒真的空断言)");
+        return;
+    }
+
+    int total = 0;
+    for (const auto& op : ops) {
+        const QString own = ownDefaultsStructName(QFileInfo(op.file).completeBaseName());
+        for (const auto& fb : op.fallbacks) {
+            ++total;
+            if (exprHasBareNumber(fb.expr) || exprHasBareString(fb.expr)) {
+                check(false,
+                      QString("%1.%2 的兜底写的是裸字面量(%3) —— "
+                              "它得是 operator_defaults.h 里的那个常量,"
+                              "不然 run() 用的值和 defaultParams() 声明的值就不是同一个数")
+                          .arg(op.opName, fb.key, fb.expr));
+                continue;
+            }
+            const QRegularExpression useRe(QStringLiteral("\\b(\\w+Defaults)::(k\\w+)\\b"));
+            auto uit = useRe.globalMatch(fb.expr);
+            while (uit.hasNext()) {
+                const auto um = uit.next();
+                const QString st = um.captured(1);
+                check(st == own,
+                      QString("%1.%2 的兜底引用了 %3::%4 —— 那是**别的算子**的默认值,"
+                              "本算子该用 %5")
+                          .arg(op.opName, fb.key, st, um.captured(2), own));
+            }
+        }
+    }
+    check(total > 0,
+          QString("一共检查了 %1 处兜底读法(要是 0,说明解析器没认出这种写法,"
+                  "这条就成了恒真的空断言)").arg(total));
+}
+
+// ============================================================
+// 用例 3e:面板初值不许抄第二份
+// ============================================================
+//
+// 同一个默认值抄在三个地方:defaultParams()、run() 兜底、面板 buildUI()。
+// 3a 只查了第一个,3d 查了第二个,这条查第三个。
+//
+// 为什么只查 setValue:面板上别的数字(setRange 的上下界、setSingleStep 的步长、
+// setDecimals 的小数位)不是旋钮的**值**,是控件的量程 ——
+// 把它们也禁掉,审计第一天就会误报几十条,然后被人关掉。
+//
+// 而 setValue(...) 的参数就是"界面上初值那份",按定义它是旋钮的值。
+//
+// ⚠ 这条只看 buildUI(),不看 setParams():
+//   setParams 里是"把已存的参数读回界面",那里的默认值来自
+//   defaultParams() 或 run() 的兜底,已经在 3a/3d 的射程内。
+//   而且 setParams 里的 toInt(0) 那种"类型不对就退成 0"的写法
+//   属于另一类问题(静默把坏值变成好值),不是副本问题,另记。
+// ============================================================
+static void test_panel_initials_have_single_source(const QVector<OperatorSource>& ops) {
+    beginCase("3e. 面板初值不许抄第二份:buildUI() 的 setValue 不许有裸数字");
+
+    if (ops.isEmpty()) {
+        check(false, "没扫到任何算子 —— 这条审计等于没跑(恒真的空断言)");
+        return;
+    }
+
+    int panels = 0, total = 0;
+    for (const auto& op : ops) {
+        if (op.buildUi.isEmpty()) continue;    // 这个算子没有面板
+        ++panels;
+        for (const QString& arg : op.setValueArgs) {
+            ++total;
+            if (exprHasBareNumber(arg)) {
+                check(false,
+                      QString("%1 的面板初值写的是裸数字(%2) —— "
+                              "它得是具名常量,不然面板上写着的和算子实际跑的不是同一个数")
+                          .arg(op.opName, arg));
+            }
+        }
+    }
+    check(panels > 0,
+          QString("扫到了 %1 个有参数面板的算子").arg(panels));
+    check(total > 0,
+          QString("一共检查了 %1 处面板 setValue 初值(要是 0,说明解析器没认出"
+                  "buildUI,这条就成了恒真的空断言)").arg(total));
+}
+
+// ============================================================
+// 用例 3f:字符串型默认值得露在面板上
+// ============================================================
+//
+// 3d/3e 盯的是**数字**。字符串型默认值有它自己的一套病:
+//
+//   面板上写死一份字面量(defaultParams 写 "known_site",
+//   面板 addItem 也写 "known_site"),或者面板压根没给初值
+//   (QLineEdit 初始是空的,collect() 把空串写回 params,
+//   于是 defaultParams 里声明的那个默认值**被吃掉了**)。
+//
+// 这两种都是"同一个值的两份",所以这条查:
+//   defaultParams() 里引用的是**字符串型**常量时,
+//   面板 buildUI() 必须引用**同一个**常量。
+//
+// 为什么只管字符串型:数字型的初值 3e 已经管了(不许裸数字),
+// 而数值型常量在面板上通常表现为 setValue(常量) ——
+// 3f 对它们没有增量价值,只会让规则变复杂。
+//
+// ⚠ 这条的边界:它只要求常量**出现在** buildUI 里,
+//   不要求它被用作了控件初值。
+//   dl_infer 的 model_path 目前只出现在 setPlaceholderText 里 ——
+//   那不算真初值(那一栏初始是空的)。
+//   它实际上没事,是因为 dl_infer 的 setParams 用的是
+//   params.value(key).toString(默认值) 而不是 params.contains(key) ——
+//   key 缺了也会退回默认值。但这条**保证不了**那种写法。
+// ============================================================
+static void test_string_defaults_reach_the_panel(const QVector<OperatorSource>& ops) {
+    beginCase("3f. 字符串型默认值得露在面板上:buildUI 必须引用同一个常量");
+
+    if (ops.isEmpty()) {
+        check(false, "没扫到任何算子 —— 这条审计等于没跑(恒真的空断言)");
+        return;
+    }
+
+    const QVector<DefaultsMember>& members = defaultsMembers();
+    check(!members.isEmpty(),
+          QString("读到 %1 个 Defaults 常量(带类型)").arg(members.size()));
+    if (members.isEmpty()) return;
+
+    int checked = 0;
+    for (const auto& op : ops) {
+        if (op.buildUi.isEmpty()) continue;    // 没有面板,谈不上初值
+        for (const auto& kv : op.defaultExprs) {
+            const QRegularExpression useRe(QStringLiteral("\\b(\\w+Defaults)::(k\\w+)\\b"));
+            auto uit = useRe.globalMatch(kv.second);
+            while (uit.hasNext()) {
+                const auto um = uit.next();
+                const QString st = um.captured(1);
+                const QString mem = um.captured(2);
+                bool isString = false;
+                for (const auto& dm : members)
+                    if (dm.structName == st && dm.memberName == mem) isString = dm.isString;
+                if (!isString) continue;       // 数字型的交给 3e
+                ++checked;
+                check(op.buildUi.contains(st + "::" + mem),
+                      QString("%1.%2 的默认值是 %3::%4 —— 面板 buildUI() 里也得引用同一个常量"
+                              "(现在是另一份字面量,或者压根没给初值)")
+                          .arg(op.opName, kv.first, st, mem));
+            }
+        }
+    }
+    check(checked > 0,
+          QString("一共核对了 %1 个字符串型默认值(要是 0,说明解析器没认出写法,"
+                  "这条就成了恒真的空断言)").arg(checked));
 }
 
 // ============================================================
@@ -961,6 +1341,172 @@ static void test_default_value_truth_table() {
 }
 
 // ============================================================
+// 用例 7:审计扫的源码就是主程序真在编译的源码
+// ============================================================
+//
+// 欠账 6:审计扫的是**源码**,不是编译产物。
+// 如果以后有人用脚本生成 .cpp,或者把算子挪到别的目录,
+// 审计会扫不到 —— 用例 0 会报红(算子数掉下去),但不会告诉你为什么。
+//
+// 这条把"为什么"补上:审计扫的每一个 operators/*.cpp,
+// 都必须真的在主程序的 SOURCES 里;SOURCES 里列的每一个,
+// 都必须真的在磁盘上。两边对不上,就是"审计查的和产品跑的不是同一份代码"。
+//
+// 为什么值得单列一条:一个查不到问题的审计比没有审计更坏,
+// 因为它让人以为有人看着。
+//
+// ⚠ 这条查的是**文件清单**,查不了"编译产物里有没有这段代码"。
+//   真的要看编译产物,得读 .obj / 符号表 —— 那在 Windows + MSVC
+//   下要额外的工具链,不值当。文件清单 + 用例 0 的算子数下限,
+//   已经是本项目能负担的强度。
+// ============================================================
+
+// CMake 的注释是 # 到行尾,和 C++ 的 // /* */ 都不是一套。
+//
+// 为什么必须单独处理:CMakeLists.txt 的注释里写着
+// "进 SOURCES 而不是只在测试目标里链"这类说明,
+// 按 C++ 那套切会把真条目也切掉;更糟的是 ——
+// 注释里如果出现 "operators/xxx.cpp",那是**说明**,不是真的在编译,
+// 审计不能把它当数。
+static QString stripCMakeComments(const QString& src) {
+    QString out;
+    out.reserve(src.size());
+    bool inStr = false;
+    for (int i = 0; i < src.size(); ++i) {
+        const QChar c = src[i];
+        if (inStr) {
+            if (c == QLatin1Char('\\')) {
+                out += c;
+                if (i + 1 < src.size()) out += src[++i];
+                continue;
+            }
+            if (c == QLatin1Char('"')) inStr = false;
+            out += c;
+            continue;
+        }
+        if (c == QLatin1Char('"')) { inStr = true; out += c; continue; }
+        if (c == QLatin1Char('#')) {
+            while (i < src.size() && src[i] != QLatin1Char('\n')) ++i;
+            if (i < src.size()) out += QLatin1Char('\n');
+            continue;
+        }
+        out += c;
+    }
+    return out;
+}
+
+// 取出 set(<变量> ...) 的那一段内容
+static QString extractCMakeSet(const QString& src, const QString& varName) {
+    const int at = src.indexOf(QStringLiteral("set(") + varName);
+    if (at < 0) return {};
+    const int open = src.indexOf(QLatin1Char('('), at);
+    if (open < 0) return {};
+    const int close = matchBracket(src, open, QLatin1Char('('), QLatin1Char(')'));
+    if (close < 0) return {};
+    return src.mid(open + 1, close - open - 1);
+}
+
+static void test_audited_sources_are_the_compiled_ones() {
+    beginCase("7. 审计扫的源码就是主程序真在编译的源码");
+
+    bool ok = false;
+    const QString cmake = readAll(QString(W7_SOURCE_DIR) + "/CMakeLists.txt", &ok);
+    check(ok, "能读到 W7_VisionMasterLite/CMakeLists.txt");
+    if (!ok) return;
+
+    const QString srcBlock = stripCMakeComments(cmake);
+    const QString sources = extractCMakeSet(srcBlock, QStringLiteral("SOURCES"));
+    check(!sources.isEmpty(), "能在 CMakeLists.txt 里找到 set(SOURCES ...) 那一段");
+    if (sources.isEmpty()) return;
+
+    // SOURCES 里列出来的 operators/*.cpp
+    QSet<QString> listed;
+    {
+        const QRegularExpression re(QStringLiteral("operators/(\\w+\\.cpp)"));
+        auto it = re.globalMatch(sources);
+        while (it.hasNext())
+            listed.insert(it.next().captured(1));
+    }
+    check(listed.size() >= 15,
+          QString("主程序的 SOURCES 里列了 %1 个 operators/*.cpp").arg(listed.size()));
+
+    // 磁盘上真的存在的 operators/*.cpp
+    QDir dir(operatorsDir());
+    QStringList onDisk;
+    for (const QString& f : dir.entryList(QDir::Files))
+        if (f.endsWith(".cpp")) onDisk.append(f);
+    onDisk.sort();
+
+    check(onDisk.size() >= 15,
+          QString("operators/ 目录下有 %1 个 .cpp").arg(onDisk.size()));
+
+    // (1) 磁盘上有、SOURCES 里没有 → 主程序根本没编它,审计却在查它
+    for (const QString& f : onDisk) {
+        check(listed.contains(f),
+              QString("operators/%1 在主程序的 SOURCES 里 —— 审计查的必须是真在编译的")
+                  .arg(f));
+    }
+    // (2) SOURCES 里有、磁盘上没有 → CMake 早晚会报错,审计先说清楚
+    for (const QString& f : listed) {
+        check(QFile::exists(dir.filePath(f)),
+              QString("SOURCES 里列的 operators/%1 真实存在").arg(f));
+    }
+    check(onDisk.size() == listed.size(),
+          QString("磁盘上 %1 个 operators/*.cpp,SOURCES 里 %2 个 —— 两边一样多")
+              .arg(onDisk.size()).arg(listed.size()));
+}
+
+// ============================================================
+// 用例 8:运行时缺失的算子必须说得出"为什么"
+// ============================================================
+//
+// 欠账 5 说"面板置灰没有自动化测试"(要真窗口,无头造不出来)。
+// 这条能测的是**另一半**:置灰只是"别让人以为能调",
+// 真正要紧的是把原因写出来 —— 缺的是什么、去哪儿下载、
+// 解压到哪、设哪个环境变量。
+//
+// 为什么必须单测这一句:「摆着能调但跑不了的旋钮 = 骗人」。
+// 光置灰,用户只知道"不让调",不知道为什么;只写"不可用",
+// 等于把问题原样推回给用户 —— 那是**没写**,不是**写清楚了**。
+//
+// 这句话同时被三处用:面板提示、Run 时的 error、这条断言。
+// 只有一份,改一处三处一起变(所以它才值得被测)。
+// ============================================================
+static void test_runtime_missing_is_explained() {
+    beginCase("8. 运行时缺失的算子必须说得出为什么");
+
+    struct Runtime {
+        const char* opName;
+        bool available;
+        QString reason;
+        const char* mustMention;
+    };
+    const QVector<Runtime> runtimes = {
+        {"dl_infer", DlInfer::runtimeAvailable(),
+         DlInfer::runtimeUnavailableReason(), "ONNX"},
+        {"image_source_camera", ImageSourceCamera::runtimeAvailable(),
+         ImageSourceCamera::runtimeUnavailableReason(), "MVS"},
+    };
+
+    for (const auto& r : runtimes) {
+        const QString opName = QString::fromUtf8(r.opName);
+        if (r.available) {
+            check(r.reason.isEmpty(),
+                  QString("%1 的运行时可用 → 不该挂着\"缺失原因\"文案").arg(opName));
+        } else {
+            check(r.reason.length() >= 20,
+                  QString("%1 的运行时不可用 → 原因文案不是一句空话(%2 字)")
+                      .arg(opName).arg(r.reason.length()));
+            check(r.reason.contains(QString::fromUtf8(r.mustMention)),
+                  QString("%1 的原因文案里点名了缺的是 %2")
+                      .arg(opName, QString::fromUtf8(r.mustMention)));
+            check(r.reason.contains(QLatin1String("_DIR")),
+                  QString("%1 的原因文案里说了要设哪个环境变量").arg(opName));
+        }
+    }
+}
+
+// ============================================================
 // 造测试素材
 // ============================================================
 static void makeProbeImages(QString& maskPath, QString& imgPath) {
@@ -1023,9 +1569,14 @@ int main(int argc, char* argv[]) {
     test_no_dead_knobs(ops);
     test_no_undeclared_knobs(ops);
     test_defaults_have_single_source(ops);
+    test_fallbacks_have_single_source(ops);
+    test_panel_initials_have_single_source(ops);
+    test_string_defaults_reach_the_panel(ops);
     test_exemptions_not_stale();
     test_empty_params_match_defaults(maskPath, imgPath, boardPath);
     test_default_value_truth_table();
+    test_audited_sources_are_the_compiled_ones();
+    test_runtime_missing_is_explained();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;
