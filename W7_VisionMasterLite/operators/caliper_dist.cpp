@@ -1,4 +1,5 @@
 #include "caliper_dist.h"
+#include "operator_defaults.h"
 #include <QSpinBox>
 #include <cmath>
 #include <QDir>
@@ -10,21 +11,21 @@ namespace w7 {
 
 QJsonObject CaliperDist::defaultParams() const {
     QJsonObject p;
-    p["ax"] = 100;  p["ay"] = 100;   // 基准线起点
-    p["bx"] = 300;  p["by"] = 100;   // 基准线终点
-    p["cx"] = 200;  p["cy"] = 160;   // 被测点
+    p["ax"] = CaliperDistDefaults::kAx;  p["ay"] = CaliperDistDefaults::kAy;  // 基准线起点
+    p["bx"] = CaliperDistDefaults::kBx;  p["by"] = CaliperDistDefaults::kBy;  // 基准线终点
+    p["cx"] = CaliperDistDefaults::kCx;  p["cy"] = CaliperDistDefaults::kCy;  // 被测点
     return p;
 }
 
 QJsonObject CaliperDist::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
 
-    const double ax = params.value("ax").toDouble(0.0);
-    const double ay = params.value("ay").toDouble(0.0);
-    const double bx = params.value("bx").toDouble(0.0);
-    const double by = params.value("by").toDouble(0.0);
-    const double cx = params.value("cx").toDouble(0.0);
-    const double cy = params.value("cy").toDouble(0.0);
+    const double ax = params.value("ax").toDouble(CaliperDistDefaults::kAx);
+    const double ay = params.value("ay").toDouble(CaliperDistDefaults::kAy);
+    const double bx = params.value("bx").toDouble(CaliperDistDefaults::kBx);
+    const double by = params.value("by").toDouble(CaliperDistDefaults::kBy);
+    const double cx = params.value("cx").toDouble(CaliperDistDefaults::kCx);
+    const double cy = params.value("cy").toDouble(CaliperDistDefaults::kCy);
 
     const double abx = bx - ax, aby = by - ay;
     const double baseLen = std::sqrt(abx * abx + aby * aby);

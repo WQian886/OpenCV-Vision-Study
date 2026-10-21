@@ -1,4 +1,5 @@
 #include "angle.h"
+#include "operator_defaults.h"
 #include <QSpinBox>
 #include <cmath>
 #include <QDir>
@@ -27,24 +28,24 @@ double lineAngleDeg(double x1, double y1, double x2, double y2) {
 QJsonObject Angle::defaultParams() const {
     QJsonObject p;
     // 默认两条垂直线段:水平线 AB 和垂直线 CD,夹角应 = 90°
-    p["x1"] = 0;    p["y1"] = 100;     // 线 1 起点
-    p["x2"] = 200;  p["y2"] = 100;     // 线 1 终点(水平)
-    p["x3"] = 100;  p["y3"] = 0;       // 线 2 起点
-    p["x4"] = 100;  p["y4"] = 200;     // 线 2 终点(垂直)
+    p["x1"] = AngleDefaults::kX1;  p["y1"] = AngleDefaults::kY1;   // 线 1 起点
+    p["x2"] = AngleDefaults::kX2;  p["y2"] = AngleDefaults::kY2;   // 线 1 终点(水平)
+    p["x3"] = AngleDefaults::kX3;  p["y3"] = AngleDefaults::kY3;   // 线 2 起点
+    p["x4"] = AngleDefaults::kX4;  p["y4"] = AngleDefaults::kY4;   // 线 2 终点(垂直)
     return p;
 }
 
 QJsonObject Angle::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
 
-    const int x1 = params.value("x1").toInt(0);
-    const int y1 = params.value("y1").toInt(0);
-    const int x2 = params.value("x2").toInt(0);
-    const int y2 = params.value("y2").toInt(0);
-    const int x3 = params.value("x3").toInt(0);
-    const int y3 = params.value("y3").toInt(0);
-    const int x4 = params.value("x4").toInt(0);
-    const int y4 = params.value("y4").toInt(0);
+    const int x1 = params.value("x1").toInt(AngleDefaults::kX1);
+    const int y1 = params.value("y1").toInt(AngleDefaults::kY1);
+    const int x2 = params.value("x2").toInt(AngleDefaults::kX2);
+    const int y2 = params.value("y2").toInt(AngleDefaults::kY2);
+    const int x3 = params.value("x3").toInt(AngleDefaults::kX3);
+    const int y3 = params.value("y3").toInt(AngleDefaults::kY3);
+    const int x4 = params.value("x4").toInt(AngleDefaults::kX4);
+    const int y4 = params.value("y4").toInt(AngleDefaults::kY4);
 
     const double a1 = lineAngleDeg(x1, y1, x2, y2);
     const double a2 = lineAngleDeg(x3, y3, x4, y4);

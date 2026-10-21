@@ -1,4 +1,5 @@
 #include "point_line_dist.h"
+#include "operator_defaults.h"
 #include <QSpinBox>
 #include <cmath>
 #include <QDir>
@@ -10,21 +11,21 @@ namespace w7 {
 
 QJsonObject PointLineDist::defaultParams() const {
     QJsonObject p;
-    p["ax"] = 0;    p["ay"] = 0;       // 基准线起点
-    p["bx"] = 100;  p["by"] = 0;       // 基准线终点
-    p["cx"] = 50;   p["cy"] = 30;      // 被测点
+    p["ax"] = PointLineDistDefaults::kAx;  p["ay"] = PointLineDistDefaults::kAy;  // 基准线起点
+    p["bx"] = PointLineDistDefaults::kBx;  p["by"] = PointLineDistDefaults::kBy;  // 基准线终点
+    p["cx"] = PointLineDistDefaults::kCx;  p["cy"] = PointLineDistDefaults::kCy;  // 被测点
     return p;
 }
 
 QJsonObject PointLineDist::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
 
-    const double ax = params.value("ax").toDouble(0.0);
-    const double ay = params.value("ay").toDouble(0.0);
-    const double bx = params.value("bx").toDouble(0.0);
-    const double by = params.value("by").toDouble(0.0);
-    const double cx = params.value("cx").toDouble(0.0);
-    const double cy = params.value("cy").toDouble(0.0);
+    const double ax = params.value("ax").toDouble(PointLineDistDefaults::kAx);
+    const double ay = params.value("ay").toDouble(PointLineDistDefaults::kAy);
+    const double bx = params.value("bx").toDouble(PointLineDistDefaults::kBx);
+    const double by = params.value("by").toDouble(PointLineDistDefaults::kBy);
+    const double cx = params.value("cx").toDouble(PointLineDistDefaults::kCx);
+    const double cy = params.value("cy").toDouble(PointLineDistDefaults::kCy);
 
     // 沿用 caliper_dist 的公式 + 退化处理
     const double abx = bx - ax, aby = by - ay;

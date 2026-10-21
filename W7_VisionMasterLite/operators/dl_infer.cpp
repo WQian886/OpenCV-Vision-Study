@@ -10,6 +10,7 @@
 #include "dl_infer.h"
 #include "dl_postprocess.h"
 #include "artifact_path.h"
+#include "operator_defaults.h"
 
 #include <QFileInfo>
 #include <QDir>
@@ -46,13 +47,14 @@ bool DlInfer::runtimeAvailable() {
 
 QJsonObject DlInfer::defaultParams() const {
     QJsonObject p;
-    p["model_path"]    = "models/yolov8n.onnx";
-    p["input_w"]       = 640;
-    p["input_h"]       = 640;
-    p["conf_threshold"]= 0.25;
-    p["nms_iou"]       = 0.45;
-    p["class_names"]   = "person,bicycle,car,motorcycle,airplane,bus";
-    p["output_layout"] = "yolov8";   // yolov8=(1,4+nc,N) / yolov5=(1,N,5+nc)
+    p["model_path"]    = QString::fromUtf8(DlInferDefaults::kModelPath);
+    p["input_w"]       = DlInferDefaults::kInputW;
+    p["input_h"]       = DlInferDefaults::kInputH;
+    p["conf_threshold"]= DlInferDefaults::kConfThreshold;
+    p["nms_iou"]       = DlInferDefaults::kNmsIou;
+    p["class_names"]   = QString::fromUtf8(DlInferDefaults::kClassNames);
+    // yolov8=(1,4+nc,N) / yolov5=(1,N,5+nc)
+    p["output_layout"] = QString::fromUtf8(DlInferDefaults::kOutputLayout);
     return p;
 }
 
@@ -62,7 +64,12 @@ QJsonObject DlInfer::defaultParams() const {
 // 这样用户能分清「模型路径写错了」还是「SDK 没装」,两种病因两种药。
 QJsonObject DlInfer::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject out;
-    const QString modelPath = params.value("model_path").toString();
+    // 兜底回到声明的默认值:参数 JSON 缺 model_path 时,
+    // 算子按"声明的默认模型路径"去找,而不是按空路径 —— 空路径的
+    // 报错信息("模型文件不存在: ")会把人引向"路径填错了",
+    // 而真实原因是"这个 key 压根没写"。
+    const QString modelPath = params.value("model_path").toString(
+                                  QString::fromUtf8(DlInferDefaults::kModelPath));
 
     if (inputs.value("image_path").toString().isEmpty()) {
         out["error"] = "上游未提供 image_path";
@@ -106,7 +113,12 @@ QJsonObject DlInfer::run(const QJsonObject& params, const QJsonObject& inputs) {
     QString imgPath = inputs.value("image_path").toString();
     if (imgPath.isEmpty()) { out["error"] = "上游未提供 image_path"; return out; }
 
-    const QString modelPath = params.value("model_path").toString();
+    // 兜底回到声明的默认值:参数 JSON 缺 model_path 时,
+    // 算子按"声明的默认模型路径"去找,而不是按空路径 —— 空路径的
+    // 报错信息("模型文件不存在: ")会把人引向"路径填错了",
+    // 而真实原因是"这个 key 压根没写"。
+    const QString modelPath = params.value("model_path").toString(
+                                  QString::fromUtf8(DlInferDefaults::kModelPath));
     if (!QFileInfo::exists(modelPath)) {
         out["error"] = QString("模型文件不存在: %1").arg(modelPath);
         return out;
@@ -115,12 +127,17 @@ QJsonObject DlInfer::run(const QJsonObject& params, const QJsonObject& inputs) {
     cv::Mat img = cv::imread(imgPath.toStdString(), cv::IMREAD_COLOR);
     if (img.empty()) { out["error"] = "imread failed: " + imgPath; return out; }
 
-    const cv::Size netInput(params.value("input_w").toInt(640),
-                            params.value("input_h").toInt(640));
-    const float confThresh = params.value("conf_threshold").toDouble(0.25);
-    const float iouThresh   = params.value("nms_iou").toDouble(0.45);
-    const QString layout   = params.value("output_layout").toString("yolov8");
-    QStringList classNames = params.value("class_names").toString()
+    const cv::Size netInput(params.value("input_w").toInt(DlInferDefaults::kInputW),
+                            params.value("input_h").toInt(DlInferDefaults::kInputH));
+    const float confThresh = params.value("conf_threshold").toDouble(DlInferDefaults::kConfThreshold);
+    const float iouThresh   = params.value("nms_iou").toDouble(DlInferDefaults::kNmsIou);
+    const QString layout   = params.value("output_layout").toString(
+                                 QString::fromUtf8(DlInferDefaults::kOutputLayout));
+    // class_names 以前**没有兜底**:缺这个 key 时类名列表是空的,
+    // 检测框上只剩 "cls3" 这种编号,标不出是哪个类别。
+    // 现在兜底回到声明的默认值 —— 少一个 key 不该悄悄换一套语义。
+    QStringList classNames = params.value("class_names").toString(
+                                 QString::fromUtf8(DlInferDefaults::kClassNames))
                                  .split(',', Qt::SkipEmptyParts);
     for (auto& s : classNames) s = s.trimmed();
 
@@ -234,17 +251,17 @@ DlInferForm::DlInferForm(QWidget* parent) : ParamForm(parent) {}
 
 void DlInferForm::buildUI() {
     m_modelPath = new QLineEdit;
-    m_modelPath->setPlaceholderText("models/yolov8n.onnx");
-    m_inW = new QSpinBox; m_inW->setRange(32, 4096); m_inW->setValue(640);
-    m_inH = new QSpinBox; m_inH->setRange(32, 4096); m_inH->setValue(640);
+    m_modelPath->setPlaceholderText(QString::fromUtf8(DlInferDefaults::kModelPath));
+    m_inW = new QSpinBox; m_inW->setRange(32, 4096); m_inW->setValue(DlInferDefaults::kInputW);
+    m_inH = new QSpinBox; m_inH->setRange(32, 4096); m_inH->setValue(DlInferDefaults::kInputH);
     m_conf = new QDoubleSpinBox;
-    m_conf->setRange(0.0, 1.0); m_conf->setSingleStep(0.05); m_conf->setValue(0.25);
+    m_conf->setRange(0.0, 1.0); m_conf->setSingleStep(0.05); m_conf->setValue(DlInferDefaults::kConfThreshold);
     m_iou = new QDoubleSpinBox;
-    m_iou->setRange(0.0, 1.0); m_iou->setSingleStep(0.05); m_iou->setValue(0.45);
+    m_iou->setRange(0.0, 1.0); m_iou->setSingleStep(0.05); m_iou->setValue(DlInferDefaults::kNmsIou);
     m_classes = new QLineEdit;
     m_classes->setPlaceholderText("person,bicycle,car");
     m_outLayout = new QComboBox;
-    m_outLayout->addItem(tr("YOLOv8  (1, 4+类别数, N)"),   "yolov8");
+    m_outLayout->addItem(tr("YOLOv8  (1, 4+类别数, N)"),   QString::fromUtf8(DlInferDefaults::kOutputLayout));
     m_outLayout->addItem(tr("YOLOv5  (1, N, 5+类别数)"),   "yolov5");
 
     m_layout->addRow(tr("模型路径 .onnx"), m_modelPath);
@@ -269,13 +286,16 @@ void DlInferForm::buildUI() {
 }
 
 void DlInferForm::setParams(const QJsonObject& params) {
-    m_modelPath->setText(params.value("model_path").toString());
-    m_inW->setValue(params.value("input_w").toInt(640));
-    m_inH->setValue(params.value("input_h").toInt(640));
-    m_conf->setValue(params.value("conf_threshold").toDouble(0.25));
-    m_iou->setValue(params.value("nms_iou").toDouble(0.45));
-    m_classes->setText(params.value("class_names").toString());
-    const int idx = m_outLayout->findData(params.value("output_layout").toString("yolov8"));
+    m_modelPath->setText(params.value("model_path").toString(
+                              QString::fromUtf8(DlInferDefaults::kModelPath)));
+    m_inW->setValue(params.value("input_w").toInt(DlInferDefaults::kInputW));
+    m_inH->setValue(params.value("input_h").toInt(DlInferDefaults::kInputH));
+    m_conf->setValue(params.value("conf_threshold").toDouble(DlInferDefaults::kConfThreshold));
+    m_iou->setValue(params.value("nms_iou").toDouble(DlInferDefaults::kNmsIou));
+    m_classes->setText(params.value("class_names").toString(
+                            QString::fromUtf8(DlInferDefaults::kClassNames)));
+    const int idx = m_outLayout->findData(params.value("output_layout").toString(
+                               QString::fromUtf8(DlInferDefaults::kOutputLayout)));
     if (idx >= 0) m_outLayout->setCurrentIndex(idx);
 }
 

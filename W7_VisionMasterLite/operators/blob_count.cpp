@@ -1,11 +1,12 @@
 #include "blob_count.h"
+#include "operator_defaults.h"
 #include <QSpinBox>
 
 namespace w7 {
 
 QJsonObject BlobCount::defaultParams() const {
     QJsonObject p;
-    p["min_area"] = 20;
+    p["min_area"] = BlobCountDefaults::kMinArea;
     return p;
 }
 
@@ -19,7 +20,9 @@ QJsonObject BlobCount::run(const QJsonObject& params, const QJsonObject& inputs)
         return output;
     }
 
-    int minArea = params.value("min_area").toInt(50);
+    // 兜底以前是 50,和 defaultParams() 声明的 20 不是一回事 ——
+    // 参数 JSON 缺 min_area 时,算子按 50 滤,面板上写的是 20。
+    int minArea = params.value("min_area").toInt(BlobCountDefaults::kMinArea);
 
     cv::Mat labels, stats, centroids;
     int n = cv::connectedComponentsWithStats(mask, labels, stats, centroids);
@@ -51,7 +54,7 @@ BlobCountForm::BlobCountForm(QWidget* parent) : ParamForm(parent) {}
 void BlobCountForm::buildUI() {
     m_minArea = new QSpinBox;
     m_minArea->setRange(1, 100000);
-    m_minArea->setValue(20);
+    m_minArea->setValue(BlobCountDefaults::kMinArea);
     m_minArea->setSingleStep(10);
     m_layout->addRow(tr("最小面积"), m_minArea);
 }

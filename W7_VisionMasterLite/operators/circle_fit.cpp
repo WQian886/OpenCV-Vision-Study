@@ -1,4 +1,5 @@
 #include "circle_fit.h"
+#include "operator_defaults.h"
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QJsonArray>
@@ -11,10 +12,11 @@ namespace w7 {
 
 QJsonObject CircleFit::defaultParams() const {
     QJsonObject p;
-    p["min_area"]        = 100;
-    // 圆度下限:1.0 是完美圆,越小越"像圆"。
-    // 默认 0.7 是经验值 —— 低于这个值的多边形/方块会被滤掉。
-    p["min_circularity"] = 0.70;
+    p["min_area"]        = CircleFitDefaults::kMinArea;
+    // 圆度下限:1.0 是完美圆,越小越"像圆"。默认 0.7 是经验值 ——
+    // 低于这个值的多边形/方块会被滤掉。
+    // 默认值的唯一一份在 operator_defaults.h(理由见那个文件开头)。
+    p["min_circularity"] = CircleFitDefaults::kMinCircularity;
     return p;
 }
 
@@ -39,8 +41,8 @@ QJsonObject CircleFit::run(const QJsonObject& params, const QJsonObject& inputs)
         return output;
     }
 
-    const int    minArea = params.value("min_area").toInt(100);
-    const double minCirc = params.value("min_circularity").toDouble(0.70);
+    const int    minArea = params.value("min_area").toInt(CircleFitDefaults::kMinArea);
+    const double minCirc = params.value("min_circularity").toDouble(CircleFitDefaults::kMinCircularity);
 
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
@@ -132,7 +134,7 @@ CircleFitForm::CircleFitForm(QWidget* parent) : ParamForm(parent) {}
 void CircleFitForm::buildUI() {
     m_minArea = new QSpinBox;
     m_minArea->setRange(1, 1000000);
-    m_minArea->setValue(100);
+    m_minArea->setValue(CircleFitDefaults::kMinArea);
     m_minArea->setSingleStep(10);
     m_layout->addRow(tr("最小面积"), m_minArea);
 
@@ -140,15 +142,15 @@ void CircleFitForm::buildUI() {
     m_minCircularity->setRange(0.0, 1.0);
     m_minCircularity->setDecimals(2);
     m_minCircularity->setSingleStep(0.05);
-    m_minCircularity->setValue(0.70);
+    m_minCircularity->setValue(CircleFitDefaults::kMinCircularity);
     m_layout->addRow(tr("最小圆度(1.0=正圆)"), m_minCircularity);
 }
 
 void CircleFitForm::setParams(const QJsonObject& params) {
     if (params.contains("min_area"))
-        m_minArea->setValue(params.value("min_area").toInt(100));
+        m_minArea->setValue(params.value("min_area").toInt(CircleFitDefaults::kMinArea));
     if (params.contains("min_circularity"))
-        m_minCircularity->setValue(params.value("min_circularity").toDouble(0.70));
+        m_minCircularity->setValue(params.value("min_circularity").toDouble(CircleFitDefaults::kMinCircularity));
 }
 
 QJsonObject CircleFitForm::collect() const {

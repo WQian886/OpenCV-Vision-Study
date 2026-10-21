@@ -6,6 +6,7 @@
 // ============================================================
 
 #include "image_source_camera.h"
+#include "operator_defaults.h"
 
 #include <QFileInfo>
 #include <QDir>
@@ -28,17 +29,18 @@ namespace w7 {
 
 QJsonObject ImageSourceCamera::defaultParams() const {
     QJsonObject p;
-    p["camera_ip"]   = "192.168.1.10";
-    p["exposure"]    = 10.0;       // ms
-    p["trigger_mode"] = 0;          // 0=连续, 1=软触发
+    p["camera_ip"]   = QString::fromUtf8(ImageSourceCameraDefaults::kCameraIp);
+    p["exposure"]    = ImageSourceCameraDefaults::kExposureMs;    // ms
+    p["trigger_mode"] = ImageSourceCameraDefaults::kTriggerMode;  // 0=连续, 1=软触发
     return p;
 }
 
 QJsonObject ImageSourceCamera::run(const QJsonObject& params, const QJsonObject& /*inputs*/) {
     QJsonObject output;
-    QString cameraIp   = params.value("camera_ip").toString();
-    double  exposureMs = params.value("exposure").toDouble(10.0);
-    int     triggerMode = params.value("trigger_mode").toInt(0);
+    QString cameraIp   = params.value("camera_ip").toString(
+                              QString::fromUtf8(ImageSourceCameraDefaults::kCameraIp));
+    double  exposureMs = params.value("exposure").toDouble(ImageSourceCameraDefaults::kExposureMs);
+    int     triggerMode = params.value("trigger_mode").toInt(ImageSourceCameraDefaults::kTriggerMode);
 
 #ifndef HAS_MVS_SDK
     // === 兜底:SDK 未装,返回友好错误 ===
@@ -156,7 +158,7 @@ void ImageSourceCameraForm::buildUI() {
     m_exposure->setRange(0.01, 1000.0);
     m_exposure->setSingleStep(1.0);
     m_exposure->setSuffix(" ms");
-    m_exposure->setValue(10.0);
+    m_exposure->setValue(ImageSourceCameraDefaults::kExposureMs);
 
     m_trigger = new QComboBox;
     m_trigger->addItem("连续采图", 0);

@@ -1,5 +1,6 @@
 #include "color_segment.h"
 #include "hsv_params.h"
+#include "operator_defaults.h"
 #include "artifact_path.h"
 #include <QSpinBox>
 #include <QJsonArray>
@@ -16,8 +17,12 @@ namespace w7 {
 
 QJsonObject ColorSegment::defaultParams() const {
     QJsonObject p;
-    p["hsv_low"]  = QJsonArray{10, 80, 80};
-    p["hsv_high"] = QJsonArray{40, 255, 255};
+    p["hsv_low"]  = QJsonArray{ColorSegmentDefaults::kHsvLowH,
+                                ColorSegmentDefaults::kHsvLowS,
+                                ColorSegmentDefaults::kHsvLowV};
+    p["hsv_high"] = QJsonArray{ColorSegmentDefaults::kHsvHighH,
+                                ColorSegmentDefaults::kHsvHighS,
+                                ColorSegmentDefaults::kHsvHighV};
     return p;
 }
 
@@ -92,12 +97,18 @@ QWidget* ColorSegment::createParamWidget(QWidget* parent, const QJsonObject& par
 ColorSegmentForm::ColorSegmentForm(QWidget* parent) : ParamForm(parent) {}
 
 void ColorSegmentForm::buildUI() {
-    m_hLow  = new QSpinBox;  m_hLow->setRange(0, 179);   m_hLow->setValue(10);
-    m_sLow  = new QSpinBox;  m_sLow->setRange(0, 255);   m_sLow->setValue(80);
-    m_vLow  = new QSpinBox;  m_vLow->setRange(0, 255);   m_vLow->setValue(80);
-    m_hHigh = new QSpinBox;  m_hHigh->setRange(0, 179);  m_hHigh->setValue(40);
-    m_sHigh = new QSpinBox;  m_sHigh->setRange(0, 255);  m_sHigh->setValue(255);
-    m_vHigh = new QSpinBox;  m_vHigh->setRange(0, 255);  m_vHigh->setValue(255);
+    m_hLow  = new QSpinBox;  m_hLow->setRange(0, 179);
+    m_hLow->setValue(ColorSegmentDefaults::kHsvLowH);
+    m_sLow  = new QSpinBox;  m_sLow->setRange(0, 255);
+    m_sLow->setValue(ColorSegmentDefaults::kHsvLowS);
+    m_vLow  = new QSpinBox;  m_vLow->setRange(0, 255);
+    m_vLow->setValue(ColorSegmentDefaults::kHsvLowV);
+    m_hHigh = new QSpinBox;  m_hHigh->setRange(0, 179);
+    m_hHigh->setValue(ColorSegmentDefaults::kHsvHighH);
+    m_sHigh = new QSpinBox;  m_sHigh->setRange(0, 255);
+    m_sHigh->setValue(ColorSegmentDefaults::kHsvHighS);
+    m_vHigh = new QSpinBox;  m_vHigh->setRange(0, 255);
+    m_vHigh->setValue(ColorSegmentDefaults::kHsvHighV);
 
     m_layout->addRow(tr("H 下限"),  m_hLow);
     m_layout->addRow(tr("S 下限"),  m_sLow);

@@ -1,4 +1,5 @@
 #include "line_fit.h"
+#include "operator_defaults.h"
 #include <QSpinBox>
 #include <cmath>
 #include <QDir>
@@ -24,18 +25,18 @@ namespace w7 {
 
 QJsonObject LineFit::defaultParams() const {
     QJsonObject p;
-    p["x1"] = 100;  p["y1"] = 100;
-    p["x2"] = 300;  p["y2"] = 200;
+    p["x1"] = LineFitDefaults::kX1;  p["y1"] = LineFitDefaults::kY1;
+    p["x2"] = LineFitDefaults::kX2;  p["y2"] = LineFitDefaults::kY2;
     return p;
 }
 
 QJsonObject LineFit::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
 
-    const int x1 = params.value("x1").toInt(0);
-    const int y1 = params.value("y1").toInt(0);
-    const int x2 = params.value("x2").toInt(0);
-    const int y2 = params.value("y2").toInt(0);
+    const int x1 = params.value("x1").toInt(LineFitDefaults::kX1);
+    const int y1 = params.value("y1").toInt(LineFitDefaults::kY1);
+    const int x2 = params.value("x2").toInt(LineFitDefaults::kX2);
+    const int y2 = params.value("y2").toInt(LineFitDefaults::kY2);
 
     const double dx = double(x2 - x1);
     const double dy = double(y2 - y1);

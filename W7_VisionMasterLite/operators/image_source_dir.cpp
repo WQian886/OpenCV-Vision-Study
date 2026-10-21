@@ -1,4 +1,5 @@
 #include "image_source_dir.h"
+#include "operator_defaults.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -17,15 +18,17 @@ namespace w7 {
 
 QJsonObject ImageSourceDir::defaultParams() const {
     QJsonObject p;
-    p["dir_path"] = "images";
-    p["pattern"]  = "*.png";
+    p["dir_path"] = QString::fromUtf8(ImageSourceDirDefaults::kDirPath);
+    p["pattern"]  = QString::fromUtf8(ImageSourceDirDefaults::kPattern);
     return p;
 }
 
 QJsonObject ImageSourceDir::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
-    QString dirPath  = params.value("dir_path").toString();
-    QString pattern  = params.value("pattern").toString("*.png");
+    QString dirPath  = params.value("dir_path").toString(
+                          QString::fromUtf8(ImageSourceDirDefaults::kDirPath));
+    QString pattern  = params.value("pattern").toString(
+                           QString::fromUtf8(ImageSourceDirDefaults::kPattern));
 
     QDir dir(dirPath);
     if (!dir.exists()) {
@@ -94,7 +97,7 @@ void ImageSourceDirForm::buildUI() {
     m_dirPath = new QLineEdit;
     m_dirPath->setPlaceholderText("如 images 或 D:/test_imgs");
 
-    m_pattern = new QLineEdit("*.png");
+    m_pattern = new QLineEdit(QString::fromUtf8(ImageSourceDirDefaults::kPattern));
     m_pattern->setPlaceholderText("如 *.png 或 *.jpg");
 
     m_layout->addRow(tr("目录路径"), m_dirPath);

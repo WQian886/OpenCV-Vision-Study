@@ -1,6 +1,7 @@
 #include "pcb_inspect.h"
 #include "hsv_params.h"
 #include "pcb_color_ref.h"
+#include "operator_defaults.h"
 #include "board_recipe.h"
 #include <QSpinBox>
 #include <QDoubleSpinBox>
@@ -46,7 +47,7 @@ namespace w7 {
 // ============================================================
 namespace {
 // 默认板型:自带的那张 demo 板。
-const QString kDefaultRecipe = QStringLiteral("recipes/demo.json");
+const QString kDefaultRecipe = QString::fromUtf8(PcbInspectDefaults::kRecipePath);
 
 // auto_contour 模式不读配方,聚类半径就没有 refW/refH 和本体尺寸可依,
 // 只能退回改造前写死的真值。**这三个数是原值,不是新选的**:
@@ -58,7 +59,7 @@ constexpr int kFallbackRefH =  700;
 
 QJsonObject PcbInspect::defaultParams() const {
     QJsonObject p;
-    p["mode"]     = "known_site";
+    p["mode"]     = QString::fromUtf8(PcbInspectDefaults::kMode);
     // === 金色范围沿用 W6 校准值,不要想当然改成 (10,80,80) ===
     // W6 笔记记录的坑:合成器的 GOLD 实际落在 H 85-115,
     // 用 W2 笔记里的常规金色范围会抓到 IC 的深蓝本体而不是金层。
@@ -76,7 +77,15 @@ QJsonObject PcbInspect::defaultParams() const {
     p["hsv_h_high"] = pcbcolor::goldBand().hHi;
     p["hsv_s_low"]  = pcbcolor::goldBand().sLo;
     p["mask_v_mul"] = pcbcolor::kMaskVMul;
-    p["min_area"] = 80;
+    // 最小连通域:占全图面积 %,不是绝对像素(理由见 run() 里那段说明)。
+    //
+    // ⚠ 这里原来登记的是 min_area = 80(绝对像素),而 run() 读的是
+    //   min_area_pct —— 登记的和读的不是同一个 key,于是:
+    //     · min_area 成了**死旋钮**(面板上写着、调了不生效)
+    //     · min_area_pct 又**从来没登记过**,它的默认值只活在
+    //       run() 的兜底和面板里,写进流水线的 JSON 里压根没有
+    //   两个毛病一起收:死 key 删掉,真正的旋钮补登记。
+    p["min_area_pct"] = PcbInspectDefaults::kMinAreaPct;
     // 板型:换板子只改这一项(指向 recipes/ 下的另一份 JSON),
     // 不改任何代码。原来这里是隐含的 —— 只有一张写死的表。
     p["recipe"] = kDefaultRecipe;
@@ -117,6 +126,20 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
     double sLo = pcbcolor::goldBand().sLo;
     double vMul = pcbcolor::kMaskVMul;
     QString hsvErr;
+    // ============================================================
+    // 金层阈值是**必填旋钮**:缺了或形状不对,一律报错
+    // ============================================================
+    // 这里**不**补默认值 —— 和"可选旋钮"那套规则不一样,是故意的:
+    //   · 可选旋钮(阈值、坐标、路径那些):缺了就退回
+    //     operator_defaults.h 里声明的默认值 —— 那是用户没配,
+    //     退回一个声明过的值是诚实的。
+    //   · 必填旋钮(金层区间这两个):缺了就说明**没配置**,
+    //     补一个默认值会让用户以为自己的配置生效了 —— 那正是
+    //     hsv_params.h 开头警告的"配置看着对、结果全错"。
+    //
+    // 有测试钉着这件事:test_pcb_operators.cpp 的
+    // "H 上界缺失 -> 报错 点名字段 hsv_h_high"。
+    // ============================================================
     if (!readHsvScalar(params.value("hsv_h_low"),  "hsv_h_low",  &hLo,  &hsvErr) ||
         !readHsvScalar(params.value("hsv_h_high"), "hsv_h_high", &hHi,  &hsvErr) ||
         !readHsvScalar(params.value("hsv_s_low"),  "hsv_s_low",  &sLo,  &hsvErr) ||
@@ -158,7 +181,8 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
     cv::Mat goldMask = pcbcolor::opened(pcbcolor::bandMask(hsv, boardBase, band),
                                         pcbcolor::kernelScale(img));
 
-    const QString mode = params.value("mode").toString("known_site");
+    const QString mode = params.value("mode").toString(
+                              QString::fromUtf8(PcbInspectDefaults::kMode));
 
     // ============================================================
     // 板型配方
@@ -191,7 +215,7 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
     // 一起放大,90 这个阈值相对就变紧,聚类散开 —— 上表 0.5x 的 6 个
     // 就是过度聚类(全板糊成几团),2.0x 的 18 个是聚类不足。
     // 改成跟着元件尺寸走,量纲不再是像素。
-    const double minAreaPct = params.value("min_area_pct").toDouble(0.05);
+    const double minAreaPct = params.value("min_area_pct").toDouble(PcbInspectDefaults::kMinAreaPct);
     const int minArea = static_cast<int>(
         std::lround(minAreaPct / 100.0 * img.cols * img.rows));
     // 聚类半径:取元件本体最大尺寸的一半。跟着图像尺寸缩放,
@@ -475,7 +499,7 @@ void PcbInspectForm::buildUI() {
     m_vMul->setDecimals(2); m_vMul->setSingleStep(0.05); m_vMul->setValue(0.8);
     m_minAreaPct = new QDoubleSpinBox; m_minAreaPct->setRange(0.0, 10.0);
     m_minAreaPct->setDecimals(3); m_minAreaPct->setSingleStep(0.001);
-    m_minAreaPct->setValue(0.05);
+    m_minAreaPct->setValue(PcbInspectDefaults::kMinAreaPct);
 
     m_layout->addRow(tr("定位模式"),   m_mode);
     m_layout->addRow(tr("板型配方"),   m_recipe);
@@ -487,7 +511,8 @@ void PcbInspectForm::buildUI() {
 }
 
 void PcbInspectForm::setParams(const QJsonObject& params) {
-    const QString mode = params.value("mode").toString("known_site");
+    const QString mode = params.value("mode").toString(
+                              QString::fromUtf8(PcbInspectDefaults::kMode));
     const int idx = m_mode->findData(mode);
     if (idx >= 0) m_mode->setCurrentIndex(idx);
 

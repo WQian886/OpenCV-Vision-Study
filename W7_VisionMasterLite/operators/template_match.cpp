@@ -1,4 +1,5 @@
 #include "template_match.h"
+#include "operator_defaults.h"
 #include <QLineEdit>
 #include <QDoubleSpinBox>
 #include <QComboBox>
@@ -10,9 +11,9 @@ namespace w7 {
 
 QJsonObject TemplateMatch::defaultParams() const {
     QJsonObject p;
-    p["template_path"] = "templates/R.png";
+    p["template_path"] = QString::fromUtf8(TemplateMatchDefaults::kTemplatePath);
     p["method"]        = cv::TM_CCOEFF_NORMED;
-    p["threshold"]     = 0.9;
+    p["threshold"]     = TemplateMatchDefaults::kThreshold;
     return p;
 }
 
@@ -21,7 +22,9 @@ QJsonObject TemplateMatch::run(const QJsonObject& params, const QJsonObject& inp
 
     QString imgPath = inputs.value("image_path").toString();
     QString tplPath = inputs.value("template_path").toString();
-    if (tplPath.isEmpty()) tplPath = params.value("template_path").toString();
+    if (tplPath.isEmpty())
+        tplPath = params.value("template_path").toString(
+                      QString::fromUtf8(TemplateMatchDefaults::kTemplatePath));
 
     cv::Mat img = cv::imread(imgPath.toStdString(), cv::IMREAD_COLOR);
     cv::Mat tpl = cv::imread(tplPath.toStdString(), cv::IMREAD_COLOR);
@@ -31,7 +34,7 @@ QJsonObject TemplateMatch::run(const QJsonObject& params, const QJsonObject& inp
     }
 
     int method = params.value("method").toInt(cv::TM_CCOEFF_NORMED);
-    double threshold = params.value("threshold").toDouble(0.9);
+    double threshold = params.value("threshold").toDouble(TemplateMatchDefaults::kThreshold);
 
     // ============================================================
     // 两道必须在 cv::matchTemplate 之前的闸
@@ -164,7 +167,7 @@ QWidget* TemplateMatch::createParamWidget(QWidget* parent, const QJsonObject& pa
 TemplateMatchForm::TemplateMatchForm(QWidget* parent) : ParamForm(parent) {}
 
 void TemplateMatchForm::buildUI() {
-    m_tplPath = new QLineEdit("templates/R.png");
+    m_tplPath = new QLineEdit(QString::fromUtf8(TemplateMatchDefaults::kTemplatePath));
 
     m_method = new QComboBox;
     m_method->addItem("TM_CCOEFF_NORMED (推荐)", cv::TM_CCOEFF_NORMED);
@@ -174,7 +177,7 @@ void TemplateMatchForm::buildUI() {
     m_threshold = new QDoubleSpinBox;
     m_threshold->setRange(0.0, 1.0);
     m_threshold->setSingleStep(0.05);
-    m_threshold->setValue(0.9);
+    m_threshold->setValue(TemplateMatchDefaults::kThreshold);
 
     m_layout->addRow(tr("模板路径"), m_tplPath);
     m_layout->addRow(tr("匹配方法"), m_method);

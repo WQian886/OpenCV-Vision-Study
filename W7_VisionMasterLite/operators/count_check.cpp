@@ -1,12 +1,13 @@
 #include "count_check.h"
+#include "operator_defaults.h"
 #include <QSpinBox>
 
 namespace w7 {
 
 QJsonObject CountCheck::defaultParams() const {
     QJsonObject p;
-    p["expected_min"] = 1;
-    p["expected_max"] = 100;
+    p["expected_min"] = CountCheckDefaults::kExpectedMin;
+    p["expected_max"] = CountCheckDefaults::kExpectedMax;
     return p;
 }
 
@@ -14,8 +15,11 @@ QJsonObject CountCheck::run(const QJsonObject& params, const QJsonObject& inputs
     QJsonObject output;
 
     int actual      = inputs.value("count").toInt();
-    int expectedMin = params.value("expected_min").toInt(0);
-    int expectedMax = params.value("expected_max").toInt(999);
+    // 兜底以前是 0 和 999 —— 和上面声明的 1 / 100 **不是一回事**。
+    // 现在兜底回到声明值:参数 JSON 缺 key 时,算子按"声明的默认值"跑,
+    // 而不是按另一个数跑(用户调的值和算子用的值对不上)。
+    int expectedMin = params.value("expected_min").toInt(CountCheckDefaults::kExpectedMin);
+    int expectedMax = params.value("expected_max").toInt(CountCheckDefaults::kExpectedMax);
 
     // ============================================================
     // 阈值填反了(min > max)必须报错,不能默默判 FAIL
@@ -81,11 +85,11 @@ CountCheckForm::CountCheckForm(QWidget* parent) : ParamForm(parent) {}
 void CountCheckForm::buildUI() {
     m_min = new QSpinBox;
     m_min->setRange(0, 99999);
-    m_min->setValue(1);
+    m_min->setValue(CountCheckDefaults::kExpectedMin);
 
     m_max = new QSpinBox;
     m_max->setRange(0, 99999);
-    m_max->setValue(100);
+    m_max->setValue(CountCheckDefaults::kExpectedMax);
 
     m_layout->addRow(tr("期望最小值"), m_min);
     m_layout->addRow(tr("期望最大值"), m_max);

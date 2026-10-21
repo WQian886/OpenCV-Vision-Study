@@ -1,4 +1,5 @@
 #include "point_point_dist.h"
+#include "operator_defaults.h"
 #include <QSpinBox>
 #include <cmath>
 #include <QDir>
@@ -10,18 +11,18 @@ namespace w7 {
 
 QJsonObject PointPointDist::defaultParams() const {
     QJsonObject p;
-    p["x1"] = 100;  p["y1"] = 100;
-    p["x2"] = 200;  p["y2"] = 200;
+    p["x1"] = PointPointDistDefaults::kX1;  p["y1"] = PointPointDistDefaults::kY1;
+    p["x2"] = PointPointDistDefaults::kX2;  p["y2"] = PointPointDistDefaults::kY2;
     return p;
 }
 
 QJsonObject PointPointDist::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
 
-    const int x1 = params.value("x1").toInt(0);
-    const int y1 = params.value("y1").toInt(0);
-    const int x2 = params.value("x2").toInt(0);
-    const int y2 = params.value("y2").toInt(0);
+    const int x1 = params.value("x1").toInt(PointPointDistDefaults::kX1);
+    const int y1 = params.value("y1").toInt(PointPointDistDefaults::kY1);
+    const int x2 = params.value("x2").toInt(PointPointDistDefaults::kX2);
+    const int y2 = params.value("y2").toInt(PointPointDistDefaults::kY2);
 
     const double dx = double(x2 - x1);
     const double dy = double(y2 - y1);

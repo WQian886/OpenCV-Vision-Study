@@ -1,4 +1,5 @@
 #include "image_source_video.h"
+#include "operator_defaults.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -14,18 +15,21 @@ namespace w7 {
 
 QJsonObject ImageSourceVideo::defaultParams() const {
     QJsonObject p;
-    p["video_path"] = "images/sample.avi";
-    p["max_frames"] = 30;    // 最多处理多少帧 —— 视频可能有几千帧,全跑一遍很久
-    p["frame_step"] = 1;     // 隔几帧取一帧 —— 快速粗看时抽帧
+    p["video_path"] = QString::fromUtf8(ImageSourceVideoDefaults::kVideoPath);
+    // 最多处理多少帧 —— 视频可能有几千帧,全跑一遍很久
+    p["max_frames"] = ImageSourceVideoDefaults::kMaxFrames;
+    // 隔几帧取一帧 —— 快速粗看时抽帧
+    p["frame_step"] = ImageSourceVideoDefaults::kFrameStep;
     return p;
 }
 
 QJsonObject ImageSourceVideo::run(const QJsonObject& params,
                                  const QJsonObject& inputs) {
     QJsonObject output;
-    const QString videoPath = params.value("video_path").toString();
-    const int maxFrames = params.value("max_frames").toInt(30);
-    const int frameStep = std::max(1, params.value("frame_step").toInt(1));
+    const QString videoPath = params.value("video_path").toString(
+                                  QString::fromUtf8(ImageSourceVideoDefaults::kVideoPath));
+    const int maxFrames = params.value("max_frames").toInt(ImageSourceVideoDefaults::kMaxFrames);
+    const int frameStep = std::max(1, params.value("frame_step").toInt(ImageSourceVideoDefaults::kFrameStep));
 
     if (!QFileInfo::exists(videoPath)) {
         output["error"] = QString("视频文件不存在: %1").arg(videoPath);
@@ -144,12 +148,12 @@ void ImageSourceVideoForm::buildUI() {
 
     m_maxFrames = new QSpinBox;
     m_maxFrames->setRange(1, 100000);
-    m_maxFrames->setValue(30);
+    m_maxFrames->setValue(ImageSourceVideoDefaults::kMaxFrames);
     m_maxFrames->setToolTip(tr("最多处理多少帧。视频动辄几千帧,全跑一遍很慢"));
 
     m_frameStep = new QSpinBox;
     m_frameStep->setRange(1, 1000);
-    m_frameStep->setValue(1);
+    m_frameStep->setValue(ImageSourceVideoDefaults::kFrameStep);
     m_frameStep->setToolTip(tr("隔几帧取一帧。快速粗看时抽帧,比如 10 = 每 10 帧取 1"));
 
     m_layout->addRow(tr("视频路径"), m_videoPath);
@@ -159,8 +163,10 @@ void ImageSourceVideoForm::buildUI() {
 
 void ImageSourceVideoForm::setParams(const QJsonObject& params) {
     if (params.contains("video_path")) m_videoPath->setText(params["video_path"].toString());
-    if (params.contains("max_frames")) m_maxFrames->setValue(params["max_frames"].toInt(30));
-    if (params.contains("frame_step")) m_frameStep->setValue(params["frame_step"].toInt(1));
+    if (params.contains("max_frames"))
+        m_maxFrames->setValue(params["max_frames"].toInt(ImageSourceVideoDefaults::kMaxFrames));
+    if (params.contains("frame_step"))
+        m_frameStep->setValue(params["frame_step"].toInt(ImageSourceVideoDefaults::kFrameStep));
 }
 
 QJsonObject ImageSourceVideoForm::collect() const {
