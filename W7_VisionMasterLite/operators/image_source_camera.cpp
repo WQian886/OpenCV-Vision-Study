@@ -16,6 +16,7 @@
 #include <QDoubleSpinBox>
 #include <QComboBox>
 #include <QFormLayout>
+#include <QLabel>
 #include <QStandardPaths>
 
 #include <opencv2/imgcodecs.hpp>
@@ -26,6 +27,25 @@
 #endif
 
 namespace w7 {
+
+// ============================================================
+// 运行时探测
+// ============================================================
+bool ImageSourceCamera::runtimeAvailable() {
+#ifdef HAS_MVS_SDK
+    return true;
+#else
+    return false;
+#endif
+}
+
+QString ImageSourceCamera::runtimeUnavailableReason() {
+    if (runtimeAvailable()) return QString();
+    return QStringLiteral(
+        "海康 MVS SDK 未安装,无法连接工业相机。"
+        "请从海康机器人官网下载 MVS_STD_V2.1.2,解压到 D:\\MVS,"
+        "并设置环境变量 MVS_DIR=D:\\MVS 后重新编译。");
+}
 
 QJsonObject ImageSourceCamera::defaultParams() const {
     QJsonObject p;
@@ -44,9 +64,9 @@ QJsonObject ImageSourceCamera::run(const QJsonObject& params, const QJsonObject&
 
 #ifndef HAS_MVS_SDK
     // === 兜底:SDK 未装,返回友好错误 ===
-    output["error"] = "MVS SDK 未安装,无法连接工业相机。"
-                      "请从海康机器人官网下载 MVS_STD_V2.1.2,"
-                      "解压到 D:\\MVS 并设置环境变量 MVS_DIR=D:\\MVS。";
+    // 用的是 runtimeUnavailableReason() —— 和面板上写的是同一句话,
+    // 只有一份,不会出现"面板说 A、Run 说 B"。
+    output["error"] = ImageSourceCamera::runtimeUnavailableReason();
     return output;
 #else
     // === 真实 MVS SDK 调用 ===
@@ -167,6 +187,27 @@ void ImageSourceCameraForm::buildUI() {
     m_layout->addRow(tr("相机 IP (GigE)"), m_cameraIp);
     m_layout->addRow(tr("曝光时间"), m_exposure);
     m_layout->addRow(tr("触发模式"), m_trigger);
+
+    // ============================================================
+    // 运行时缺失:旋钮置灰 + 写明原因
+    // ============================================================
+    // 没装 MVS SDK 时,这个算子整体是空实现 —— 曝光、触发模式这些
+    // 旋钮当前**一个都不生效**。摆着能调但没用的旋钮 = 骗人。
+    //
+    // 置灰只是"别让人以为能调",真正要紧的是把原因写出来:
+    // 去哪儿下载、解压到哪、设哪个环境变量。
+    // ============================================================
+    if (!ImageSourceCamera::runtimeAvailable()) {
+        m_cameraIp->setEnabled(false);
+        m_exposure->setEnabled(false);
+        m_trigger->setEnabled(false);
+
+        m_hint = new QLabel;
+        m_hint->setWordWrap(true);
+        m_hint->setText(tr("⚠️ %1").arg(ImageSourceCamera::runtimeUnavailableReason()));
+        m_hint->setStyleSheet("color:#c05000;");
+        m_layout->addRow(m_hint);
+    }
 }
 
 void ImageSourceCameraForm::setParams(const QJsonObject& params) {

@@ -19,6 +19,7 @@
 class QLineEdit;
 class QDoubleSpinBox;
 class QComboBox;
+class QLabel;
 
 namespace w7 {
 
@@ -37,6 +38,16 @@ public:
     QJsonObject run(const QJsonObject& params, const QJsonObject& inputs) override;
     QWidget* createParamWidget(QWidget* parent,
                                const QJsonObject& params) override;
+
+    // 运行时是否可用(没装海康 MVS SDK 时为 false)。
+    //
+    // 理由和 dl_infer 完全一样:没装 SDK 时这个算子整体是空实现,
+    // 它的旋钮调了不生效 —— 面板要置灰并写明原因。
+    static bool runtimeAvailable();
+
+    // 不可用时给用户看的原因(必须说清楚怎么修)。
+    // 这一份字符串同时给:面板提示、Run 时的 error、旋钮审计的断言。
+    static QString runtimeUnavailableReason();
 };
 
 // === 工业相机参数面板 ===
@@ -52,6 +63,8 @@ private:
     QLineEdit*    m_cameraIp  = nullptr;
     QDoubleSpinBox* m_exposure = nullptr;
     QComboBox*    m_trigger   = nullptr;
+    // 运行时缺失时的提示(和 dl_infer 同一套做法)。
+    QLabel*       m_hint      = nullptr;
 };
 
 } // namespace w7

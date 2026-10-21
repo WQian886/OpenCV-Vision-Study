@@ -45,6 +45,14 @@ bool DlInfer::runtimeAvailable() {
 #endif
 }
 
+QString DlInfer::runtimeUnavailableReason() {
+    if (runtimeAvailable()) return QString();
+    return QStringLiteral(
+        "ONNX Runtime 未安装,无法推理。"
+        "请下载 ONNX Runtime Windows 版,解压到 D:\\onnxruntime,"
+        "并设置环境变量 ONNXRUNTIME_DIR=D:\\onnxruntime 后重新编译。");
+}
+
 QJsonObject DlInfer::defaultParams() const {
     QJsonObject p;
     p["model_path"]    = QString::fromUtf8(DlInferDefaults::kModelPath);
@@ -79,10 +87,8 @@ QJsonObject DlInfer::run(const QJsonObject& params, const QJsonObject& inputs) {
         out["error"] = QString("模型文件不存在: %1").arg(modelPath);
         return out;
     }
-    out["error"] = "ONNX Runtime 未安装,无法推理。模型文件本身是存在的"
-                   "(这是好事,说明路径对)。请下载 ONNX Runtime Windows 版,"
-                   "解压到 D:\\onnxruntime 并设置环境变量 "
-                   "ONNXRUNTIME_DIR=D:\\onnxruntime 后重新编译。";
+    out["error"] = DlInfer::runtimeUnavailableReason()
+                   + "模型文件本身是存在的(这是好事,说明路径对)。";
     return out;
 }
 #else
@@ -278,9 +284,27 @@ void DlInferForm::buildUI() {
     if (DlInfer::runtimeAvailable()) {
         m_hint->setText(tr("✅ 已检测到 ONNX Runtime"));
     } else {
-        m_hint->setText(tr("⚠️ 未检测到 ONNX Runtime,此算子 Run 时会返回提示错误。"
-                           "设置环境变量 ONNXRUNTIME_DIR 后重新编译即可启用。"));
+        m_hint->setText(tr("⚠️ %1").arg(DlInfer::runtimeUnavailableReason()));
         m_hint->setStyleSheet("color:#c05000;");
+        // ============================================================
+        // 旋钮置灰:运行时不在,这几个旋钮调了也不生效
+        // ============================================================
+        // 界面上摆一个"调了不生效"的旋钮 = 骗人。
+        // 用户在这里填的每一个数字,当前这个构建里都不会被读到 ——
+        // 真正读它们的那段代码在 #ifdef HAS_ONNXRUNTIME 里,没编进来。
+        //
+        // 置灰 + 写明原因,是唯一诚实的做法:用户一眼就知道
+        // "不是我填错了,是这个功能现在没装上"。
+        //
+        // model_path 不置灰:空实现里它**真的被读**
+        // (用来区分"路径写错了"和"SDK 没装"两种病因)。
+        // ============================================================
+        m_inW->setEnabled(false);
+        m_inH->setEnabled(false);
+        m_conf->setEnabled(false);
+        m_iou->setEnabled(false);
+        m_classes->setEnabled(false);
+        m_outLayout->setEnabled(false);
     }
     m_layout->addRow(m_hint);
 }
