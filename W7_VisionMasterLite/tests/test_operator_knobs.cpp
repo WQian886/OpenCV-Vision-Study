@@ -473,6 +473,107 @@ static bool exprHasBareString(const QString& expr) {
 }
 
 // ============================================================
+// 抹掉"键名"里的字符串字面量
+// ============================================================
+//
+//     d.value("dark_min_pct").toDouble()
+//
+// 这里的 "dark_min_pct" 是**键的名字**,不是值。
+// 它长得和"抄了一份路径"一模一样,但它不是 ——
+// 把它当成值来报,就是误报。
+//
+// ⚠ 实测踩过:第五轮给 3g 加了"裸字符串"检查,
+//   pcb_defect_judge 的 10 个阈值兜底当场报了 10 条假红 ——
+//   审计第一天就对自家代码误报,下一个人只会把这守卫关掉。
+//
+// ⚠ 只抹 `.value("...")` 这一种形态:
+//   `.fromUtf8("recipes/demo.json")` 里的字符串**是值**,不能抹 ——
+//   抹了就看不见"文本旋钮抄了一份路径"(那正是要抓的)。
+static QString exprWithoutKeyNames(const QString& expr) {
+    QString t = expr;
+    t.remove(QRegularExpression(QStringLiteral("\\.\\s*value\\s*\\(\\s*\"[^\"]*\"\\s*\\)")));
+    return t;
+}
+
+// ============================================================
+// 面板 collect() 写出的 key —— "用户能设哪些旋钮"的独立证据
+// ============================================================
+//
+// 为什么要有它:defaultParams() 和 collect() 是**两份独立的清单**,
+// 审计一直只对着第一份查。差一份就出两种病:
+//
+//   · collect() 有、defaultParams() 没有
+//     → 面板上能设,存盘里却没这个 key,
+//       它的默认值只活在面板初值里
+//       (用例 2 查不到 —— 用例 2 查的是"run() 读了却没登记")
+//
+//   · collect() 有、run() 没读
+//     → 死旋钮:界面上摆着,调了不生效
+//
+// 键名有两种形态:
+//
+//   p["min_area"] = ...            字面量
+//   p[kCoordKeys.at(i)] = ...      清单(五个测量算子的坐标)
+//
+// ⚠ 为什么用 readsAll 而不是 readsLive:
+//   dl_infer 的 6 个旋钮在当前构建里读不到(整段在 #ifdef 里),
+//   但那一支**确实读了** —— 拿"当前构建"去比会误报。
+// ============================================================
+static QStringList parseCollectKeys(const QString& body,
+                                    const QMap<QString, QStringList>& keyLists) {
+    QStringList out;
+
+    const QRegularExpression lit(
+        QStringLiteral("p\\s*\\[\\s*\"([^\"]+)\"\\s*\\]\\s*="));
+    auto it = lit.globalMatch(body);
+    while (it.hasNext()) out.append(it.next().captured(1));
+
+    const QRegularExpression list(
+        QStringLiteral("p\\s*\\[\\s*(\\w+)\\s*\\.\\s*at\\s*\\("));
+    auto lit2 = list.globalMatch(body);
+    while (lit2.hasNext()) {
+        const QString name = lit2.next().captured(1);
+        if (keyLists.contains(name)) {
+            for (const QString& k : keyLists.value(name)) out.append(k);
+        }
+    }
+
+    out.removeDuplicates();
+    return out;
+}
+
+// ============================================================
+// 算子文件里自己定义的常量
+// ============================================================
+//
+// 收的是"const / constexpr 声明"这一种形态,包括函数体里的局部变量 ——
+// "在函数里现算一个默认值"也是抄副本的一种。
+//
+// 为什么记它的**类型**:键名清单(const QStringList kCoordKeys = {...})
+// 里面是字符串,但它不是**值** —— 它是键的名字。
+// 把清单当成默认值副本来报,就是误报,而误报的守卫会被下一个人关掉。
+struct LocalConst {
+    QString name;
+    QString type;
+    QString init;      // 初始化表达式(空 = 没有初始化,比如 `const X k;`)
+};
+
+static QVector<LocalConst> parseLocalConsts(const QString& src) {
+    QVector<LocalConst> out;
+    const QRegularExpression re(
+        QStringLiteral("\\b(?:const|constexpr)\\s+(.+?)\\s+(\\w+)\\s*(?:=\\s*([^;]+))?;"));
+    auto it = re.globalMatch(src);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        LocalConst lc;
+        lc.type = m.captured(1).trimmed();
+        lc.name = m.captured(2);
+        lc.init = m.captured(3).trimmed();
+        out.append(lc);
+    }
+    return out;
+}
+
 // 算子自己的 Defaults 结构体名
 // ============================================================
 //
@@ -541,10 +642,17 @@ static QVector<DefaultsMember> parseDefaultsMembers(const QString& header) {
 //   看着像"没写兜底",其实是 Qt 的默认参数 0 ——
 //   它是**隐式**的,源码里看不见那个 0,lint 也看不见。
 //   而 0 几乎从来不是那个旋钮的声明值。
+//
+// ⚠ 第五轮把 **toString()** 也收了进来:
+//   它的隐式默认值是**空串**(不是 0),而空串同样不是声明值 ——
+//   以前 toString() 被跳过,于是文本旋钮的面板兜底**一条规则都没管**:
+//   `toString()` 退成空串看不见,`toString("recipes/demo.json")`
+//   抄一份路径也看不见(3g 只查裸数字)。
 // ============================================================
 struct ValueRead {
     QString keyExpr;    // 读的表达式(可能是字面量,也可能是 kKeys[i])
     QString expr;       // 兜底表达式(toXxx 的参数;空 = 没写兜底)
+    QString method;     // 用的哪个 toXxx(toInt / toDouble / toString)
 };
 
 // ============================================================
@@ -565,6 +673,9 @@ struct OperatorSource {
     QStringList helperFallbackIssues;  // 新读法的兜底**抄了第二份**(不是认不出)
     QString setParamsBody;        // setParams() 的函数体(没有面板就空)
     QVector<ValueRead> setParamsReads;   // setParams() 里的兜底读法
+    QStringList collectKeys;      // collect() 写出的 key(面板能设哪些旋钮)
+    QVector<LocalConst> localConsts;    // 算子文件里自己定义的常量
+    bool runMentionsParams = false;      // run() 里到底碰没碰 params
 };
 
 // defaultParams() 里登记的 key 与右值表达式
@@ -651,11 +762,19 @@ static QVector<ValueRead> parseValueReads(const QString& body) {
                (body[i].isLetterOrNumber() || body[i] == QLatin1Char('_'))) ++i;
         const QString method = body.mid(idStart, i - idStart);
         if (!method.startsWith(QLatin1String("to"))) continue;
-        if (method == QLatin1String("toString")) continue;   // 文本旋钮另说
+        // ⚠ toString() 以前是**跳过**的 —— "文本旋钮另说"。
+        //   第五轮把它收了回来:文本旋钮的兜底同样是"默认值的一份",
+        //   而它的隐式默认值是**空串**(不是 0)——
+        //   空串照样不是声明值,照样是"面板显示的和算子跑的不是一回事"。
+        //
+        //   以前这条缝在这儿:toString() 不带参数 → 空串;
+        //   toString("recipes/demo.json") → 抄了一份路径。
+        //   两种写法,3g 一个都看不见(它连 toString 都不收)。
         while (i < body.size() && body[i].isSpace()) ++i;
         if (i >= body.size() || body[i] != QLatin1Char('(')) continue;
         const int argClose = matchBracket(body, i, QLatin1Char('('), QLatin1Char(')'));
         if (argClose < 0) continue;
+        vr.method = method;
         vr.expr = body.mid(i + 1, argClose - i - 1).trimmed();
         out.append(vr);
     }
@@ -937,6 +1056,23 @@ static bool parseOperator(const QString& path, bool hasOnnx, bool hasMvs,
         op.setParamsBody = spBodies.first();
         op.setParamsReads = parseValueReads(op.setParamsBody);
     }
+
+    // 面板 collect() 写出的 key —— "用户能设哪些旋钮"的独立证据
+    const QStringList collectBodies = functionBodies(liveSrc, QStringLiteral("collect"));
+    if (!collectBodies.isEmpty())
+        op.collectKeys = parseCollectKeys(collectBodies.first(), keyLists);
+
+    // 算子文件里自己定义的常量(3j 要用)
+    op.localConsts = parseLocalConsts(scanSrc);
+
+    // run() 到底碰没碰 params —— 用例 1 的护栏要用:
+    // 碰了而审计一个 key 都没认出来,那是**审计瞎了**,不是旋钮死了。
+    for (const auto& body : functionBodies(allSrc, QStringLiteral("run"))) {
+        if (body.contains(QRegularExpression(QStringLiteral("\\bparams\\b")))) {
+            op.runMentionsParams = true;
+            break;
+        }
+    }
     return true;
 }
 
@@ -1006,6 +1142,26 @@ static void test_no_dead_knobs(const QVector<OperatorSource>& ops) {
 
     int exempted = 0;
     for (const auto& op : ops) {
+        // ⚠ 护栏:审计**完全**认不出这个算子的读法时,
+        //   不能把它的旋钮全判成"死旋钮" —— 那是撒谎。
+        //
+        //   什么时候会这样:有人写了个新的读取封装,名字不是
+        //   readXxxKnob,审计的正则认不出 → 一个 key 都收集不到 →
+        //   这个算子的所有旋钮都会被判成"死的"。
+        //
+        //   第三轮就栽过这一回(28 条假"死旋钮"),那次运气好:
+        //   新读法恰好叫 readIntKnobs,被"认不出"那条兜住了。
+        //   换个名字就兜不住了 —— 所以这里加一道**结构性**的护栏:
+        //   先问"你的 run() 到底碰没碰 params",
+        //   碰了而我一个 key 都没认出来 → 那是我瞎了,不是你写错了。
+        if (op.runMentionsParams && op.readsAll.isEmpty() && !op.declared.isEmpty()) {
+            check(false,
+                  QString("%1: 审计一个旋钮都没认出来,可它的 run() 明明用了 params —— "
+                          "这是**审计认不出这处读法**(不是旋钮死了),"
+                          "得先把审计升级,别去改旋钮")
+                      .arg(op.opName));
+            continue;
+        }
         // 审计认不出这个算子的某种读法时,**不能**判成"死旋钮" ——
         // 那是撒谎,而且是"看起来很肯定"地撒谎:
         // 旋钮明明被读了,审计却说它没被读,会把人引到完全错误的方向。
@@ -1446,7 +1602,7 @@ static void test_string_defaults_reach_the_panel(const QVector<OperatorSource>& 
 // ============================================================
 static void test_setparams_fallbacks_have_single_source(
         const QVector<OperatorSource>& ops) {
-    beginCase("3g. 面板读回时的兜底也不许是另一份:setParams() 里的 toInt/toDouble");
+    beginCase("3g. 面板读回时的兜底也不许是另一份:setParams() 里的 toInt/toDouble/toString");
 
     if (ops.isEmpty()) {
         check(false, "没扫到任何算子 —— 这条审计等于没跑(恒真的空断言)");
@@ -1459,17 +1615,36 @@ static void test_setparams_fallbacks_have_single_source(
         ++panels;
         for (const auto& vr : op.setParamsReads) {
             ++total;
+            const bool isText = (vr.method == QLatin1String("toString"));
             if (vr.expr.isEmpty()) {
+                // 隐式默认值不是 0 —— 是**空串**。
+                // 两者都不是声明值,但骗人的方式不一样,消息也得说不一样。
                 check(false,
-                      QString("%1 的 setParams() 里 %2 没有兜底 —— "
-                              "toInt()/toDouble() 不带参数是**隐式退成 0**,"
-                              "那和声明的默认值不是一回事(面板上显示 0,"
-                              "用户点一下\"应用参数\"就把 0 存进流水线了)")
-                          .arg(op.opName, vr.keyExpr));
-            } else if (exprHasBareNumber(vr.expr)) {
+                      isText
+                          ? QString("%1 的 setParams() 里 %2 没有兜底 —— "
+                                    "toString() 不带参数是**隐式退成空串**,"
+                                    "空串不是声明值(面板上空着,"
+                                    "用户点一下\"应用参数\"就把空串存进流水线了)")
+                                .arg(op.opName, vr.keyExpr)
+                          : QString("%1 的 setParams() 里 %2 没有兜底 —— "
+                                    "toInt()/toDouble() 不带参数是**隐式退成 0**,"
+                                    "那和声明的默认值不是一回事(面板上显示 0,"
+                                    "用户点一下\"应用参数\"就把 0 存进流水线了)")
+                                .arg(op.opName, vr.keyExpr));
+            } else if (exprHasBareNumber(exprWithoutKeyNames(vr.expr))) {
                 check(false,
                       QString("%1 的 setParams() 里 %2 的兜底写的是裸数字(%3) —— "
                               "它得是声明的默认值那个常量")
+                          .arg(op.opName, vr.keyExpr, vr.expr));
+            } else if (exprHasBareString(exprWithoutKeyNames(vr.expr))) {
+                // ⚠ 文本旋钮抄一份路径,以前谁都不管:
+                //   3g 只查裸数字,而 toString() 连这条规则都不收。
+                // ⚠ 键名不算:`d.value("dark_min_pct")` 里的字符串是**键的名字**,
+                //   不是值 —— 把它当成"抄了一份"就是误报(实测踩过 10 条假红)。
+                check(false,
+                      QString("%1 的 setParams() 里 %2 的兜底写的是裸字符串(%3) —— "
+                              "它得是声明的默认值那个常量(路径抄一份,"
+                              "改默认值时就会漏掉这一处)")
                           .arg(op.opName, vr.keyExpr, vr.expr));
             }
         }
@@ -1504,8 +1679,8 @@ static void test_setparams_fallbacks_have_single_source(
 //   · 规则宁窄勿宽:误报的守卫会被下一个人关掉。
 //
 // ⚠ 这条也查不出"文件里自己 define 一个 constexpr int kXxx = 3"
-//   这种本地常量当默认值 —— 那是另一类抄副本,还没查。
-//   记在欠账里,没假装查到了。
+//   这种本地常量当默认值 —— 那是另一类抄副本。
+//   **第五轮补上了**:那条现在由 3j 管(见 test_defaults_not_from_local_consts)。
 // ============================================================
 static void test_fallbacks_not_copied_from_library(const QVector<OperatorSource>& ops) {
     beginCase("3h. 兜底值不许是从库里现抄的常量(cv::)");
@@ -1540,6 +1715,205 @@ static void test_fallbacks_not_copied_from_library(const QVector<OperatorSource>
     }
     check(total > 0,
           QString("一共检查了 %1 处兜底(要是 0,说明解析器没认出这种写法,"
+                  "这条就成了恒真的空断言)").arg(total));
+}
+
+// ============================================================
+// 用例 3j:旋钮的默认值不许来自算子文件自己定义的常量
+// ============================================================
+//
+// 欠账 12 说的那一类:operators/xxx.cpp 里自己写
+//     constexpr int kMinArea = 50;
+// 再在 defaultParams() / setParams() 里用它。
+//
+// 为什么以前查不到:3a 查的是"表达式里有没有裸字面量",
+// 而 `kMinArea` 是个**标识符** —— 3a 看不见;
+// 3b 查的是"`XxxDefaults::kY` 是不是真在 operator_defaults.h 里",
+// 而本地常量压根不是 `XxxDefaults::` —— 3b 也没东西可查。
+//
+// 于是它从两条缝里溜过去了。
+//
+// 判据:本地常量的**值**是哪来的 ——
+//       ① 值是字面量 → 它就是一份手抄的默认值            → 红
+//       ② 值指向**别的算子**的 Defaults → 绕过 3i 的后门 → 红
+//       ③ 值指向**本算子**的 Defaults → 放行(它就是那份唯一清单)
+//       或者压根没有初始化(`const pcbcore::JudgeParams kCore;`)
+//       → 它不是副本,放行。
+//
+// ⚠ 键名清单(const QStringList kCoordKeys = {"x1","y1"})要排除:
+//   里面是字符串,但它不是**值**,是键的名字。
+//   把清单当成默认值副本来报,就是误报 ——
+//   而一个对自家代码误报的守卫,下一个人只会把它关掉。
+//
+// ⚠ 三处都要盯(声明 / 面板读回 / run 兜底):
+//   只盯前两处的话,`params.value("x").toString(kLocalConst)`
+//   会同时躲过 3d(只查裸字面量)和 3h(只查 `cv::` 前缀) ——
+//   两条规则都看不见一个**标识符**。
+// ============================================================
+static void test_defaults_not_from_local_consts(const QVector<OperatorSource>& ops) {
+    beginCase("3j. 旋钮默认值不许来自算子文件自己定义的常量");
+
+    if (ops.isEmpty()) {
+        check(false, "没扫到任何算子 —— 这条审计等于没跑(恒真的空断言)");
+        return;
+    }
+
+    int scanned = 0;   // 扫到本地常量的算子数
+    int used    = 0;   // 本地常量被当成旋钮默认值用的处数
+
+    for (const auto& op : ops) {
+        if (op.localConsts.isEmpty()) continue;
+        ++scanned;
+
+        const QString own = ownDefaultsStructName(QFileInfo(op.file).completeBaseName());
+
+        for (const auto& lc : op.localConsts) {
+            if (lc.init.isEmpty()) continue;                              // 没有初始化 → 不是值
+            if (lc.type.contains(QLatin1String("QStringList"))) continue; // 键名清单,不是值
+
+            // ⚠ 要排除 `Foo::kBar` 这种**限定**引用 ——
+            //   本地常量 kBar 和别人的 kBar 不是一回事。
+            const QRegularExpression useRe(
+                QStringLiteral("(?<!::)\\b%1\\b").arg(QRegularExpression::escape(lc.name)));
+
+            // 这个常量出现在哪些"旋钮默认值"的位置上?
+            //   ① defaultParams() 的右值表达式
+            //   ② setParams() 读回控件时的兜底
+            //   ③ run() 里的兜底
+            //
+            // ⚠ ③ 为什么也要盯:以前这条只盯 ①②,
+            //   而 `params.value("x").toString(kLocalConst)` 这种写法
+            //   同时躲过了 3d(它只查裸字面量)和 3h(它只查 `cv::` 前缀) ——
+            //   两条规则都看不见一个**标识符**。
+            QStringList keys;
+            QStringList where;
+            for (const auto& kv : op.defaultExprs) {
+                if (!useRe.match(kv.second).hasMatch()) continue;
+                keys  << kv.first;
+                where << QStringLiteral("defaultParams()");
+            }
+            for (const auto& vr : op.setParamsReads) {
+                if (vr.expr.isEmpty()) continue;
+                if (!useRe.match(vr.expr).hasMatch()) continue;
+                keys  << vr.keyExpr;
+                where << QStringLiteral("setParams()");
+            }
+            for (const auto& fb : op.fallbacks) {
+                if (fb.expr.isEmpty()) continue;
+                if (!useRe.match(fb.expr).hasMatch()) continue;
+                keys  << fb.key;
+                where << QStringLiteral("run()");
+            }
+            if (keys.isEmpty()) continue;   // 它压根不是旋钮默认值 → 放行
+            used += keys.size();
+
+            // 这个常量的值是哪来的?
+            //   ① 值是字面量              → 手抄的默认值      → 红
+            //   ② 值指向**别的算子**的 Defaults → 绕过 3i 的后门 → 红
+            //   ③ 值指向**本算子**的 Defaults   → 放行(它就是那份唯一清单)
+            //
+            // ⚠ ② 为什么单列:3i 查的是 defaultParams() 里有没有
+            //   `XxxDefaults::` 的字样,一旦套一层本地别名,
+            //   3i 就看不见了 —— 那是绕过规则的后门,不是"合法写法"。
+            QString foreign;
+            {
+                const QRegularExpression dRe(QStringLiteral("\\b(\\w+Defaults)::"));
+                auto dit = dRe.globalMatch(lc.init);
+                while (dit.hasNext()) {
+                    const QString s = dit.next().captured(1);
+                    if (s != own) { foreign = s; break; }
+                }
+            }
+            const bool isLiteral = exprHasBareLiteral(lc.init);
+            if (foreign.isEmpty() && !isLiteral) continue;   // ③ 放行
+
+            for (int i = 0; i < keys.size(); ++i) {
+                if (!foreign.isEmpty()) {
+                    check(false,
+                          QString("%1 的 %2 在 %3 里用的是算子文件里自己定义的常量 %4,"
+                                  "而它指向的是**别的算子**的 %5 —— "
+                                  "旋钮的默认值只能来自**本算子**的 Defaults")
+                              .arg(op.opName, keys.at(i), where.at(i), lc.name, foreign));
+                } else {
+                    check(false,
+                          QString("%1 的 %2 在 %3 里用的是算子文件里自己定义的常量 %4"
+                                  "(它的值是字面量 %5)—— "
+                                  "旋钮的默认值只能来自 operator_defaults.h,"
+                                  "这里就是**第二份**")
+                              .arg(op.opName, keys.at(i), where.at(i), lc.name, lc.init));
+                }
+            }
+        }
+    }
+    check(scanned > 0,
+          QString("扫了 %1 个算子的本地常量(要是 0,说明解析器没认出这种写法,"
+                  "这条就成了恒真的空断言)").arg(scanned));
+    check(used > 0,
+          QString("本地常量在 %1 处被当成了旋钮默认值(要是 0,说明这条规则盯着的地方"
+                  "已经搬家了 —— 按第四轮的教训,得把它**搬家**,不是删掉)")
+              .arg(used));
+}
+
+// ============================================================
+// 用例 3k:面板能设的旋钮,存盘里得登记,算子得读
+// ============================================================
+//
+//   ① collect() 写出的 key,defaultParams() 都得登记
+//   ② collect() 写出的 key,run() 都得读到
+//
+// ⚠ 为什么 ② 不是用例 1 的重复:
+//   用例 1 的证据是 defaultParams(),这条的证据是 collect() ——
+//   两份**独立**的清单。用例 1 查"登记了却没读",
+//   这条查"面板上能设的,存盘里和算子里有没有"。
+//   两份清单差一份,就有一处漏了 —— 而用例 1 看不见那种漏。
+//
+//   ① 更是一个全新的病:collect() 有、defaultParams() 没有
+//   → 面板上能设,存盘里却没这个 key,它的默认值只活在面板初值里。
+//   用例 2 查不到它 —— 用例 2 查的是"run() 读了却没登记",
+//   而这个 key run() 压根没读(否则用例 2 会报)。
+// ============================================================
+static void test_panel_knobs_are_known(const QVector<OperatorSource>& ops) {
+    beginCase("3k. 面板能设的旋钮:存盘里得登记,算子得读");
+
+    if (ops.isEmpty()) {
+        check(false, "没扫到任何算子 —— 这条审计等于没跑(恒真的空断言)");
+        return;
+    }
+
+    int total = 0;
+    for (const auto& op : ops) {
+        // ⚠ 和用例 1 同一道护栏:审计**完全**认不出这个算子的读法时,
+        //   这条也不能说"面板写了但 run() 没读" —— 那同样是撒谎。
+        //
+        //   不加这道护栏的话,一旦有人写了新的读取封装,
+        //   审计会同时喊两句话:"我认不出这处读法"和"它是死旋钮" ——
+        //   两句互相打架,而**后一句是假的**。
+        //   假的那句更危险:它会让人去查旋钮,其实旋钮好着呢。
+        if (op.runMentionsParams && op.readsAll.isEmpty() && !op.declared.isEmpty()) {
+            check(false,
+                  QString("%1: 审计一个 key 都没认出来,可它的 run() 明明用了 params —— "
+                          "这条不能判成死旋钮,得先把审计升级")
+                      .arg(op.opName));
+            continue;
+        }
+        for (const QString& key : op.collectKeys) {
+            ++total;
+            if (!op.declared.contains(key)) {
+                check(false,
+                      QString("%1 面板 collect() 写出了 %2,但 defaultParams() 没登记它 —— "
+                              "存盘里压根没有这个 key,它的默认值只活在面板初值里")
+                          .arg(op.opName, key));
+            }
+            if (!op.readsAll.contains(key)) {
+                check(false,
+                      QString("%1 面板 collect() 写出了 %2,但 run() 里没找到读它的地方 —— "
+                              "死旋钮:界面上摆着,调了不生效")
+                          .arg(op.opName, key));
+            }
+        }
+    }
+    check(total > 0,
+          QString("一共核对了 %1 个面板旋钮(要是 0,说明解析器没认出 collect() 的写法,"
                   "这条就成了恒真的空断言)").arg(total));
 }
 
@@ -2230,6 +2604,8 @@ int main(int argc, char* argv[]) {
     test_string_defaults_reach_the_panel(ops);
     test_setparams_fallbacks_have_single_source(ops);
     test_fallbacks_not_copied_from_library(ops);
+    test_defaults_not_from_local_consts(ops);
+    test_panel_knobs_are_known(ops);
     test_exemptions_not_stale();
     test_empty_params_match_defaults(maskPath, imgPath, boardPath);
     test_default_value_truth_table();
