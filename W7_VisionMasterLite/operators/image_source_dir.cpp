@@ -1,5 +1,6 @@
 #include "image_source_dir.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -25,10 +26,16 @@ QJsonObject ImageSourceDir::defaultParams() const {
 
 QJsonObject ImageSourceDir::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
-    QString dirPath  = params.value("dir_path").toString(
-                          QString::fromUtf8(ImageSourceDirDefaults::kDirPath));
-    QString pattern  = params.value("pattern").toString(
-                           QString::fromUtf8(ImageSourceDirDefaults::kPattern));
+    // 旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    // 兜底值来自 defaultParams() —— 声明值只有一份。
+    QString dirPath;
+    QString pattern;
+    QString err;
+    if (!readTextKnob(params, defaultParams(), "dir_path", &dirPath, &err) ||
+        !readTextKnob(params, defaultParams(), "pattern", &pattern, &err)) {
+        output["error"] = err;
+        return output;
+    }
 
     QDir dir(dirPath);
     if (!dir.exists()) {
@@ -116,8 +123,15 @@ void ImageSourceDirForm::buildUI() {
 }
 
 void ImageSourceDirForm::setParams(const QJsonObject& params) {
-    if (params.contains("dir_path")) m_dirPath->setText(params["dir_path"].toString());
-    if (params.contains("pattern"))  m_pattern->setText(params["pattern"].toString());
+    // 兜底用**声明的默认值**。
+    // ⚠ 以前是 toString() 不带参数 —— 那是**空串**,不是声明值:
+    //   存盘里路径存成了数字时,面板显示空串,而算子按声明值
+    //   ("images" / "*.png")跑 —— 界面上摆的和实际跑的不是一回事。
+    const QJsonObject d = ImageSourceDir().defaultParams();
+    if (params.contains("dir_path"))
+        m_dirPath->setText(knobTextForWidget(params.value("dir_path"), d, "dir_path"));
+    if (params.contains("pattern"))
+        m_pattern->setText(knobTextForWidget(params.value("pattern"), d, "pattern"));
 }
 
 QJsonObject ImageSourceDirForm::collect() const {

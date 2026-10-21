@@ -149,7 +149,7 @@ void LineFitForm::setParams(const QJsonObject& params) {
     const QJsonObject d = LineFit().defaultParams();
     for (int i = 0; i < 4; ++i) {
         if (params.contains(kCoordKeys.at(i)))
-            m_coord[i]->setValue(knobValueForWidget(params.value(kCoordKeys.at(i)),
+            m_coord[i]->setValue(knobIntForWidget(params.value(kCoordKeys.at(i)),
                                                     d, kCoordKeys.at(i)));
     }
 }

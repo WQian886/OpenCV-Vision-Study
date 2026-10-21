@@ -7,6 +7,7 @@
 
 #include "image_source_camera.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 
 #include <QFileInfo>
 #include <QDir>
@@ -57,10 +58,21 @@ QJsonObject ImageSourceCamera::defaultParams() const {
 
 QJsonObject ImageSourceCamera::run(const QJsonObject& params, const QJsonObject& /*inputs*/) {
     QJsonObject output;
-    QString cameraIp   = params.value("camera_ip").toString(
-                              QString::fromUtf8(ImageSourceCameraDefaults::kCameraIp));
-    double  exposureMs = params.value("exposure").toDouble(ImageSourceCameraDefaults::kExposureMs);
-    int     triggerMode = params.value("trigger_mode").toInt(ImageSourceCameraDefaults::kTriggerMode);
+    // 旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    // 兜底值来自 defaultParams() —— 声明值只有一份。
+    //
+    // ⚠ 这三个旋钮在**两个分支之前**读:没装 SDK 的那一支虽然不用它们,
+    //   也要先把参数读对 —— 免得"SDK 没装"和"参数配坏了"两件事混成一件。
+    QString cameraIp;
+    double exposureMs = 0.0;
+    int triggerMode = 0;
+    QString err;
+    if (!readTextKnob(params, defaultParams(), "camera_ip", &cameraIp, &err) ||
+        !readDoubleKnob(params, defaultParams(), "exposure", &exposureMs, &err) ||
+        !readIntKnob(params, defaultParams(), "trigger_mode", &triggerMode, &err)) {
+        output["error"] = err;
+        return output;
+    }
 
 #ifndef HAS_MVS_SDK
     // === 兜底:SDK 未装,返回友好错误 ===
@@ -217,7 +229,13 @@ void ImageSourceCameraForm::buildUI() {
 }
 
 void ImageSourceCameraForm::setParams(const QJsonObject& params) {
-    if (params.contains("camera_ip")) m_cameraIp->setText(params["camera_ip"].toString());
+    // 兜底用**声明的默认值**。
+    // ⚠ camera_ip 以前是 toString() 不带参数 —— 那是**空串**,不是声明值
+    //   ("192.168.1.10"):存盘里 IP 存成了数字时,面板显示空串,
+    //   算子却按声明 IP 跑 —— 界面上摆的和实际跑的不是一回事。
+    const QJsonObject d = ImageSourceCamera().defaultParams();
+    if (params.contains("camera_ip"))
+        m_cameraIp->setText(knobTextForWidget(params.value("camera_ip"), d, "camera_ip"));
     if (params.contains("exposure"))
         m_exposure->setValue(params.value("exposure").toDouble(ImageSourceCameraDefaults::kExposureMs));
     if (params.contains("trigger_mode")) {

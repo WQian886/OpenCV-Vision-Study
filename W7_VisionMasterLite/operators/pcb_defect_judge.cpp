@@ -2,6 +2,7 @@
 #include "pcb_color_ref.h"
 #include "board_recipe.h"
 #include "pcb_core.h"
+#include "param_read.h"
 #include <QDoubleSpinBox>
 #include <QLabel>
 #include <QJsonArray>
@@ -344,12 +345,23 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     // mul 算出来的(mul 调大,墙就往前挪)。顺序反了的话,
     // 「把倍数调到 2.0」这个操作会**看起来是安全的**,而实际上
     // 判据早就撞墙、守卫却还按 1.6 在放行。
-    const double darkVMul    = params.value("dark_v_mul").toDouble(pcbcolor::kDarkMul);
-    const double brightVMul  = params.value("bright_v_mul").toDouble(pcbcolor::kBrightMul);
-    const double neutralMax  = params.value("neutral_max").toDouble(pcbcolor::kNeutralMax);
-    const double offColorMul = params.value("off_color_mul").toDouble(pcbcolor::kOffColorMul);
-    const double offColorRMax= params.value("off_color_r_max").toDouble(pcbcolor::kOffColorRMax);
-    const double maskVMul    = params.value("mask_v_mul").toDouble(pcbcolor::kMaskVMul);
+    // 旋钮:类型不对就报错,不补默认值(理由见 operators/param_read.h)。
+    // 兜底指向 defaultParams() —— 它转手来自 pcbcolor::kXxx,
+    // 那才是这些系数的唯一一份(W6/W7 共用)。
+    double darkVMul = 0.0, brightVMul = 0.0, neutralMax = 0.0;
+    double offColorMul = 0.0, offColorRMax = 0.0, maskVMul = 0.0;
+    {
+        QString err;
+        if (!readDoubleKnob(params, defaultParams(), "dark_v_mul", &darkVMul, &err) ||
+            !readDoubleKnob(params, defaultParams(), "bright_v_mul", &brightVMul, &err) ||
+            !readDoubleKnob(params, defaultParams(), "neutral_max", &neutralMax, &err) ||
+            !readDoubleKnob(params, defaultParams(), "off_color_mul", &offColorMul, &err) ||
+            !readDoubleKnob(params, defaultParams(), "off_color_r_max", &offColorRMax, &err) ||
+            !readDoubleKnob(params, defaultParams(), "mask_v_mul", &maskVMul, &err)) {
+            output["error"] = err;
+            return output;
+        }
+    }
 
     // ============================================================
     // 撞 8 位色深上限时拒绝判定,而不是硬撑一个 PASS
@@ -388,31 +400,34 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     //   唯一一份在 pcbcore::JudgeParams(见 defaultParams() 那段说明):
     //   以前这里是"同一个数的第二份/第三份副本",改一处忘一处,
     //   界面上的值和实际跑的值就会不一样。
-    const pcbcore::JudgeParams kCore;
-    const double darkMinPct   = params.value("dark_min_pct").toDouble(kCore.darkMinPct);
-    const double bodyMinPct   = params.value("body_min_pct").toDouble(kCore.bodyMinPct);
-    const double bodyRatioMin = params.value("body_ratio_min").toDouble(kCore.bodyRatioMin);
-    const int    bodyMinSites = params.value("body_min_sites").toInt(kCore.bodyMinSites);
-    // yellow_min_pct:实测四块板(2026-10-10),同一封装"好板"与"错色废板"
-    // 的错色像素占比:
-    //     demo  R3  好  3.40   废(wrong.png) 44.77
-    //     mcu   R2  好 23.05   废(mcu_wrong) 42.14
-    //     power RES 好 19.36~23.35   signal RES 好 15.49~23.22
-    // 好板最大 23.35,废板最小 42.14 —— 中间是空的,阈值能放进去。
-    // 取几何中点 sqrt(23.35*42.14) ≈ 31.4,取 32。
     //
-    // 原来写死 12.0,比好板最大值还低一半,于是**每一块好板的每个电阻
-    // 都报错色** —— 实测三块好板各报 3/8/4 个 wrong。
-    // 这个数是 demo 板一张图上量出来的,换板型就整片失效(老毛病)。
-    const double yellowMinPct = params.value("yellow_min_pct").toDouble(kCore.yellowMinPct);
-    // ⚠ 2026-10-21:下面这行原来带着一句"这个 60 是上面 defaultParams 里
-    //   那份的第二份副本(改的时候两处一起改)"—— 那句注释**本身就是
-    //   这个坑的自白**。现在没有第二份了:值只从核心里取。
-    const double bridgeMinPct = params.value("bridge_min_pct").toDouble(kCore.bridgeMinPct);
-    const double padDropPct   = params.value("pad_drop_pct").toDouble(kCore.padDropPct);
-    const double shiftXPct    = params.value("shift_x_pct").toDouble(kCore.shiftXPct);
-    const double shiftYPct    = params.value("shift_y_pct").toDouble(kCore.shiftYPct);
-    const double shortGapMinPct = params.value("short_gap_min_pct").toDouble(kCore.shortGapMinPct);
+    // ⚠ 2026-10-21 第四轮:旋钮**类型不对**时也必须报错,
+    //   不能静默按默认值算(理由见 operators/param_read.h)。
+    //   兜底指向 defaultParams() —— 它转手来自 pcbcore::JudgeParams,
+    //   那才是这些阈值的唯一一份。
+    //
+    // 各阈值的**标定理由**(为什么是这个数)留在 defaultParams() 里
+    // 各自那一行旁边 —— 值在核心里,理由是这个算子的历史。
+    // 原来这里也抄了一份同样长的理由,那是**注释的抄副本**:
+    // 理由改了要改两处,漏一处就成了"注释在骗人"。
+    double darkMinPct = 0.0, bodyMinPct = 0.0, bodyRatioMin = 0.0;
+    double yellowMinPct = 0.0, bridgeMinPct = 0.0, padDropPct = 0.0;
+    double shiftXPct = 0.0, shiftYPct = 0.0, shortGapMinPct = 0.0;
+    int bodyMinSites = 0;
+    QString err;
+    if (!readDoubleKnob(params, defaultParams(), "dark_min_pct", &darkMinPct, &err) ||
+        !readDoubleKnob(params, defaultParams(), "body_min_pct", &bodyMinPct, &err) ||
+        !readDoubleKnob(params, defaultParams(), "body_ratio_min", &bodyRatioMin, &err) ||
+        !readIntKnob(params, defaultParams(), "body_min_sites", &bodyMinSites, &err) ||
+        !readDoubleKnob(params, defaultParams(), "yellow_min_pct", &yellowMinPct, &err) ||
+        !readDoubleKnob(params, defaultParams(), "bridge_min_pct", &bridgeMinPct, &err) ||
+        !readDoubleKnob(params, defaultParams(), "pad_drop_pct", &padDropPct, &err) ||
+        !readDoubleKnob(params, defaultParams(), "shift_x_pct", &shiftXPct, &err) ||
+        !readDoubleKnob(params, defaultParams(), "shift_y_pct", &shiftYPct, &err) ||
+        !readDoubleKnob(params, defaultParams(), "short_gap_min_pct", &shortGapMinPct, &err)) {
+        output["error"] = err;
+        return output;
+    }
 
     // 金层 mask(bridge / insufficient 判定需要)
     //

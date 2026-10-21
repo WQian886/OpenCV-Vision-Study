@@ -1,5 +1,6 @@
 #include "template_match.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 #include <QLineEdit>
 #include <QDoubleSpinBox>
 #include <QComboBox>
@@ -22,9 +23,15 @@ QJsonObject TemplateMatch::run(const QJsonObject& params, const QJsonObject& inp
 
     QString imgPath = inputs.value("image_path").toString();
     QString tplPath = inputs.value("template_path").toString();
-    if (tplPath.isEmpty())
-        tplPath = params.value("template_path").toString(
-                      QString::fromUtf8(TemplateMatchDefaults::kTemplatePath));
+    if (tplPath.isEmpty()) {
+        // 旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+        // 兜底值来自 defaultParams() —— 声明值只有一份。
+        QString err;
+        if (!readTextKnob(params, defaultParams(), "template_path", &tplPath, &err)) {
+            output["error"] = err;
+            return output;
+        }
+    }
 
     cv::Mat img = cv::imread(imgPath.toStdString(), cv::IMREAD_COLOR);
     cv::Mat tpl = cv::imread(tplPath.toStdString(), cv::IMREAD_COLOR);
@@ -33,8 +40,17 @@ QJsonObject TemplateMatch::run(const QJsonObject& params, const QJsonObject& inp
         return output;
     }
 
-    int method = params.value("method").toInt(TemplateMatchDefaults::kMethod);
-    double threshold = params.value("threshold").toDouble(TemplateMatchDefaults::kThreshold);
+    // 旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    int method = 0;
+    double threshold = 0.0;
+    {
+        QString err;
+        if (!readIntKnob(params, defaultParams(), "method", &method, &err) ||
+            !readDoubleKnob(params, defaultParams(), "threshold", &threshold, &err)) {
+            output["error"] = err;
+            return output;
+        }
+    }
 
     // ============================================================
     // 两道必须在 cv::matchTemplate 之前的闸
@@ -199,7 +215,14 @@ void TemplateMatchForm::buildUI() {
 }
 
 void TemplateMatchForm::setParams(const QJsonObject& params) {
-    if (params.contains("template_path")) m_tplPath->setText(params["template_path"].toString());
+    // 兜底用**声明的默认值**。
+    // ⚠ template_path 以前是 toString() 不带参数 —— 那是**空串**,
+    //   不是声明值("templates/R.png"):存盘里路径存成了数字时,
+    //   面板显示空串,算子却按声明路径跑 —— 界面上摆的和实际跑的
+    //   不是一回事。
+    const QJsonObject d = TemplateMatch().defaultParams();
+    if (params.contains("template_path"))
+        m_tplPath->setText(knobTextForWidget(params.value("template_path"), d, "template_path"));
     if (params.contains("method")) {
         int method = params.value("method").toInt(TemplateMatchDefaults::kMethod);
         for (int i = 0; i < m_method->count(); ++i) {

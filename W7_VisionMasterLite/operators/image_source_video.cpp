@@ -1,5 +1,6 @@
 #include "image_source_video.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -26,10 +27,23 @@ QJsonObject ImageSourceVideo::defaultParams() const {
 QJsonObject ImageSourceVideo::run(const QJsonObject& params,
                                  const QJsonObject& inputs) {
     QJsonObject output;
-    const QString videoPath = params.value("video_path").toString(
-                                  QString::fromUtf8(ImageSourceVideoDefaults::kVideoPath));
-    const int maxFrames = params.value("max_frames").toInt(ImageSourceVideoDefaults::kMaxFrames);
-    const int frameStep = std::max(1, params.value("frame_step").toInt(ImageSourceVideoDefaults::kFrameStep));
+    // 旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    // 兜底值来自 defaultParams() —— 声明值只有一份。
+    QString videoPath;
+    int maxFrames = 0;
+    int frameStep = 0;
+    QString err;
+    if (!readTextKnob(params, defaultParams(), "video_path", &videoPath, &err) ||
+        !readIntKnob(params, defaultParams(), "max_frames", &maxFrames, &err) ||
+        !readIntKnob(params, defaultParams(), "frame_step", &frameStep, &err)) {
+        output["error"] = err;
+        return output;
+    }
+    // frame_step 的安全下限:0 会让帧循环卡死(每轮都读同一帧)。
+    //
+    // ⚠ 这一层套在 toInt **外面**,旋钮审计看不见(笔记里的欠账 8)——
+    //   但它是**下限**,不是默认值的副本,所以不是抄副本。
+    frameStep = std::max(1, frameStep);
 
     if (!QFileInfo::exists(videoPath)) {
         output["error"] = QString("视频文件不存在: %1").arg(videoPath);
@@ -167,11 +181,18 @@ void ImageSourceVideoForm::buildUI() {
 }
 
 void ImageSourceVideoForm::setParams(const QJsonObject& params) {
-    if (params.contains("video_path")) m_videoPath->setText(params["video_path"].toString());
+    // 兜底用**声明的默认值**。
+    // ⚠ video_path 以前是 toString() 不带参数 —— 看着"没写兜底",
+    //   其实是 Qt 的默认参数**空串**。而声明值是
+    //   "images/sample.avi":存盘里路径存成了数字时,面板显示空串,
+    //   算子却按声明路径跑 —— 界面上摆的和实际跑的不是一回事。
+    const QJsonObject d = ImageSourceVideo().defaultParams();
+    if (params.contains("video_path"))
+        m_videoPath->setText(knobTextForWidget(params.value("video_path"), d, "video_path"));
     if (params.contains("max_frames"))
-        m_maxFrames->setValue(params["max_frames"].toInt(ImageSourceVideoDefaults::kMaxFrames));
+        m_maxFrames->setValue(params.value("max_frames").toInt(ImageSourceVideoDefaults::kMaxFrames));
     if (params.contains("frame_step"))
-        m_frameStep->setValue(params["frame_step"].toInt(ImageSourceVideoDefaults::kFrameStep));
+        m_frameStep->setValue(params.value("frame_step").toInt(ImageSourceVideoDefaults::kFrameStep));
 }
 
 QJsonObject ImageSourceVideoForm::collect() const {

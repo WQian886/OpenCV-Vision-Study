@@ -1,5 +1,6 @@
 #include "count_check.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 #include <QSpinBox>
 
 namespace w7 {
@@ -18,8 +19,17 @@ QJsonObject CountCheck::run(const QJsonObject& params, const QJsonObject& inputs
     // 兜底以前是 0 和 999 —— 和上面声明的 1 / 100 **不是一回事**。
     // 现在兜底回到声明值:参数 JSON 缺 key 时,算子按"声明的默认值"跑,
     // 而不是按另一个数跑(用户调的值和算子用的值对不上)。
-    int expectedMin = params.value("expected_min").toInt(CountCheckDefaults::kExpectedMin);
-    int expectedMax = params.value("expected_max").toInt(CountCheckDefaults::kExpectedMax);
+    //
+    // 而且**类型不对就报错** —— 理由见 operators/param_read.h。
+    int expectedMin = 0, expectedMax = 0;
+    {
+        QString err;
+        if (!readIntKnob(params, defaultParams(), "expected_min", &expectedMin, &err) ||
+            !readIntKnob(params, defaultParams(), "expected_max", &expectedMax, &err)) {
+            output["error"] = err;
+            return output;
+        }
+    }
 
     // ============================================================
     // 阈值填反了(min > max)必须报错,不能默默判 FAIL

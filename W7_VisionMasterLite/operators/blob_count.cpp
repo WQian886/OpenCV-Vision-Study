@@ -1,5 +1,6 @@
 #include "blob_count.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 #include <QSpinBox>
 
 namespace w7 {
@@ -22,7 +23,19 @@ QJsonObject BlobCount::run(const QJsonObject& params, const QJsonObject& inputs)
 
     // 兜底以前是 50,和 defaultParams() 声明的 20 不是一回事 ——
     // 参数 JSON 缺 min_area 时,算子按 50 滤,面板上写的是 20。
-    int minArea = params.value("min_area").toInt(BlobCountDefaults::kMinArea);
+    //
+    // 现在兜底指向 defaultParams()(声明值的唯一一份),
+    // 而且**类型不对就报错** —— 理由见 operators/param_read.h:
+    // 存盘里 min_area 存成字符串时,旧代码会静默按 20 算,
+    // 用户以为自己填的值生效了,实际跑的是默认值。
+    int minArea = 0;
+    {
+        QString err;
+        if (!readIntKnob(params, defaultParams(), "min_area", &minArea, &err)) {
+            output["error"] = err;
+            return output;
+        }
+    }
 
     cv::Mat labels, stats, centroids;
     int n = cv::connectedComponentsWithStats(mask, labels, stats, centroids);

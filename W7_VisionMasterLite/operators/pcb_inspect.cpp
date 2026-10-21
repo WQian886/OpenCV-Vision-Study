@@ -2,6 +2,7 @@
 #include "hsv_params.h"
 #include "pcb_color_ref.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 #include "board_recipe.h"
 #include <QSpinBox>
 #include <QDoubleSpinBox>
@@ -181,8 +182,16 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
     cv::Mat goldMask = pcbcolor::opened(pcbcolor::bandMask(hsv, boardBase, band),
                                         pcbcolor::kernelScale(img));
 
-    const QString mode = params.value("mode").toString(
-                              QString::fromUtf8(PcbInspectDefaults::kMode));
+    // 旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    // 兜底值来自 defaultParams() —— 声明值只有一份。
+    QString mode;
+    {
+        QString err;
+        if (!readTextKnob(params, defaultParams(), "mode", &mode, &err)) {
+            output["error"] = err;
+            return output;
+        }
+    }
 
     // ============================================================
     // 板型配方
@@ -193,8 +202,14 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
     // 而下游判定无从知道这一点。
     // ============================================================
     if (mode != "auto_contour") {
-        const QString recipePath =
-            params.value("recipe").toString(kDefaultRecipe);
+        QString recipePath;
+        {
+            QString err;
+            if (!readTextKnob(params, defaultParams(), "recipe", &recipePath, &err)) {
+                output["error"] = err;
+                return output;
+            }
+        }
         QString reason;
         if (!loadRecipe(recipePath, &recipe, &reason)) {
             output["error"] = QString("板型配方加载失败:%1").arg(reason);
@@ -215,7 +230,15 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
     // 一起放大,90 这个阈值相对就变紧,聚类散开 —— 上表 0.5x 的 6 个
     // 就是过度聚类(全板糊成几团),2.0x 的 18 个是聚类不足。
     // 改成跟着元件尺寸走,量纲不再是像素。
-    const double minAreaPct = params.value("min_area_pct").toDouble(PcbInspectDefaults::kMinAreaPct);
+    // 旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    double minAreaPct = 0.0;
+    {
+        QString err;
+        if (!readDoubleKnob(params, defaultParams(), "min_area_pct", &minAreaPct, &err)) {
+            output["error"] = err;
+            return output;
+        }
+    }
     const int minArea = static_cast<int>(
         std::lround(minAreaPct / 100.0 * img.cols * img.rows));
     // 聚类半径:取元件本体最大尺寸的一半。跟着图像尺寸缩放,

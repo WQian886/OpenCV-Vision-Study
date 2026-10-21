@@ -11,6 +11,7 @@
 #include "dl_postprocess.h"
 #include "artifact_path.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 
 #include <QFileInfo>
 #include <QDir>
@@ -76,8 +77,16 @@ QJsonObject DlInfer::run(const QJsonObject& params, const QJsonObject& inputs) {
     // 算子按"声明的默认模型路径"去找,而不是按空路径 —— 空路径的
     // 报错信息("模型文件不存在: ")会把人引向"路径填错了",
     // 而真实原因是"这个 key 压根没写"。
-    const QString modelPath = params.value("model_path").toString(
-                                  QString::fromUtf8(DlInferDefaults::kModelPath));
+    //
+    // 旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    QString modelPath;
+    {
+        QString err;
+        if (!readTextKnob(params, defaultParams(), "model_path", &modelPath, &err)) {
+            out["error"] = err;
+            return out;
+        }
+    }
 
     if (inputs.value("image_path").toString().isEmpty()) {
         out["error"] = "上游未提供 image_path";
@@ -123,8 +132,16 @@ QJsonObject DlInfer::run(const QJsonObject& params, const QJsonObject& inputs) {
     // 算子按"声明的默认模型路径"去找,而不是按空路径 —— 空路径的
     // 报错信息("模型文件不存在: ")会把人引向"路径填错了",
     // 而真实原因是"这个 key 压根没写"。
-    const QString modelPath = params.value("model_path").toString(
-                                  QString::fromUtf8(DlInferDefaults::kModelPath));
+    //
+    // 旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    QString modelPath;
+    {
+        QString err;
+        if (!readTextKnob(params, defaultParams(), "model_path", &modelPath, &err)) {
+            out["error"] = err;
+            return out;
+        }
+    }
     if (!QFileInfo::exists(modelPath)) {
         out["error"] = QString("模型文件不存在: %1").arg(modelPath);
         return out;
@@ -133,18 +150,30 @@ QJsonObject DlInfer::run(const QJsonObject& params, const QJsonObject& inputs) {
     cv::Mat img = cv::imread(imgPath.toStdString(), cv::IMREAD_COLOR);
     if (img.empty()) { out["error"] = "imread failed: " + imgPath; return out; }
 
-    const cv::Size netInput(params.value("input_w").toInt(DlInferDefaults::kInputW),
-                            params.value("input_h").toInt(DlInferDefaults::kInputH));
-    const float confThresh = params.value("conf_threshold").toDouble(DlInferDefaults::kConfThreshold);
-    const float iouThresh   = params.value("nms_iou").toDouble(DlInferDefaults::kNmsIou);
-    const QString layout   = params.value("output_layout").toString(
-                                 QString::fromUtf8(DlInferDefaults::kOutputLayout));
+    // 旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    int inputW = 0, inputH = 0;
+    double confThreshD = 0.0, iouThreshD = 0.0;
+    QString layout;
     // class_names 以前**没有兜底**:缺这个 key 时类名列表是空的,
     // 检测框上只剩 "cls3" 这种编号,标不出是哪个类别。
     // 现在兜底回到声明的默认值 —— 少一个 key 不该悄悄换一套语义。
-    QStringList classNames = params.value("class_names").toString(
-                                 QString::fromUtf8(DlInferDefaults::kClassNames))
-                                 .split(',', Qt::SkipEmptyParts);
+    QString classNamesCsv;
+    {
+        QString err;
+        if (!readIntKnob(params, defaultParams(), "input_w", &inputW, &err) ||
+            !readIntKnob(params, defaultParams(), "input_h", &inputH, &err) ||
+            !readDoubleKnob(params, defaultParams(), "conf_threshold", &confThreshD, &err) ||
+            !readDoubleKnob(params, defaultParams(), "nms_iou", &iouThreshD, &err) ||
+            !readTextKnob(params, defaultParams(), "output_layout", &layout, &err) ||
+            !readTextKnob(params, defaultParams(), "class_names", &classNamesCsv, &err)) {
+            out["error"] = err;
+            return out;
+        }
+    }
+    const cv::Size netInput(inputW, inputH);
+    const float confThresh = static_cast<float>(confThreshD);
+    const float iouThresh   = static_cast<float>(iouThreshD);
+    QStringList classNames = classNamesCsv.split(',', Qt::SkipEmptyParts);
     for (auto& s : classNames) s = s.trimmed();
 
     // ---------- 加载模型(带缓存) ----------

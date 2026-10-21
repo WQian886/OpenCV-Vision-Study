@@ -148,7 +148,7 @@ void CaliperDistForm::setParams(const QJsonObject& params) {
     const QJsonObject d = CaliperDist().defaultParams();
     for (int i = 0; i < 6; ++i)
         if (params.contains(kCoordKeys.at(i)))
-            m_p[i]->setValue(knobValueForWidget(params.value(kCoordKeys.at(i)),
+            m_p[i]->setValue(knobIntForWidget(params.value(kCoordKeys.at(i)),
                                                 d, kCoordKeys.at(i)));
 }
 

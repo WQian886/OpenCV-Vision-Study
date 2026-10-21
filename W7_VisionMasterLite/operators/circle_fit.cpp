@@ -1,5 +1,6 @@
 #include "circle_fit.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QJsonArray>
@@ -41,8 +42,16 @@ QJsonObject CircleFit::run(const QJsonObject& params, const QJsonObject& inputs)
         return output;
     }
 
-    const int    minArea = params.value("min_area").toInt(CircleFitDefaults::kMinArea);
-    const double minCirc = params.value("min_circularity").toDouble(CircleFitDefaults::kMinCircularity);
+    // 旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    // 兜底值来自 defaultParams() —— 声明值只有一份。
+    int    minArea = 0;
+    double minCirc = 0.0;
+    QString err;
+    if (!readIntKnob(params, defaultParams(), "min_area", &minArea, &err) ||
+        !readDoubleKnob(params, defaultParams(), "min_circularity", &minCirc, &err)) {
+        output["error"] = err;
+        return output;
+    }
 
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
