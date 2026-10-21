@@ -25,6 +25,58 @@ std::string fmt(double v, int decimals) {
 
 std::string fmtInt(long long v) { return std::to_string(v); }
 
+// 中位数。偶数个取中间两个的**平均** —— 这才是真正的中位数。
+//
+// 为什么不用"排序后取第 n/2 个"(以前那种写法):
+//   偶数个时那种写法取到的是**偏大**的那一个,读数会偏大。
+//
+//   ⚠ 这里原来写着"33% 的阈值在两脚元件(晶振)上基本打不中" ——
+//     **那句话是错的**,实测数据在下面,自己看:
+//   实测(2026-10-21,mcu 板晶振 Y1,两个焊盘 25px² 和 336px²):
+//       取平均(现在这样)     ->  中位数 180.5,读数 86.1%
+//       取靠后的那个(旧写法) ->  中位数 336,  读数 92.6%
+//       取靠前的那个         ->  中位数 25,   读数 0%(**整条规则漏检**)
+//   旧写法不是"打不中阈值",它读数最大,反而**最容易**打中 ——
+//   它的问题是**读数不诚实**:同一个物理缺陷,脚数不同读数就不同,
+//   阈值根本没法标定(标定时量的是脚多的元件,用到脚少的元件上就偏)。
+//   而取靠前的那个最糟:两脚元件直接读成 0%,焊少变成"查过了,没问题"。
+//
+//   脚数越少,同侪越少,一个数的分量越重 —— 所以"中位数怎么取"
+//   这种平时看不出来的差别,在两脚元件上被放大到 0% 和 92.6% 之差。
+//   mcu_insufficient_xtal.png(晶振 Y1 焊少)就是为这件事准备的样本。
+static double medianOf(std::vector<double> v) {
+    if (v.empty()) return 0.0;
+    std::sort(v.begin(), v.end());
+    const size_t n = v.size();
+    if (n % 2) return v[n / 2];
+    return 0.5 * (v[n / 2 - 1] + v[n / 2]);
+}
+
+// 一个端子(焊盘)自己的框里有多少金属像素 = 那个焊盘的铜面积。
+//
+// 框 = 端子中心 ± 半宽(端子已经按这张图的分辨率缩放过),
+// 裁到图内(端子可能贴着图边)。
+//
+// 为什么量"框里的金"而不是"连通域":
+//   焊盘之间、走线与焊盘之间都可能连成一片,连通域的面积就不
+//   只是这个焊盘的铜了(实测:三个 TO-220 焊盘被走线连成两块,
+//   连通域给出 246/494,而不是三个 289)。
+//   框是**登记过的**,量到的就是"这个端子该在的位置上有多少铜"
+//   —— 正好是"焊少"要问的问题。
+static double padMetalArea(const cv::Mat& goldMask, const cv::Mat& img,
+                            const Pad& p) {
+    const int x0 = (std::max)(0, p.x - p.r);
+    const int y0 = (std::max)(0, p.y - p.r);
+    const int x1 = (std::min)(img.cols - 1, p.x + p.r);
+    const int y1 = (std::min)(img.rows - 1, p.y + p.r);
+    if (x1 < x0 || y1 < y0) return 0.0;
+    int n = 0;
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x)
+            if (goldMask.at<uchar>(y, x)) ++n;
+    return static_cast<double>(n);
+}
+
 // JSON 值的类型名(报错时给人话)
 const char* typeName(const mini_json::Value& v) {
     switch (v.type()) {
@@ -901,41 +953,65 @@ JudgeResult judge(const cv::Mat& img,
             }
         }
 
-        // ---------- insufficient: 某焊盘面积远小于中位数 ----------
+        // ---------- insufficient: 某个焊盘的铜面积远低于同侪 ----------
+        //
+        // "焊少" = 有一个焊盘上的**铜**比同元件其它焊盘少得多。
+        // 量的对象是**焊盘自己**,不是"ROI 里的一块金"。
+        //
+        // ⚠ 2026-10-21 重做。原来量的是"ROI 里的金层连通域面积",
+        //   而 ROI 是**本体框** —— 焊盘被本体压住、被 ROI 边缘切断,
+        //   量到的根本不是焊盘。实测同一颗晶振(Y1)的两个焊盘:
+        //   一个 153px²、一个 132px²(形状还被中心孔切成两截)。
+        //   拿这种数当"同侪"比,测的是**几何伪像**,不是焊少。
+        //
+        //   而且过滤门槛是"占 ROI 面积的比例"(padMinPct):
+        //   QFP-64 的 ROI 有 25600px²,门槛 = 118px²,
+        //   比它自己的焊盘(51px²)还大 —— **自己的焊盘被自己的
+        //   门槛滤光**,连通域凑不出 4 个,规则整条空转,
+        //   却照样报"查过了"(实测三块 complex 板的 insufficient
+        //   全在"没查"里,而报告看上去是正常的)。
+        //
+        // 现在:端子位置和半宽由生成器登记(见 RecipeSite::pads),
+        // 逐个端子数它自己框里的金层像素 = 那个焊盘的铜面积,
+        // 再和**同一个元件**其它焊盘的中位数比。
+        // 期望侧(端子在哪、有多大)由知道真相的那一方登记,判据不猜。
         if (hasRule(rule::kInsufficient)) {
-            cv::Mat roiMask = goldMask(roi);
-            cv::Mat labels, stats, centroids;
-            int n = cv::connectedComponentsWithStats(roiMask, labels, stats, centroids);
-            std::vector<int> areas;
-            for (int i = 1; i < n; ++i) {
-                int a = stats.at<int>(i, cv::CC_STAT_AREA);
-                // 过滤边缘噪声。门槛是 ROI 面积的比例 —— 原来是裸的 80px,
-                // 图一小,正常焊盘就掉到门槛以下被滤光,判定必然失效。
-                if (100.0 * a / roiArea >= params.padMinPct) areas.push_back(a);
-            }
-            if (areas.size() >= 4) {
-                std::sort(areas.begin(), areas.end());
-                const int median = areas[areas.size() / 2];
-                const int minArea = areas.front();
-                const double dropPct =
-                    median > 0 ? 100.0 * (median - minArea) / median : 0.0;
-                if (median > 0) {
-                    res.metrics.push_back({label, rule::kInsufficient, dropPct,
-                                           params.padDropPct, "% (最小焊盘低于中位数)"});
-                }
+            if (s.pads.empty()) {
+                // 没有端子就量不了焊盘 —— 必须报出来,不能装作查过了。
+                res.skipped.push_back({label, rule::kInsufficient,
+                    "这个元件没有登记端子位置,量不了焊盘面积,本规则不判定"});
+            } else if (s.pads.size() < 2) {
+                res.skipped.push_back({label, rule::kInsufficient,
+                    "这个元件只登记了 " +
+                    fmtInt(static_cast<long long>(s.pads.size())) +
+                    " 个端子,没有同侪可比,本规则不判定"});
+            } else {
+                std::vector<double> areas;
+                areas.reserve(s.pads.size());
+                for (const auto& p : s.pads)
+                    areas.push_back(padMetalArea(goldMask, img, p));
+
+                const double median = medianOf(areas);
+                size_t worst = 0;
+                for (size_t i = 1; i < areas.size(); ++i)
+                    if (areas[i] < areas[worst]) worst = i;
+                const double dropPct = median > 0
+                    ? 100.0 * (median - areas[worst]) / median : 0.0;
+
+                res.metrics.push_back({label, rule::kInsufficient, dropPct,
+                                       params.padDropPct,
+                                       "% (最小焊盘低于同侪中位数)"});
                 if (median > 0 && dropPct > params.padDropPct) {
                     res.defects.push_back({label, "insufficient",
-                        "最小焊盘 " + fmtInt(minArea) + "px² 比中位数 " +
-                        fmtInt(median) + "px² 低 " + fmt(dropPct, 1) + "% > 阈值 " +
+                        "第 " + fmtInt(static_cast<long long>(worst + 1)) +
+                        " 个端子(" + fmtInt(s.pads[worst].x) + "," +
+                        fmtInt(s.pads[worst].y) + ")上的金属 " +
+                        fmtInt(static_cast<long long>(areas[worst])) + "px² " +
+                        "比同侪中位数 " + fmt(median, 0) + "px² 低 " +
+                        fmt(dropPct, 1) + "% > 阈值 " +
                         fmt(params.padDropPct, 1) + "%(焊少)"});
                     cv::rectangle(res.marked, roi, cv::Scalar(255, 200, 0), 3);
                 }
-            } else {
-                // 配方点名要查,但这块 ROI 的金层凑不出 4 个连通域,
-                // 取不了中位数 -> 规则**整条没跑**,却照样 PASS。
-                res.skipped.push_back({label, rule::kInsufficient,
-                    "金层连通域只有 " + fmtInt(static_cast<long long>(areas.size())) +
-                    " 个(< 4),取不了焊盘中位数,本规则不判定"});
             }
         }
 

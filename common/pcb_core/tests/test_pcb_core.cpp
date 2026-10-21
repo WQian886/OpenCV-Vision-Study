@@ -762,6 +762,46 @@ static void test_end_to_end() {
                         checkShortPrecondition(img, ir, who);
                     }
                 }
+                // --- insufficient:读数必须诚实,缺陷必须点名 ---
+                //
+                // ⚠ 2026-10-21 加的。insufficient 判据重做成"逐个登记过的
+                //   端子量金属面积"之后,只断言"缺陷类型命中"是不够的:
+                //   **读数本身也可以是假的**。
+                //   · 不是焊少废板的图:同一个元件的焊盘一样大,
+                //     最小焊盘比同侪中位数低 0% -> 读数必须**恰好 0**。
+                //     钉"恰好 0"而不是"小于阈值":阈值是 33%,中间那一大截
+                //     余量看着安全,其实会盖住一类 bug —— 采样框多掐进 1px
+                //     金属,读数变成 4%,判定不变,但"这个焊盘到底有多少铜"
+                //     这个数已经不诚实了。读数不诚实,拿它标出来的阈值就不可信。
+                //   · 焊少废板:读数必须超过阈值(阈值从 metric 自己读,
+                //     **不抄一份**),而且缺陷必须点名到真值表说的那个元件。
+                {
+                    std::string comp;
+                    double read = -1.0, thr = -1.0;
+                    for (const auto& d : jr.defects)
+                        if (d.type == "insufficient") comp = d.component;
+                    for (const auto& m : jr.metrics) {
+                        if (m.rule != "insufficient") continue;
+                        if (m.component == comp) { read = m.value; thr = m.threshold; }
+                    }
+                    if (wantDefect == "insufficient") {
+                        check(comp == wantSite,
+                              file + " 的焊少必须点名到 " + wantSite +
+                              "(实际 \"" + comp + "\")");
+                        check(read > thr,
+                              file + " 的焊少读数必须超过阈值(实际 " +
+                              std::to_string(read) + " vs 阈值 " +
+                              std::to_string(thr) + ")");
+                    } else {
+                        double worst = -1.0;
+                        for (const auto& m : jr.metrics)
+                            if (m.rule == "insufficient" && m.value > worst)
+                                worst = m.value;
+                        check(worst == 0.0,
+                              file + " 不是焊少废板,焊少读数必须恰好 0%"
+                              "(实际最大 " + std::to_string(worst) + "%)");
+                    }
+                }
             }
         }
     }
@@ -921,6 +961,43 @@ static void test_end_to_end() {
                           who + " 是好板,端子间隙里一点金属都没有(最大 " +
                           std::to_string(worst) + "%)");
                 }
+                // --- insufficient:读数必须诚实,缺陷必须点名 ---
+                //
+                // 同 demo 那边:不是焊少废板的图,读数必须**恰好 0**;
+                // 是焊少废板,读数必须超过阈值(阈值从 metric 自己读),
+                // 而且缺陷必须点名到真值表说的那个元件。
+                //
+                // ⚠ 2026-10-21:三块 complex 板的焊少真值图是这一轮新加的
+                //   (power/mcu/signal_insufficient.png)。在它们出现之前,
+                //   insufficient 这条规则在 complex 板上**一次都没跑过**
+                //   (全在"没查"里),所以既没有废板样本,也没有读数可钉。
+                {
+                    std::string comp;
+                    double read = -1.0, thr = -1.0;
+                    for (const auto& d : jr.defects)
+                        if (d.type == "insufficient") comp = d.component;
+                    for (const auto& m : jr.metrics) {
+                        if (m.rule != "insufficient") continue;
+                        if (m.component == comp) { read = m.value; thr = m.threshold; }
+                    }
+                    if (wantType == "insufficient") {
+                        check(comp == wantSite,
+                              who + " 的焊少必须点名到 " + wantSite +
+                              "(实际 \"" + comp + "\")");
+                        check(read > thr,
+                              who + " 的焊少读数必须超过阈值(实际 " +
+                              std::to_string(read) + " vs 阈值 " +
+                              std::to_string(thr) + ")");
+                    } else {
+                        double worst = -1.0;
+                        for (const auto& m : jr.metrics)
+                            if (m.rule == "insufficient" && m.value > worst)
+                                worst = m.value;
+                        check(worst == 0.0,
+                              who + " 不是焊少废板,焊少读数必须恰好 0%"
+                              "(实际最大 " + std::to_string(worst) + "%)");
+                    }
+                }
                 // 定位到的元件数要与真值表一致
                 check(static_cast<int>(ir.sites.size()) ==
                           std::stoi(row[2]),
@@ -1026,6 +1103,117 @@ static void test_short_needs_pads() {
     }
 }
 
+// ============================================================
+// 用例 6:insufficient 必须有端子 —— 没有就必须报"没查"
+//
+// ============================================================
+//
+// ⚠ 2026-10-21 补的,补的原因和用例 5(短路)是**同一个坑**:
+//   判据里有"没登记端子 -> 报没查(skipped)"这条路径,
+//   但**没有任何断言**钉它 —— 把那条 push_back 删掉,整套测试照样全绿。
+//
+//   而这条路径恰恰是本轮的主题("把『没查』变成『查过了』"):
+//     端子没登记 -> 焊少判不了 -> 这条规则没跑 -> defects 里没有 insufficient
+//     -> 板子判成合格 —— **看起来和"查过了没问题"一模一样**。
+//   真的焊少的废板就这么被放过去了,而且界面上看不出任何异常。
+//
+// 所以这里钉四件事:
+//   ① 没登记端子 -> 必须有 skipped 条目(rule=insufficient),说清为什么没查;
+//   ② 没查的时候不许同时报出 insufficient 缺陷(没查就不许给结论);
+//   ③ 只登记一个端子 -> 同样报"没查"(没有同侪可比);
+//   ④ 登记了两个 -> 规则必须真的跑了(不许有 skipped),而且必须给出读数。
+//
+// 顺带钉住读数:两个一样大的焊盘,读数必须**恰好 0%**。
+// ============================================================
+static void test_insufficient_needs_pads() {
+    beginCase("焊少:没登记端子就必须报\"没查\",不许装作查过了");
+
+    const fs::path w6 = g_root / "W6_PCB_DefectProject";
+    const cv::Mat img =
+        cv::imread((w6 / "images" / "baseline.png").string(), cv::IMREAD_COLOR);
+    check(!img.empty(), "读得到 baseline.png");
+    if (img.empty()) return;
+
+    // 同一块板、同一个元件,只改"登记了几个端子"。
+    // R2 在 demo 板上的端子是 [[110,480,12],[190,480,12]](配方里的真值)。
+    auto run = [&](const std::string& padsJson) {
+        JudgeResult jr;
+        BoardRecipe r;
+        std::string reason;
+        const std::string json =
+            "{\"name\":\"t\",\"ref_w\":1000,\"ref_h\":700,\"sites\":[{"
+            "\"label\":\"R2\",\"kind\":\"R\",\"cx\":150,\"cy\":480,"
+            "\"body_w\":100,\"body_h\":28,\"checks\":[\"insufficient\"]" +
+            padsJson + "}]}";
+        const bool ok = parseRecipeJson(json, &r, &reason);
+        check(ok, std::string("配方能加载") + (ok ? "" : ("(" + reason + ")")));
+        if (!ok) return jr;
+        const JudgeParams p;
+        const InspectResult ir = inspect(img, r, pcbcolor::goldBand(p.maskVMul));
+        return judge(img, ir.sites, p, ir.goldMask, ir.boardBase);
+    };
+    auto countSkipped = [](const JudgeResult& jr, const char* rule) {
+        int n = 0;
+        for (const auto& s : jr.skipped) if (s.rule == rule) ++n;
+        return n;
+    };
+    auto countDefects = [](const JudgeResult& jr, const char* type) {
+        int n = 0;
+        for (const auto& d : jr.defects) if (d.type == type) ++n;
+        return n;
+    };
+    auto skipReason = [](const JudgeResult& jr, const char* rule) {
+        for (const auto& s : jr.skipped)
+            if (s.rule == rule) return s.reason;
+        return std::string();
+    };
+
+    // ① 没登记端子 -> 必须报"没查"
+    {
+        const JudgeResult jr = run("");
+        const int n = countSkipped(jr, "insufficient");
+        check(n == 1,
+              "没登记端子 -> 必须报一条 \"没查\"(实际 " + std::to_string(n) + " 条)");
+        const std::string why = skipReason(jr, "insufficient");
+        check(!why.empty(),
+              "\"没查\" 必须说清为什么(实际: \"" + why + "\")");
+        // 原因里必须点名"缺的是端子",不是一句"没查"
+        check(why.find("没有登记端子") != std::string::npos,
+              "\"没查\" 的原因必须写明缺的是端子(实际: \"" + why + "\")");
+        // ② 没查就不许给结论
+        const int d = countDefects(jr, "insufficient");
+        check(d == 0,
+              "没查的时候不许报出 insufficient 缺陷(实际报了 " +
+              std::to_string(d) + " 条)");
+    }
+    // ③ 只登记一个端子 -> 没有同侪可比,同样报"没查"
+    {
+        const JudgeResult jr = run(",\"pads\":[[110,480,12]]");
+        const int n = countSkipped(jr, "insufficient");
+        check(n == 1,
+              "只登记一个端子 -> 同样必须报 \"没查\"(实际 " +
+              std::to_string(n) + " 条)");
+        const std::string why = skipReason(jr, "insufficient");
+        check(why.find("1 个") != std::string::npos,
+              "\"没查\" 的原因必须写明登记了几个(实际: \"" + why + "\")");
+    }
+    // ④ 登记了两个 -> 规则必须真的跑了
+    {
+        const JudgeResult jr = run(",\"pads\":[[110,480,12],[190,480,12]]");
+        check(countSkipped(jr, "insufficient") == 0,
+              "登记了两个端子 -> 规则必须真的跑(不该报没查)");
+        bool hasMetric = false;
+        double read = -1.0;
+        for (const auto& m : jr.metrics)
+            if (m.rule == "insufficient") { hasMetric = true; read = m.value; }
+        check(hasMetric, "登记了两个端子 -> 必须给出读数(量了就得报数)");
+        // 两个一样大的焊盘 -> 读数必须恰好 0%
+        check(read == 0.0,
+              "两个一样大的焊盘 -> 焊少读数必须恰好 0%(实际 " +
+              std::to_string(read) + "%)");
+    }
+}
+
 int main() {
     g_root = findRepoRoot();
 
@@ -1037,6 +1225,7 @@ int main() {
     test_refuse_paths();
     test_end_to_end();
     test_short_needs_pads();
+    test_insufficient_needs_pads();
 
     std::cout << "\n========================================" << std::endl;
     std::cout << "SUMMARY: pass=" << g_pass << " fail=" << g_fail

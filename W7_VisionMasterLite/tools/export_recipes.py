@@ -38,31 +38,19 @@ except ImportError as e:  # pragma: no cover
 
 
 # ============================================================
-# 本体尺寸表
+# 本体尺寸 —— **不再抄一份**
 #
-# gen_complex_pcb 的 layout 只记了 (label, kind, cx, cy) —— 中心点,
-# 没有本体宽高。而 ROI 是"中心 +- 本体一半 +- 余量",没宽高就算不出框。
+# 以前这里有一张 BODY 表(RES=(44,16)、QFP64=(140,140) ...),
+# 表自己的注释写着"**这是一份会漂的副本**" —— 而且真的漂了:
+# 2026-10-21 把 QFP-64 的本体从 140x140 改成 200x200,
+# 表里还是 140。ROI 随之切小,焊盘落到框外,规则整条空转,
+# 而**没有任何一处会报错**。
 #
-# 所以每个 kind 对应多宽多高,是从各 draw_* 函数的默认参数里读出来的
-# (draw_resistor_small(w=44,h=16)、draw_to220(w=60,h=70) ...)。
-# **这是一份会漂的副本**,漂了就表现为"框切歪了/切小了"。
-# 改 draw_* 的尺寸时记得回来改这里 —— 或者更好:给 layout 也记上宽高。
+# 现在本体宽高由**画本体的那一行代码**登记(gen_complex_pcb.BODY_SIZE),
+# 这里只搬运。抄副本的老坑,本项目已经栽过五遍,不再留第六个。
+#
+# demo 板不在这里 —— 它的本体宽高本来就在 SITES 里(见 export_demo)。
 # ============================================================
-BODY = {
-    "RES":       (44, 16),    # draw_resistor_small 默认
-    "CAP_SMALL": (36, 18),    # draw_cap_small 默认
-    "CAP_BIG":   (40, 40),    # draw_cap_big(r=20) 的圆头直径
-    "DIODE":     (40, 14),    # draw_diode 默认
-    "TO220":     (60, 70),    # draw_to220 里的 w, h
-    "QFP64":     (140, 140),  # draw_qfp64 的 body
-    "SOIC8":     (80, 50),    # draw_soic8 里的 w, h
-    "BUTTON":    (48, 48),    # draw_button(size=24) 的直径
-    "LED":       (16, 16),    # draw_led(r=8) 的直径
-    "XTAL":      (50, 22),    # draw_crystal 默认
-    "INDUCTOR":  (50, 24),    # draw_inductor 默认
-    "TERMINAL":  (32, 30),    # draw_terminal(n=2) 的 w=12*2+8, h=30
-    "HEADER":    (40, 8),     # JP1 两个 pad 在 460/500,相距 40
-}
 
 # ============================================================
 # 规则分配表
@@ -208,15 +196,18 @@ def export_complex(kind, builder, title):
     side_of = dict(G.POLARITY_SIDE)
     # 端子(焊盘)位置:同样由生成器登记,这里只搬运。
     pads_of = dict(G.PADS)
+    # 本体宽高:同样由生成器登记(见上面 BODY 那段)。
+    body_of = dict(G.BODY_SIZE)
 
     sites = []
     for label, k, cx, cy in layout:
-        if k not in BODY:
+        if (cx, cy) not in body_of:
             sys.exit(
-                "kind %r(label %s) 不在 BODY 表里 —— "
-                "本体的宽高从哪来?" % (k, label)
+                "位号 %s(kind %s) 没有登记本体宽高 —— "
+                "ROI 是按本体框切的,本体多大只有画本体的代码知道,"
+                "请在 gen_complex_pcb 里 reg_body()。" % (label, k)
             )
-        bw, bh = BODY[k]
+        bw, bh = body_of[(cx, cy)]
         checks = list(CHECKS.get(k, []))
         side = side_of.get((cx, cy), "")
         pads = pads_of.get((cx, cy), [])

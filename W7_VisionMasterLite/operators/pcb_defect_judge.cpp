@@ -54,6 +54,23 @@ namespace w7 {
 //   polarity_side 比。"应该在哪一侧"是板的设计决定的,由配方给,不是阈值。
 QJsonObject PcbDefectJudge::defaultParams() const {
     QJsonObject p;
+    // ================================================================
+    // ⚠ 2026-10-21:下面这十个阈值的**值只有一份** ——
+    //   common/pcb_core/pcb_core.h 里的 pcbcore::JudgeParams。
+    //
+    //   以前这个文件里有三份(defaultParams / run() 的 toDouble / 界面那一份),
+    //   核心里还有第四份 —— 同一个数抄四处,迟早有一处忘了改。
+    //   变异验证实测过:把**核心**那份 padDropPct 从 33 改成 90,
+    //   W6 的测试立刻红,W7 的测试**照样全绿** —— 因为 W7 跑的是自己那份。
+    //   这不是"测试没覆盖",是"两个实现各跑各的"。
+    //
+    //   现在这一行是唯一入口:改阈值只改核心里那一份,
+    //   W6 命令行和 W7 算子自动一起变。
+    //
+    //   下面每段注释是**标定理由**(为什么是这个数),不是值的定义 ——
+    //   理由留在这儿(它是这个算子的历史),值在核心里。
+    // ================================================================
+    const pcbcore::JudgeParams kCore;
     // --- ROI 面积 % ---
     // 暗像素占 ROI 的百分比,低于它判 missing(缺件)。
     //
@@ -78,7 +95,7 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     // 1% 之后:黑本体那一批(最小 20.57)余量不变,CAP_BIG 余量 2.2 倍,
     // CAP_SMALL 4.4 倍。代价是 LED(0.77)/HEADER(0.00)离 1% 太近 ——
     // 所以**这两种封装绝不能配 missing**,见 tools/export_recipes.py 的 CHECKS 表。
-    p["dark_min_pct"]    = 1.0;
+    p["dark_min_pct"]    = kCore.darkMinPct;
     // 彩色本体(CAP*)的 missing 判据:ROI 里"不像板面"的像素占比下限。
     //
     // body_pct 由 pcb_inspect 产出(逐通道差 >12),一直只被"配方跟图
@@ -99,7 +116,7 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     // 危险的是这不影响 verdict —— 别的站点照样报 missing,
     // 整张板仍然显示 FAIL:missing,只看缺陷类型根本看不出来。
     // 所以回归用例断言的是"点名到 C2",不是"报了 missing"。
-    p["body_min_pct"]    = 42.0;
+    p["body_min_pct"]    = kCore.bodyMinPct;
     // ↑ 归一化之前的绝对版。现在只作**站点数不足时的兜底**(见 body_min_sites)。
     //
     // 正常路径走比值:body_pct / 同板全部站点中位数。
@@ -135,8 +152,8 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     // 站点数下限:只有一个站点时"比值"恒等于 1,判据恒假 —— 报 PASS,
     // 和"检查过了没问题"长得一模一样。低于下限时退回绝对判据,
     // 并在 metrics 的 unit 里写明走的是哪条路。
-    p["body_ratio_min"] = 0.714;
-    p["body_min_sites"] = 4;
+    p["body_ratio_min"] = kCore.bodyRatioMin;
+    p["body_min_sites"] = kCore.bodyMinSites;
     // R3 错色像素占 ROI 的百分比。**四块板一起量**(2026-10-10),
     // 因为这个阈值原来只在 demo 一块板上标定过:
     //     demo   R3 好  3.40   废(wrong.png)     44.77
@@ -151,74 +168,21 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     //   (实测三块好板各报 3 / 8 / 4 个)。
     //   这就是"只在一张图上标定的阈值换板型就整片失效",
     //   本项目的老毛病,只不过这次是**上限**太低而不是下限太高。
-    p["yellow_min_pct"]  = 32.0;
-    // C1 白色像素占 ROI 4.17%;这是"白色够不够,不够就别判极性"的门槛。
-    // U1 焊盘噪声门槛 —— **这一条我错过两次,都是因为只量了 1x**。
+    p["yellow_min_pct"]  = kCore.yellowMinPct;
+    // ⚠ 2026-10-21:pad_min_pct(焊盘噪声门槛)已删,连同它的整段标定。
     //
-    // 第一次:按"正常焊盘占 0.80%"想当然取 0.2%,噪声斑(0.38%)被放进来了,
-    //         baseline 整块误报。是 12/12 回归测试当场抓住的。
-    // 第二次:改成 0.44% 之后以为稳了 —— 其实那只是按 1x 的 (0.38%, 0.51%)
-    //         取的,贴着噪声斑上沿。跨尺度一量,噪声斑会漂到 0.42%。
+    //   它是旧判据("ROI 里金层连通域面积")的过滤门槛。旧判据量的
+    //   根本不是焊盘 —— ROI 是本体框,焊盘被本体压住、被 ROI 边缘
+    //   切断(实测同一颗晶振的两个焊盘量到 153 / 132px²),
+    //   所以"噪声门槛"要去掉那些**几何伪像**,才需要那么精细地卡
+    //   在 0.46%(噪声斑 0.42% vs 焊少那颗 0.51%,窗口只有 0.09pp)。
     //
-    // 跨尺度实测(占 ROI 面积,量的是所有金层连通域):
-    //         尺度   噪声斑    焊少那颗   正常板最小真焊盘
-    //         0.5x    0.38%     0.60%      0.80%
-    //         0.75x   0.42%     0.52%      0.85%
-    //         1.0x    0.38%     0.51%      0.80%
-    //         1.25x   0.41%     0.56%      0.87%
-    //         2.0x    0.38%     0.51%      0.83%
-    // 窗口 = (噪声斑最坏 0.42%, 焊少那颗最小 0.51%),几何中点 0.46。
+    //   现在的判据逐个**登记过的端子**量它自己框里的金属像素 ——
+    //   框是登记过的,量到的就是那个焊盘的铜,不需要任何噪声门槛。
+    //   新的标定见下面 pad_drop_pct。
     //
-    // ⚠ 窗口只有 0.09pp,天生就窄。根子在样本数据:那颗"焊少"的焊盘
-    //   跟噪声斑差不了多少。真实产线数据上大概率更宽,但换数据要重标。
-    p["pad_min_pct"]     = 0.46;
-    // U1 最小焊盘比中位数低多少 —— 同样必须跨尺度量。
-    // 只量 1x 会看到"正常 5.9% / 焊少 40.4%",于是取 20;
-    // 但降采样对小焊盘啃得比大焊盘狠(1x 最小/中位=94%,0.5x 掉到 74%),
-    // 正常板的 drop 会被顶上去:
-    //         尺度   正常板 drop   缺陷板 drop
-    //         0.5x    25.6%        44.2%
-    //         0.75x   12.4%        46.1%
-    //         1.0x     5.9%        40.4%
-    //         1.25x    7.9%        40.2%
-    //         2.0x     2.0%        40.4%
-    // 窗口 = (正常板最差 25.6%, 缺陷板最小 40.2%),中点 33。
-    // 20 落在窗口**外面** —— 0.5x 下正常板因此误报 insufficient。
-    //
-    // ── 2026-10-14:上面这张表只量了**分辨率**,没量**模糊** ──
-    //   补测(demo baseline.png 加高斯模糊,σ=图宽千分之 k,出厂参数,
-    //   读数取算子自己吐的 metric):
-    //
-    //       k      0     1     2     3     4     5     6     7     8
-    //       drop  5.88  0.74 51.59 38.41 46.38  5.15  3.95  0.88  没跑
-    //       报缺陷  --    --    报    报    报    --    --    --    --
-    //
-    //   三个结论,和"阈值取 33 时的余量"关系很大:
-    //
-    //   ① **好板侧在 k=2 就到 51.59,而缺陷板侧最小只有 40.4** ——
-    //      两条线**交叉**了。不是阈值偏低,是**不存在能用的阈值**:
-    //      压到 51.59 以上能躲开 k=2,3,4 的假阳,同时把真缺陷一起放过。
-    //      这跟 7bd4794 记的"出厂阈值失效"是两码事(见
-    //      feedback-verification-doesnt-verify 第 8 条)。
-    //   ② 读数**不随模糊单调**:0.74 -> 51.59 -> 3.95。min 是极值统计量,
-    //      最经不起参与统计的那批连通域变化。
-    //   ③ k=8 起**整条规则不再执行**(金层连通域 < 4),读数那一格是空的。
-    //      现在这条会被 output["skipped"] 报出来(见 run() 里 skipped 那段)。
-    //
-    //   还量了一件:pad_min_pct 这个噪声门槛是**承重**的,不是随手加的。
-    //   把它从 0.46 压到 0.01,好板在 k=0/1/5/6 读数变成 55.88/55.88/
-    //   54.74/63.64 —— 全部越过 33,好板直接误报。所以这两个门是一对,
-    //   不能单独动任何一个。
-    //
-    // ⚠ 要修得动,只有两条路,都得先有数据:
-    //   (a) 换一条对模糊稳健的统计量(比如不看 min,改成"低于中位数
-    //       X% 的焊盘有几个"),但那需要**好板和废板各自成规模**的
-    //       模糊扫描来定阈值 —— 现在只有 demo 一张好板和一张废板,
-    //       拿它们定出来的阈值又是"一块板定一条判据"。
-    //   (b) 先给 complex 三块板补 insufficient 真值图 —— 那是**改 W6
-    //       测试数据**,9 张图全部要重量,得先说清楚再做。
-    //   本轮只把量出来的结果记在这里,不改判据。
-    p["pad_drop_pct"]    = 33.0;
+    //   界面上那个旋钮也一起删了:留着它 = 摆一个**调了不生效**的旋钮。
+    p["pad_drop_pct"]    = kCore.padDropPct;
 
     // --- ROI 宽度 % ---
     // R1 最长金段占 ROI 宽度。原来只按 demo 一张图定:正常 15.83 ↔
@@ -252,11 +216,11 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     //
     //   60 现在有 **15.1 个点**余量(44.90 → 60),不是原来名义上的 22.5。
     //   阈值本身没动过 —— 动的是数据,好板一侧不再被假象撑着。
-    p["bridge_min_pct"]  = 60.0;
+    p["bridge_min_pct"]  = kCore.bridgeMinPct;
     // R2 质心横向偏移容差,占 ROI 宽:缺陷图实测 15.8%,取 8(约 2 倍余量)。
-    p["shift_x_pct"]     = 8.0;
+    p["shift_x_pct"]     = kCore.shiftXPct;
     // R2 质心纵向偏移容差,占 ROI 高:缺陷图实测 18.8%,取 10(约 1.9 倍余量)。
-    p["shift_y_pct"]     = 10.0;
+    p["shift_y_pct"]     = kCore.shiftYPct;
 
     // --- 颜色判据的倍数 ---
     //
@@ -293,7 +257,7 @@ QJsonObject PcbDefectJudge::defaultParams() const {
     // 端子位置由生成器登记、配方带下来(见 RecipeSite::pads)。
     // 读数 = 缝里有金属的采样点占比;好板 0%,短路板接近 100%,
     // 阈值取中点 50。
-    p["short_gap_min_pct"] = 50.0;
+    p["short_gap_min_pct"] = kCore.shortGapMinPct;
     return p;
 }
 
@@ -419,10 +383,16 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     // 这里**故意不去读那些旧名字**:50 被当成 50% 会比原来错得离谱,
     // 读不到就等于没传,退回下面这些新默认值 —— 宁可阈值不准,
     // 也不能让用户以为是自己配的数在起作用。
-    const double darkMinPct   = params.value("dark_min_pct").toDouble(1.0);
-    const double bodyMinPct   = params.value("body_min_pct").toDouble(42.0);
-    const double bodyRatioMin = params.value("body_ratio_min").toDouble(0.714);
-    const int    bodyMinSites = params.value("body_min_sites").toInt(4);
+    //
+    // ⚠ 2026-10-21:兜底值也**不再在本文件里抄一遍**。
+    //   唯一一份在 pcbcore::JudgeParams(见 defaultParams() 那段说明):
+    //   以前这里是"同一个数的第二份/第三份副本",改一处忘一处,
+    //   界面上的值和实际跑的值就会不一样。
+    const pcbcore::JudgeParams kCore;
+    const double darkMinPct   = params.value("dark_min_pct").toDouble(kCore.darkMinPct);
+    const double bodyMinPct   = params.value("body_min_pct").toDouble(kCore.bodyMinPct);
+    const double bodyRatioMin = params.value("body_ratio_min").toDouble(kCore.bodyRatioMin);
+    const int    bodyMinSites = params.value("body_min_sites").toInt(kCore.bodyMinSites);
     // yellow_min_pct:实测四块板(2026-10-10),同一封装"好板"与"错色废板"
     // 的错色像素占比:
     //     demo  R3  好  3.40   废(wrong.png) 44.77
@@ -434,16 +404,15 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     // 原来写死 12.0,比好板最大值还低一半,于是**每一块好板的每个电阻
     // 都报错色** —— 实测三块好板各报 3/8/4 个 wrong。
     // 这个数是 demo 板一张图上量出来的,换板型就整片失效(老毛病)。
-    const double yellowMinPct = params.value("yellow_min_pct").toDouble(32.0);
-    // ⚠ 这个 60 是上面 defaultParams 里那份的第二份副本(老毛病:同一个数
-    //   在一个文件里抄多处,改一处忘一处,界面和实际跑的就会不一样)。
-    //   改的时候两处一起改。
-    const double bridgeMinPct = params.value("bridge_min_pct").toDouble(60.0);
-    const double padMinPct    = params.value("pad_min_pct").toDouble(0.46);
-    const double padDropPct   = params.value("pad_drop_pct").toDouble(33.0);
-    const double shiftXPct    = params.value("shift_x_pct").toDouble(8.0);
-    const double shiftYPct    = params.value("shift_y_pct").toDouble(10.0);
-    const double shortGapMinPct = params.value("short_gap_min_pct").toDouble(50.0);
+    const double yellowMinPct = params.value("yellow_min_pct").toDouble(kCore.yellowMinPct);
+    // ⚠ 2026-10-21:下面这行原来带着一句"这个 60 是上面 defaultParams 里
+    //   那份的第二份副本(改的时候两处一起改)"—— 那句注释**本身就是
+    //   这个坑的自白**。现在没有第二份了:值只从核心里取。
+    const double bridgeMinPct = params.value("bridge_min_pct").toDouble(kCore.bridgeMinPct);
+    const double padDropPct   = params.value("pad_drop_pct").toDouble(kCore.padDropPct);
+    const double shiftXPct    = params.value("shift_x_pct").toDouble(kCore.shiftXPct);
+    const double shiftYPct    = params.value("shift_y_pct").toDouble(kCore.shiftYPct);
+    const double shortGapMinPct = params.value("short_gap_min_pct").toDouble(kCore.shortGapMinPct);
 
     // 金层 mask(bridge / insufficient 判定需要)
     //
@@ -538,7 +507,6 @@ QJsonObject PcbDefectJudge::run(const QJsonObject& params, const QJsonObject& in
     jp.bodyRatioMin = bodyRatioMin;
     jp.bodyMinSites = bodyMinSites;
     jp.yellowMinPct = yellowMinPct;
-    jp.padMinPct    = padMinPct;
     jp.padDropPct   = padDropPct;
     jp.bridgeMinPct = bridgeMinPct;
     jp.shiftXPct    = shiftXPct;
@@ -694,19 +662,18 @@ void PcbDefectJudgeForm::buildUI() {
         return d0.contains(QLatin1String(key))
              ? d0.value(QLatin1String(key)).toDouble() : fallback;
     };
-    m_darkMinPct   = mk(dflt("dark_min_pct",   1.0),   2);
-    m_bodyMinPct   = mk(dflt("body_min_pct",  42.0),   2);
-    m_bodyRatioMin = mk(dflt("body_ratio_min", 0.714), 3);
+    m_darkMinPct   = mk(dflt("dark_min_pct",   pcbcore::JudgeParams{}.darkMinPct),   2);
+    m_bodyMinPct   = mk(dflt("body_min_pct",  pcbcore::JudgeParams{}.bodyMinPct),   2);
+    m_bodyRatioMin = mk(dflt("body_ratio_min", pcbcore::JudgeParams{}.bodyRatioMin), 3);
     m_bodyMinSites = new QSpinBox;
     m_bodyMinSites->setRange(1, 999);
-    m_bodyMinSites->setValue(static_cast<int>(dflt("body_min_sites", 4)));
-    m_yellowMinPct = mk(dflt("yellow_min_pct", 32.0),  2);
-    m_bridgeMinPct = mk(dflt("bridge_min_pct", 60.0),  2);
-    m_padMinPct    = mk(0.46,  2);
-    m_padDropPct   = mk(33.0,  2);
-    m_shiftXPct    = mk(8.0,   2);
-    m_shiftYPct    = mk(10.0,  2);
-    m_shortGapMinPct = mk(dflt("short_gap_min_pct", 50.0), 1);
+    m_bodyMinSites->setValue(static_cast<int>(dflt("body_min_sites", pcbcore::JudgeParams{}.bodyMinSites)));
+    m_yellowMinPct = mk(dflt("yellow_min_pct", pcbcore::JudgeParams{}.yellowMinPct),  2);
+    m_bridgeMinPct = mk(dflt("bridge_min_pct", pcbcore::JudgeParams{}.bridgeMinPct),  2);
+    m_padDropPct   = mk(pcbcore::JudgeParams{}.padDropPct,  2);
+    m_shiftXPct    = mk(pcbcore::JudgeParams{}.shiftXPct,   2);
+    m_shiftYPct    = mk(pcbcore::JudgeParams{}.shiftYPct,   2);
+    m_shortGapMinPct = mk(dflt("short_gap_min_pct", pcbcore::JudgeParams{}.shortGapMinPct), 1);
     m_darkVMul      = mkMul(pcbcolor::kDarkMul);
     m_brightVMul    = mkMul(pcbcolor::kBrightMul);
     m_neutralMax    = mkMul(pcbcolor::kNeutralMax);
@@ -720,14 +687,14 @@ void PcbDefectJudgeForm::buildUI() {
     m_layout->addRow(tr("缺件:用比值所需最少站点数"), m_bodyMinSites);
     m_layout->addRow(tr("错件:浅黄占 ROI 下限 %"),     m_yellowMinPct);
     m_layout->addRow(tr("焊桥:最长金段占 ROI 宽 %"),   m_bridgeMinPct);
-    m_layout->addRow(tr("焊少:焊盘噪声门槛 占 ROI %"), m_padMinPct);
-    m_layout->addRow(tr("焊少:比中位数低 %"),          m_padDropPct);
+    m_layout->addRow(tr("焊少:比同侪中位数低 %"),      m_padDropPct);
     m_layout->addRow(tr("偏移:x 容差 占 ROI 宽 %"),    m_shiftXPct);
     m_layout->addRow(tr("偏移:y 容差 占 ROI 高 %"),    m_shiftYPct);
     m_layout->addRow(tr("短路:端子间隙里有金属的采样点占比下限 %"), m_shortGapMinPct);
 
-    // 分组标题。上面 15 个是"占 ROI / 全图"的百分比,下面 6 个是
+    // 分组标题。上面 10 个是"占 ROI / 全图"的百分比,下面 6 个是
     // "占板面基色"的倍数 —— 量纲不同,混在一起排会让人以为它们可比。
+    // (2026-10-21 删掉了"焊盘噪声门槛"那个旋钮,上面从 11 个变成 10 个。)
     auto* sep = new QLabel(tr("—— 以下为「占板面基色」的倍数(自动按图估计板色)——"));
     m_layout->addRow(sep);
     m_layout->addRow(tr("缺件/偏移:暗 V < 板面 V x"),    m_darkVMul);
@@ -752,7 +719,6 @@ void PcbDefectJudgeForm::setParams(const QJsonObject& params) {
     m_bodyMinSites->setValue(params.value("body_min_sites").toInt(d.value("body_min_sites").toInt()));
     m_yellowMinPct->setValue(params.value("yellow_min_pct").toDouble(d.value("yellow_min_pct").toDouble()));
     m_bridgeMinPct->setValue(params.value("bridge_min_pct").toDouble(d.value("bridge_min_pct").toDouble()));
-    m_padMinPct->setValue(params.value("pad_min_pct").toDouble(d.value("pad_min_pct").toDouble()));
     m_padDropPct->setValue(params.value("pad_drop_pct").toDouble(d.value("pad_drop_pct").toDouble()));
     m_shiftXPct->setValue(params.value("shift_x_pct").toDouble(d.value("shift_x_pct").toDouble()));
     m_shiftYPct->setValue(params.value("shift_y_pct").toDouble(d.value("shift_y_pct").toDouble()));
@@ -775,7 +741,6 @@ QJsonObject PcbDefectJudgeForm::collect() const {
     p["body_min_sites"]  = m_bodyMinSites->value();
     p["yellow_min_pct"]  = m_yellowMinPct->value();
     p["bridge_min_pct"]  = m_bridgeMinPct->value();
-    p["pad_min_pct"]     = m_padMinPct->value();
     p["pad_drop_pct"]    = m_padDropPct->value();
     p["shift_x_pct"]     = m_shiftXPct->value();
     p["shift_y_pct"]     = m_shiftYPct->value();

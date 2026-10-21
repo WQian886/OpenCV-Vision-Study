@@ -93,8 +93,11 @@ private:
     QSpinBox*       m_bodyMinSites = nullptr;  // 用比值所需的最少站点数
     QDoubleSpinBox* m_yellowMinPct = nullptr;  // wrong:   浅黄占 ROI 面积下限
     QDoubleSpinBox* m_bridgeMinPct = nullptr;  // bridge:  最长金段占 ROI 宽度
-    QDoubleSpinBox* m_padMinPct    = nullptr;  // insufficient:焊盘噪声门槛(占 ROI 面积)
-    QDoubleSpinBox* m_padDropPct   = nullptr;  // insufficient:最小焊盘比中位数低多少
+    // ⚠ 2026-10-21:m_padMinPct(焊盘噪声门槛)已删。
+    //   新的 insufficient 判据逐个**登记过的端子**量它自己框里的金属,
+    //   框是登记过的,量到的就是那个焊盘的铜 —— 不需要"噪声门槛"。
+    //   留着这个旋钮 = 界面上摆一个**调了不生效**的旋钮,骗人。
+    QDoubleSpinBox* m_padDropPct   = nullptr;  // insufficient:最小焊盘比同侪中位数低多少
     QDoubleSpinBox* m_shiftXPct    = nullptr;  // shifted: x 偏移容差(占 ROI 宽)
     QDoubleSpinBox* m_shiftYPct    = nullptr;  // shifted: y 偏移容差(占 ROI 高)
     QDoubleSpinBox* m_shortGapMinPct = nullptr;  // short: 端子间隙里有金属的采样点占比下限

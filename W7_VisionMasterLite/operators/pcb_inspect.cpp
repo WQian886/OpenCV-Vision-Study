@@ -209,11 +209,11 @@ QJsonObject PcbInspect::run(const QJsonObject& params, const QJsonObject& inputs
     // auto_contour 不读配方(见上面),所以这里拿不到站点尺寸,
     // 只能退回改造前那套写死的真值。这三个数就是原 SITES[6] / kRef* 的
     // 原值,**不是新挑的**:换成别的数,mergeDist 就不是当年那个 90.0,
-    // test_auto_contour_scale_stable 的 7/10/10/11 会立刻变。
+    // test_auto_contour_scale_stable 的 6/10/10/10 会立刻变。
     //
     // ⚠ 这里踩过一次坑,记下来:第一版兜底写成 maxBodyW=100 且
     //   refW=img.cols,结果 mergeDist 恒等于 90 —— 半径不跟着图缩放了,
-    //   0.5x 的小图被按大图的半径聚类,过度聚类,7 个元件糊成 6 个,
+    //   0.5x 的小图被按大图的半径聚类,过度聚类,6 个元件糊成 5 个,
     //   正好复现该测试注释里记的 M16 失效模式。
     //   也就是说"参照分辨率"必须是**固定的基准图尺寸**,
     //   不能拿当前图自己的尺寸去归一化自己 —— 那样等于把尺度消掉。

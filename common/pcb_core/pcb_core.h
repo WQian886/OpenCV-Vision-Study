@@ -191,6 +191,16 @@ InspectResult inspect(const cv::Mat& img, const BoardRecipe& recipe,
 // ============================================================
 // 判定
 // ============================================================
+//
+// ⚠ 2026-10-21:这个结构体的**默认值是全部判据阈值的唯一一份**。
+//
+//   W6 命令行和 W7 算子都从这里取(W7 算子原来在自己文件里抄了三遍,
+//   核心里还有第四份 —— 变异验证实测:把这里 padDropPct 从 33 改成 90,
+//   W6 的测试立刻红,W7 的测试**照样全绿**,因为 W7 跑的是自己那份)。
+//   改阈值只改这里一处。
+//
+//   标定理由(为什么是这个数)写在 W7 算子的 defaultParams() 里 ——
+//   那边记着"好板多少、废板多少"那些实测数;这里是**值**。
 struct JudgeParams {
     // --- ROI 面积 % ---
     double darkMinPct   = 1.0;    // 暗像素占 ROI 的百分比,低于它判 missing
@@ -206,8 +216,28 @@ struct JudgeParams {
     //   不再需要这两个旋钮。
     //   留着它们 = 界面上摆两个**调了不生效**的旋钮,骗人。
     //   "应该在哪一侧"改由配方的 polarity_side 给(见 RecipeSite)。
-    double padMinPct    = 0.46;   // 焊盘噪声门槛(占 ROI 面积)
-    double padDropPct   = 33.0;   // 最小焊盘比中位数低多少算焊少
+    // --- 焊少 ---
+    //
+    // ⚠ 2026-10-21:padMinPct(焊盘噪声门槛,占 ROI 面积)已删。
+    //   它是"ROI 里金层连通域面积"的过滤门槛,随那条判据一起作废:
+    //   门槛按 **ROI 面积**取比例,于是大封装把自己的正常焊盘
+    //   滤光(QFP-64 的 ROI 25600px² -> 门槛 118px² > 焊盘 51px²),
+    //   规则整条空转却照样报"查过了"。
+    //
+    //   新的 insufficient 判据逐个**登记过的端子**量它自己框里的
+    //   金属像素(那个焊盘的铜面积),和同元件其它焊盘的中位数比,
+    //   不再需要任何"噪声门槛" —— 框是登记过的,量到的就是铜。
+    //
+    //   判据:最小焊盘的铜面积比同侪中位数低多少 % 算焊少。
+    //   实测(2026-10-21,四块板的好板 + 四张焊少废板):
+    //     好板一律 0.0%(同元件的焊盘一样大,读数就该是 0)
+    //     demo   IC 12 脚  70.2%
+    //     power  TO-220 3 脚 83.0%
+    //     mcu    QFP-64 64 脚 69.1%  /  晶振 2 脚 86.1%
+    //     signal SOIC-8 8 脚 69.1%
+    //   阈值取 33:最差的一档(69.1%)也还剩 36 个点的余量,
+    //   最好的一档(86.1%)剩 53 个点 —— 阈值落在中间,两边都远。
+    double padDropPct   = 33.0;   // 最小焊盘比同侪中位数低多少算焊少
     // --- ROI 宽度 % ---
     double bridgeMinPct  = 60.0;   // 最长金段占 ROI 宽度
     double shiftXPct     = 8.0;    // 质心横向偏移容差
@@ -233,12 +263,19 @@ struct JudgeParams {
     // 短路板(接近 100%)之间,中点取 50。
     double shortGapMinPct = 50.0;  // 端子间隙里有金属的采样点占比下限 %
     // --- 颜色判据的倍数(相对板面基色) ---
-    double darkVMul     = 0.6;    // 暗: V < 0.6 x 板面V
-    double brightVMul   = 1.3;    // 白: V >= 1.3 x 板面V
-    double neutralMax    = 1.15;  // 丝印白的中性度上限
-    double offColorMul   = 1.6;   // 错色: B,G >= 1.6 x 板面
-    double offColorRMax  = 1.3;   // 错色: R <= 1.3 x 板面
-    double maskVMul      = 0.8;   // 金层/蓝环 HSV 掩膜的 V 下界
+    //
+    // ⚠ 2026-10-21:这六个数原来在这里各写了一遍字面量
+    //   (0.6 / 1.3 / 1.15 / 1.6 / 1.3 / 0.8),而 pcb_color_ref.h 里
+    //   **早就有**一份带标定的定义(kDarkMul / kBrightMul / ...)。
+    //   同一个数两处抄,改一处忘一处,两边就各自漂 ——
+    //   这是本项目栽过五遍的"抄副本",这里是第六个苗头。
+    //   现在只认 pcb_color_ref.h 那一份。
+    double darkVMul     = pcbcolor::kDarkMul;       // 暗: V < 0.6 x 板面V
+    double brightVMul   = pcbcolor::kBrightMul;     // 白: V >= 1.3 x 板面V
+    double neutralMax   = pcbcolor::kNeutralMax;    // 丝印白的中性度上限
+    double offColorMul  = pcbcolor::kOffColorMul;   // 错色: B,G >= 1.6 x 板面
+    double offColorRMax = pcbcolor::kOffColorRMax;  // 错色: R <= 1.3 x 板面
+    double maskVMul     = pcbcolor::kMaskVMul;      // 金层/蓝环 HSV 掩膜的 V 下界
 };
 
 // 一条规则的实测读数(**不管有没有触发都记**)

@@ -632,8 +632,8 @@ static void test_run_report() {
 
     // --- 递归:complex/ 里的板必须也被判了 ---
     //
-    // 原来用非递归遍历,complex/ 里 9 块板被静默跳过 —— 报告看着完整,
-    // 实际少检了 9 块。这条断言就是钉这个的。
+    // 原来用非递归遍历,complex/ 里的板被静默跳过 —— 报告看着完整,
+    // 实际少检了一整片(当时是 9 块,现在是 13 块)。这条断言就是钉这个的。
     {
         const auto complexPng = listPngRel(images / "complex");
         int judged = 0;

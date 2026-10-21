@@ -187,13 +187,41 @@ def draw_two_pads(d, cx, cy, dx, pad_size=12):
     draw_pad(d, cx + dx, cy, pad_size)
 
 
-def draw_ic_pads(d, cx, cy, dx, count=6, pad_size=8):
-    """画 IC 多引脚焊盘（左右各 count 个）"""
-    spacing = dx * 2 / (count - 1)
+def draw_ic_pads(d, cx, cy, dx, count=6, pad_size=8, body_h=60):
+    """画 IC 多引脚焊盘（上下各 count 个），返回端子列表
+
+    ⚠ 焊盘必须**伸出本体**,不能埋在本体内。
+
+    以前这排焊盘正好画在本体边缘上(cy±30 = 本体半高),
+    而本体是后画的 —— 于是本体把焊盘的内侧盖掉,两端的焊盘
+    只剩一条可见、中间的被盖光。实测同一个 IC 上:
+        两端的焊盘可见 64px²,中间的 136px²
+    焊盘本身一点没变小,只是**被本体挡得不一样多** ——
+    而"这个焊盘比同侪小多少"正是"焊少"判据要量的东西,
+    假象直接被当成了缺陷。
+
+    所以这里让焊盘排布的横向范围**比本体宽**(两端各多出
+    pad_size + gap),本体就挡不到焊盘了,各焊盘可见面积一致。
+
+    返回端子列表(而不是在这里登记):调用方拿到的必须是
+    **实际画出去的坐标**,不许再算一遍 —— 抄第二份几何是
+    本项目栽过好几次的坑。
+    """
+    gap = 6
+    span = dx + pad_size + gap          # 焊盘排布的半宽(比本体宽)
+    spacing = 2 * span / (count - 1)
+    # 竖直方向:焊盘**整个**露在本体外(内缘刚好贴着本体边)。
+    # 埋在本体里的那一半量不到 —— "焊盘面积"量的是**看得见的铜**,
+    # 一半被黑壳盖住的焊盘量出来的数只有一半,和同侪没法比。
+    py = body_h // 2 + pad_size
+    pads = []
     for i in range(count):
-        x = int(cx - dx + i * spacing)
-        draw_pad(d, x, cy - 30, pad_size)
-        draw_pad(d, x, cy + 30, pad_size)
+        x = int(cx - span + i * spacing)
+        draw_pad(d, x, cy - py, pad_size)
+        draw_pad(d, x, cy + py, pad_size)
+        pads.append((x, cy - py, pad_size))
+        pads.append((x, cy + py, pad_size))
+    return pads
 
 
 def draw_resistor(d, cx, cy, w, h, color=BLACK, polarity_dot=False):
@@ -262,21 +290,17 @@ def draw_component(d, kind, cx, cy, dx, w, h, rotated=False):
         else:
             draw_capacitor(d, cx, cy, w, h, polarity_dot=True)
     elif kind == "IC":
-        draw_ic_pads(d, cx, cy, dx, count=6)
+        # 端子位置由画焊盘的那一行算出来并返回 —— 这里只搬运,
+        # 不再自己算一遍 x(抄第二份几何 = 本项目栽过好几次的坑)。
+        ic_pads = draw_ic_pads(d, cx, cy, dx, count=6, body_h=h)
         # IC 的端子多而且密(6x2),短路判据只对"两脚元件"有意义,
         # 照样登记下来 —— 判据看到端子数不是 2 会自己报"没查",
         # 而不是靠配方不写来回避。
-        spacing = dx * 2 / (6 - 1)
-        ic_pads = []
-        for i in range(6):
-            x = int(cx - dx + i * spacing)
-            ic_pads.append((x, cy - 30, 8))
-            ic_pads.append((x, cy + 30, 8))
         PADS[(cx, cy)] = ic_pads
         if rotated:
             draw_ic(d, cx, cy, w, h, pin_dot_at=None)
         else:
-            draw_ic(d, cx, cy, w, h, pin_dot_at=(cx - dx + 6, cy - 30))
+            draw_ic(d, cx, cy, w, h, pin_dot_at=(cx - dx + 6, cy - h // 2))
 
 
 def draw_qr_code(img, data="PCB-2026-001", size=120, pos=(840, 540)):
@@ -381,17 +405,21 @@ def defect_bridge(base: Image.Image, site) -> Image.Image:
 
 
 def defect_insufficient(base: Image.Image, site) -> Image.Image:
-    """焊少：把 site 的某个焊盘擦掉一大块"""
+    """焊少：把 site 的某个焊盘擦掉一大块
+
+    擦哪个焊盘 —— 用**登记下来的端子位置**,不在这里再写一遍坐标。
+    以前这里写死了 `cx - dx`,而画焊盘的那一行后来把焊盘挪了
+    (伸出本体,见 draw_ic_pads 的说明),两处就对不上了:
+    缺陷擦在一个**根本没有焊盘**的位置上,而真正的焊盘安然无恙。
+    """
     img = base.copy()
     d = ImageDraw.Draw(img)
     label, kind, cx, cy, dx, _dy, w, h = site
-    # 把最左侧第二个焊盘擦掉（缩成小点）
-    pad_x = int(cx - dx)
-    # 擦
-    d.rectangle([pad_x - 12, cy - 30 - 12, pad_x + 12, cy - 30 + 12],
-                fill=GREEN_PCB)
+    px, py, pr = PADS[(cx, cy)][0]
+    # 擦掉整个焊盘
+    d.rectangle([px - pr, py - pr, px + pr, py + pr], fill=GREEN_PCB)
     # 画一个小得多的焊盘（面积 < 阈值）
-    draw_pad(d, pad_x, cy - 30, size=4, color=GOLD)
+    draw_pad(d, px, py, size=4, color=GOLD)
     return img
 
 

@@ -1303,7 +1303,7 @@ static void test_auto_contour_scale_stable() {
     qInfo().noquote() << "    auto_contour 元件数 0.5x/1.0x/1.5x/2.0x ="
                       << n05 << n10 << n15 << n20;
 
-    // ⚠ 变异验证教训(三条,前两条都是我自己踩的):
+    // ⚠ 变异验证教训(四条,前三条都是我自己踩的):
     //
     // ① 第一版写的是"2.0x 不超过 0.5x 的两倍"。M16(mergeDist 退回 90.0f)
     //   和 M18(核写死 3x3)**都活下来了** —— 基准跟着分子一起漂,
@@ -1314,22 +1314,48 @@ static void test_auto_contour_scale_stable() {
     // ③ 第三版钉死上限 12 —— M16/M18 还是活着,因为它们各自只动**一档**
     //   (M16 把 0.5x 从 7 变成 6,M18 把 2.0x 从 11 变成 10),
     //   而"不超过 12"对 6 和 10 一视同仁地放行。
+    // ④ 第四版逐档钉死 —— 这才是站得住的写法。
     //
-    // 量完三个变异各自的实际输出(探针 mutcount,同一张 baseline.png):
-    //     基线(相对式)        7  10  10  11
-    //     M16 mergeDist=90.0f  6  10  10  11   <- 0.5x 过度聚类,糊成 6 团
-    //     M18 核写死 3x3       7  10  10  10   <- 2.0x 噪声没滤干净,多切一块
-    //     M19 mergeDist x3     3   4   4   4   <- 聚类过头,整板糊成几团
-    //   绝对 min_area=80px(旧版)             6/9/14/18/18/18,放大端爬到 18
+    // ⚠ 2026-10-21:数据重做之后,这四个数**全变了**。
+    //   demo 板的 IC 焊盘搬到了本体外面(生成器改动,见
+    //   W6_PCB_DefectProject/gen_pcb_dataset.py),
+    //   基线从 7/10/10/11 变成 6/10/10/10。
+    //   黄金值跟着数据走 —— 这不是"改数迁就实现",是
+    //   "数据变了,基准必须重量,并且**重新验证变异还杀不杀得动**"。
     //
-    // 三种坏法的形状完全不同,所以这里逐档钉死。认为:这类"黄金值断言"
-    // 换图就会红 —— 但它红的时候是**真的**变了,而且上面三条注释
-    // 记着每个数对应哪个失效模式,不至于变成一堆看不懂的红灯。
-    const int want05 = 7, want10 = 10, want15 = 10, want20 = 11;
+    //   重量的结果(同一张 baseline.png,同一套探针):
+    //     基线                6  10  10  10
+    //     M16 mergeDist=90.0f 5  10  10  10   <- 0.5x 过度聚类,糊成 5 团
+    //     M19 mergeDist x3    3   4   4   4   <- 聚类过头,整板糊成几团
+    //     M18 核写死 3x3      6  10  10  10   <- **活下来了**
+    //
+    //   M18 为什么活下来(这次是想清楚了才写的,不是"先记一笔"):
+    //     demo 板上只有**大焊盘**,没有细走线。核从 3x3 变成 5x5/7x7
+    //     只会把焊盘边缘多削掉一圈,焊盘还是焊盘,连通域个数不变 ——
+    //     "元件数"这个读数**对核尺寸不敏感**。
+    //     所以这条断言**从一开始就抓不住** M18;老注释里那句
+    //     "2.0x 掉到 10 = 开运算核写死 3x3"在**新数据下已经不成立**。
+    //     不改它,它就成了一条会骗人的注释 —— 而注释骗人比测试红更贵,
+    //     因为红会有人来修,骗不会。
+    //
+    //   那 M18 归谁抓:**目前没有人抓**。
+    //   本轮试过"换一个读数去守":complex 三块板有 3px 宽的走线,
+    //   核写死 -> 走线在金层掩膜里活下来 -> 走线把焊盘的铜面积撑大
+    //   -> 焊少读数不再是 0% -> "好板读数恰好 0%"就能抓住。
+    //   **实测不成立**:那些走线没有落进登记过的端子框里
+    //   (走线在底层、被顶层元件压住),焊少读数仍然是 0.0%。
+    //   三个"核写死"的变异(核心路径 / 算子路径 / 判定算子路径)
+    //   实测**全都活着** —— 记在 notes 的「登记的欠账」里。
+    //
+    //   教训:一个读数对什么不敏感,就别指望它管另一件事;
+    //   而"换个读数来管"这句话,**先量了再写进注释**
+    //   (我一度把没验证过的说法写在这里,实测发现是错的,已订正)。
+    const int want05 = 6, want10 = 10, want15 = 10, want20 = 10;
     check(n05 == want05 && n10 == want10 && n15 == want15 && n20 == want20,
-          QString("auto_contour 逐档元件数钉死 7/10/10/11(实测 %1/%2/%3/%4)。"
-                  "0.5x 掉到 6 = mergeDist 退回绝对 90(过度聚类);"
-                  "2.0x 掉到 10 = 开运算核写死 3x3;整体塌到 4 附近 = 聚类过头")
+          QString("auto_contour 逐档元件数钉死 6/10/10/10(实测 %1/%2/%3/%4)。"
+                  "0.5x 掉到 5 = mergeDist 退回绝对 90(过度聚类);"
+                  "整体塌到 4 附近 = 聚类过头;"
+                  "核尺寸写死 3x3 这条**抓不住**(demo 板没有细走线,读数不敏感)")
               .arg(n05).arg(n10).arg(n15).arg(n20));
 }
 
@@ -1384,11 +1410,39 @@ static void test_board_switch_good_boards_clean() {
               QString("%1 零缺陷 (实际 %2) 命中:%3")
                   .arg(who).arg(r.judgeOut.value("defect_count").toInt())
                   .arg(r.defectTypes.values().join(",")));
+        // 好板的焊少读数必须**恰好 0%**
+        //
+        // ⚠ 2026-10-21 加的。同一个元件的焊盘一样大,读数就该是 0。
+        //   钉"恰好 0"而不是"小于阈值"(阈值 33):中间那一大截余量看着安全,
+        //   其实会盖住一类 bug —— 采样框多掐进 1px 金属,读数变成 4%,
+        //   判定不变,但"这个焊盘到底有多少铜"这个数已经不诚实了。
+        //   读数不诚实,拿它标出来的阈值就不可信。
+        //
+        //   变异验证:把端子框半径翻倍,读数变成 power 6.3% / mcu 23.8%,
+        //   **判定不变**(都还在 33 以下)—— 所以只断言"没报缺陷"是抓不住的,
+        //   必须钉读数。
+        {
+            int n = 0;
+            double worst = 0.0;
+            for (const auto& m : r.judgeOut.value("metrics").toArray()) {
+                const QJsonObject mo = m.toObject();
+                if (mo.value("rule").toString() != "insufficient") continue;
+                ++n;
+                worst = qMax(worst, mo.value("value").toDouble());
+            }
+            check(n > 0,
+                  QString("%1 的焊少规则必须真的跑了(实测 %2 条读数 —— "
+                          "0 条就是\"没查\",不能算好板)")
+                      .arg(who).arg(n));
+            check(worst == 0.0,
+                  QString("%1 是好板,焊少读数必须恰好 0%%(实际最大 %2)")
+                      .arg(who, QString::number(worst, 'f', 4)));
+        }
     }
 }
 
 static void test_board_switch_defect_boards() {
-    beginCase("三块板的 6 张废板:能抓的必须抓,抓不到的必须写明");
+    beginCase("三块板的 10 张废板:能抓的必须抓,抓不到的必须写明");
     // 期望值全部来自 W6 的真值表 complex_manifest.csv:
     //   文件名、缺陷类型、点位元件、连哪张配方(kind + ".json")
     // —— 这里一个都不抄。
@@ -1457,8 +1511,17 @@ static void test_board_switch_defect_boards() {
         }
     }
     // 少一行用例,这个函数就少跑一块板,而上面还是全绿。
-    check(defectBoards == 6,
-          QString("complex 板的废板不能少于 6 张(实际 %1 张 —— 是清单被改小了?)")
+    //
+    // ⚠ 2026-10-21:6 -> 9 —— complex 三块板各补了一张「焊少」真值图
+    //   (power_insufficient / mcu_insufficient / signal_insufficient)。
+    //   这三张图正是本轮的目标:insufficient 判据重做之前,这三块板上
+    //   这条规则**整条没跑**,自然也造不出"焊少"的样本。
+    //   9 -> 10 —— 再补一张 mcu_insufficient_xtal(晶振 Y1 焊少):
+    //   晶振只有 2 个脚,而"中位数怎么取"这种差别**只在脚数为偶数时**
+    //   才有分歧(取平均 86.1% / 取大的 92.6% / 取小的 0%)。
+    //   没有这张图,中位数的定义就没人守。
+    check(defectBoards == 10,
+          QString("complex 板的废板不能少于 10 张(实际 %1 张 —— 是清单被改小了?)")
               .arg(defectBoards));
 }
 
@@ -1671,12 +1734,23 @@ static void test_skipped_rules_are_reported() {
             // 只查"非空"的话,把原因换成任何一句别的照样绿 —— 实测过:
             // 故意把 insufficient 的原因改成一句无关的话,测试照样全过。
             // 而"为什么没跑"正是调参的人唯一用得上的信息。
+            //
+            // ⚠ 2026-10-21:insufficient 的跳过原因换了口径 ——
+            //   以前是"金层连通域只有 N 个(< 4)",量的是 ROI 里的连通域;
+            //   现在量的是**登记过的端子**,所以原因是这两种:
+            //     "这个元件没有登记端子位置,量不了焊盘面积"
+            //     "这个元件只登记了 N 个端子,没有同侪可比"
+            //   两种都得写清"缺的是什么",不然还是一句"没查"。
             if (so.value("rule").toString() == "insufficient") {
                 const QString reason = so.value("reason").toString();
-                const QRegularExpression re(QString::fromUtf8("(\\d+) 个"));
-                check(re.match(reason).hasMatch(),
-                      QString("%1 %2/insufficient 的跳过原因要写明连通域个数"
-                              "(实际 \"%1\")")
+                const bool hasCount =
+                    QRegularExpression(QString::fromUtf8("(\\d+) 个"))
+                        .match(reason).hasMatch();
+                const bool saysNoPads =
+                    reason.contains(QString::fromUtf8("没有登记端子"));
+                check(hasCount || saysNoPads,
+                      QString("%1 %2/insufficient 的跳过原因要写明缺了什么"
+                              "(实测数,或\"没有登记端子\")(实际 \"%1\")")
                           .arg(who, so.value("component").toString(), reason));
             }
             skipped << so.value("component").toString() + "/"
@@ -1718,14 +1792,25 @@ static void test_skipped_rules_are_reported() {
     }
 
     // ---- 具体数字:哪块板、哪个站点的哪条规则没跑(量出来的,不是推的) ----
+    //
+    // ⚠ 2026-10-21:三块 complex 板的这三行**从非空变成了空** ——
+    //   原来 mcu 是 "U1/insufficient Y1/insufficient Y2/insufficient",
+    //   power 是 "U1/insufficient",signal 是 "U1/insufficient U2/insufficient"。
+    //   原因是 insufficient 判据重做了(见 common/pcb_core/pcb_core.cpp):
+    //   它现在逐个**登记过的端子**量金属面积,不再需要"凑够 4 个连通域"。
+    //   于是 TO-220(3 脚)/ SOIC-8(8 脚)/ QFP-64(64 脚)/ 晶振(2 脚)
+    //   全都真的跑起来了 —— **"没查"变成了"查过了"**。
+    //
+    //   这张表现在**全空**:凡是配了规则的,都真的跑了。
+    //   以后哪条规则又跳过,这张表会当场红 —— 那是它的用处。
     {
         const QString dir = kComplexDir;
         struct Expect { const char* recipe; const char* file; const char* keys; };
         const Expect exp[] = {
             {"demo.json",   "baseline.png",        ""},
-            {"mcu.json",    "mcu_baseline.png",    "U1/insufficient Y1/insufficient Y2/insufficient"},
-            {"power.json",  "power_baseline.png",  "U1/insufficient"},
-            {"signal.json", "signal_baseline.png", "U1/insufficient U2/insufficient"},
+            {"mcu.json",    "mcu_baseline.png",    ""},
+            {"power.json",  "power_baseline.png",  ""},
+            {"signal.json", "signal_baseline.png", ""},
         };
         for (const auto& e : exp) {
             RunResult r = runBoard(QString::fromUtf8(e.recipe),
