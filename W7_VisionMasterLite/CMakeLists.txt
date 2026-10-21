@@ -363,17 +363,27 @@ if(MSVC)
 endif()
 
 # --- 把探测结果接给编译器 + 链接器 ---
-if(MVS_INCLUDE_DIR AND MVS_LIBRARY)
-    target_compile_definitions(w7_vm_lite PRIVATE HAS_MVS_SDK=1)
-    target_include_directories(w7_vm_lite PRIVATE ${MVS_INCLUDE_DIR})
-    target_link_libraries(w7_vm_lite PRIVATE ${MVS_LIBRARY})
-endif()
+#
+# 抽成函数,是因为**主程序和旋钮审计套件都要用同一份探测结果**。
+# 旋钮审计要判断"当前构建走的是哪个分支"(比如 dl_infer 那两支
+# run() 只有一支参与编译),判据就是算子自己的 runtimeAvailable()。
+# 如果两个目标的探测结果不一致,审计会把分支认反 ——
+# 那比没有审计更坏:它会自信地给出相反的结论。
+function(w7_attach_external_sdks target)
+    if(MVS_INCLUDE_DIR AND MVS_LIBRARY)
+        target_compile_definitions(${target} PRIVATE HAS_MVS_SDK=1)
+        target_include_directories(${target} PRIVATE ${MVS_INCLUDE_DIR})
+        target_link_libraries(${target} PRIVATE ${MVS_LIBRARY})
+    endif()
 
-if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
-    target_compile_definitions(w7_vm_lite PRIVATE HAS_ONNXRUNTIME=1)
-    target_include_directories(w7_vm_lite PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
-    target_link_libraries(w7_vm_lite PRIVATE ${ONNXRUNTIME_LIBRARY})
-endif()
+    if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+        target_compile_definitions(${target} PRIVATE HAS_ONNXRUNTIME=1)
+        target_include_directories(${target} PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+        target_link_libraries(${target} PRIVATE ${ONNXRUNTIME_LIBRARY})
+    endif()
+endfunction()
+
+w7_attach_external_sdks(w7_vm_lite)
 
 set_target_properties(w7_vm_lite PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -886,6 +896,88 @@ endif()
 w7_add_test(operator_library w7_lib_test)
 
 # ============================================================
+# === 旋钮审计 回归测试 (headless)
+#
+# 查的是「界面上摆着的旋钮,和背后那段代码到底对不对得上」:
+#   1. 死旋钮       —— defaultParams() 登记了,run() 却没读
+#   2. 没登记的旋钮 —— run() 读了,defaultParams() 没登记
+#   3. 默认值抄多份 —— defaultParams() 里出现裸字面量
+# 另外两条行为测试:空参数跑出来的结果,必须和声明的默认参数一样。
+#
+# 这三样都不是假想敌。落地前实测已经有三处副本漂了:
+#   blob_count.min_area      声明 20   兜底 50
+#   count_check.expected_min 声明 1    兜底 0
+#   count_check.expected_max 声明 100  兜底 999
+# 还有一处"登记的和读的不是同一个 key":pcb_inspect 登记 min_area、
+# 读 min_area_pct,而 min_area_pct 从来没登记过。
+#
+# 为什么这个目标要链**全部算子**:用例 5 是真跑算子。
+# 只扫源码抓不到"兜底值和声明值不一样"这种病 ——
+# 源码里两处都写着 20,扫源码看不出 run() 读的是 50。
+#
+# 审计要读 operators/*.cpp 的源码,所以同样需要 W7_SOURCE_DIR
+# (理由见上面 run_policy 那段:构建目录和源码目录同名,
+# 从 CWD 往上找会找到另一个同名目录)。
+# ============================================================
+qt_add_executable(w7_knob_test
+    tests/test_operator_knobs.cpp
+    operators/param_form.cpp
+    operators/pin_types.cpp
+    operators/operator_factory.cpp
+    operators/color_segment.cpp
+    operators/blob_count.cpp
+    operators/count_check.cpp
+    operators/template_match.cpp
+    operators/qr_decode.cpp
+    operators/image_source_dir.cpp
+    operators/image_source_camera.cpp
+    operators/image_source_video.cpp
+    operators/pcb_inspect.cpp
+    operators/pcb_defect_judge.cpp
+    operators/board_recipe.cpp
+    operators/dl_postprocess.cpp
+    operators/dl_infer.cpp
+    operators/line_fit.cpp
+    operators/circle_fit.cpp
+    operators/caliper_dist.cpp
+    operators/point_point_dist.cpp
+    operators/point_line_dist.cpp
+    operators/angle.cpp
+)
+
+target_include_directories(w7_knob_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/operators
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w7_knob_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+    ${OpenCV_LIBS}
+    w7_pcb_core
+    w7_qr_ocr
+)
+
+target_compile_definitions(w7_knob_test PRIVATE
+    W7_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
+# 外部 SDK 的探测结果必须和主程序一致 —— 理由见 w7_attach_external_sdks。
+w7_attach_external_sdks(w7_knob_test)
+
+if(MSVC)
+    target_compile_options(w7_knob_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_knob_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${OpenCV_BIN_DIR}
+        $<TARGET_FILE_DIR:w7_knob_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+w7_add_test(operator_knobs w7_knob_test)
+
+# ============================================================
 # 让测试失败时能看到是哪条断言挂了
 #
 # Qt 6 在 Windows 上默认把 qInfo/qDebug 送到 Windows 调试通道而不是 stderr,
@@ -898,7 +990,7 @@ w7_add_test(operator_library w7_lib_test)
 set_tests_properties(
     undo_redo pcb_operators dl_postprocess image_sources
     step_result pin_and_recent line_fit measurement run_policy detection_operators
-    template_match operator_library
+    template_match operator_library operator_knobs
     PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1"
 )
 
