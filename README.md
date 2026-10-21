@@ -18,8 +18,8 @@
 
 ## 🏆 两个综合项目
 
-- **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 418 条断言**
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，14 个无头回归测试共 1162 条断言
+- **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 477 条断言**
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，14 个无头回归测试共 1214 条断言
 
 ## 🔗 两个共享核心（common/）
 
@@ -43,7 +43,7 @@ W6 和 W7 的 PCB 判定、QR/OCR 读取**共用同一份实现**（`common/`，
 逐条标定的版本。硬把 W7 的算法抄一份到 W6，就是本项目栽过四遍的「抄副本」——
 抄出来的那份会随 W7 的标定一起漂，漂了没人知道。
 
-现在 W6 的 17 张测试图（8 张 demo + 9 张 complex）和 W7 算子走**同一份**判定。
+现在 W6 的 21 张测试图（8 张 demo + 13 张 complex）和 W7 算子走**同一份**判定。
 
 `common/qr_ocr/` 是第二块共享核心：**QR 解码 + tesseract 调用**，
 W5 / W6 / W7 三边共用一份（合并前是**三份**拷贝，而且三份从来没被放在一起测过）。
@@ -71,7 +71,7 @@ cd W7_VisionMasterLite
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
-14 个套件 / 1162 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+14 个套件 / 1214 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试，
 `pcb_core` 则是共享判定核心自己的测试（**W6 和 W7 链的是同一份源码**）。
 
@@ -117,7 +117,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 16 份 + 25 张 atomic 卡，~275 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 17 份 + 29 张 atomic 卡，~364 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -135,8 +135,9 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_TestWorkDir_2026-10.md` (18 KB) — 测试产物落构建目录：`.gitignore` 藏起来的是文件，不是问题
 - `notes_CI_2026-10.md` (19 KB) — 上 CI：路径不能写死，以及 CI 第一次跑就逮到的两个真 bug
 - `notes_PCB_Short_2026-10.md` (19 KB) — 短路判据重做：从「量标记圈」到「量两个端子之间」（附：陈旧数据副本）
+- `notes_PCB_Insufficient_2026-10.md` (16 KB) — 焊少判据重做：从「量 ROI 里的金」到「量这个焊盘自己的铜」
 
-`notes/atomic/` 里是**单条教训卡片**（25 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（29 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -149,6 +150,10 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `at-measure-the-thing-not-the-mark.md` — 判据要量物理事实，不要量「画给人看的标记」
 - `at-stale-data-copy-fakes-a-pass.md` — 陈旧的数据副本会让测试「判得对」——判的是旧东西
 - `at-unverified-number-in-comment.md` — 注释里的数字没人验证过，它可能是推演出来的
+- `at-the-roi-is-not-the-pad.md` — 量对象错位：ROI 是本体框，量到的从来不是焊盘
+- `at-four-copies-of-one-number.md` — 同一个数抄四份，改的那一份没被测到
+- `at-even-samples-hide-the-median.md` — 只在多脚样本上验「中位数」，等于没验
+- `at-a-blind-reading-cannot-watch.md` — 读数对什么不敏感，就别指望它管别的事
 
 W7 收官期的改动（PCB/DL 算子、视频源、帧循环、每步结果查看、pin 检查、最近工程）
 逐条记在 git 提交信息里，每条都写清了"为什么"和"测试抓到了什么"。
@@ -188,8 +193,8 @@ OpenCV/
 ## 📊 统计
 
 - 7 个 C++ 项目 + 2 个共享核心
-- 96 个 C++ 文件 / ~17700 行代码
-- 16 份变更日志 + 25 张 atomic 卡 / ~275 KB
-- **17 个无头回归测试 / 1580 条断言**（W7 14 个 / 1162，W6 3 个 / 418；
+- 103 个 C++ 文件 / ~25500 行（含注释与空行）
+- 17 份变更日志 + 29 张 atomic 卡 / ~364 KB
+- **17 个无头回归测试 / 1691 条断言**（W7 14 个 / 1214，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

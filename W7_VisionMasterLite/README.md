@@ -46,7 +46,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 14 个无头回归测试(1162 断言)
+├── tests/                      # 14 个无头回归测试(1214 断言)
 ├── (无 images/)                # 测试图**只有一份**,在 W6_PCB_DefectProject/images/
 │                               #   (那边才是生成器所在地)。构建时暂存进
 │                               #   build/test_work/<套件名>/images/。
@@ -326,7 +326,7 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,1162 断言 / 14 个套件)
+## 🧪 回归测试(无头,1214 断言 / 14 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
@@ -996,7 +996,7 @@ PCB 判定的实现(配方解析 + 定位 + 六条判据 + 短路)搬到了 `com
 **W6 命令行和 W7 算子共用同一份**。
 
 理由:能力在 W7、数据在 W6,而 W6 自己用不上;硬把算法抄一份就是本项目
-栽过四遍的「抄副本」。现在 W6 也能检那 9 张 complex 板了,两边结论逐字一致。
+栽过四遍的「抄副本」。现在 W6 也能检那 13 张 complex 板了,两边结论逐字一致。
 
 
 ## ✏️ 课后练习
