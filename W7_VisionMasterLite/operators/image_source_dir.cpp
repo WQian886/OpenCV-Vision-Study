@@ -94,11 +94,22 @@ QWidget* ImageSourceDir::createParamWidget(QWidget* parent, const QJsonObject& /
 ImageSourceDirForm::ImageSourceDirForm(QWidget* parent) : ParamForm(parent) {}
 
 void ImageSourceDirForm::buildUI() {
-    m_dirPath = new QLineEdit;
-    m_dirPath->setPlaceholderText("如 images 或 D:/test_imgs");
+    // 目录路径:用声明的默认值当初值。
+    //
+    // ⚠ 这里以前是 new QLineEdit(空) + setPlaceholderText("如 images 或 D:/test_imgs")。
+    //   两个问题:
+    //   1. 框里初始是空的 → collect() 把空串写回 params →
+    //      defaultParams() 声明的默认值("images")被吃掉了,
+    //      run() 拿到空串,报的是"目录不存在: "。
+    //   2. 提示语里那个 "images" 是 kDirPath 的抄本。
+    //   现在初值直接取常量,提示语只留"例子"那一半。
+    m_dirPath = new QLineEdit(QString::fromUtf8(ImageSourceDirDefaults::kDirPath));
+    m_dirPath->setPlaceholderText(tr("例:D:/test_imgs"));
 
     m_pattern = new QLineEdit(QString::fromUtf8(ImageSourceDirDefaults::kPattern));
-    m_pattern->setPlaceholderText("如 *.png 或 *.jpg");
+    // 提示语里原来写着 "如 *.png 或 *.jpg" —— 那个 "*.png" 又是
+    // kPattern 的抄本。提示语只留"例子"那一半。
+    m_pattern->setPlaceholderText(tr("例:*.jpg"));
 
     m_layout->addRow(tr("目录路径"), m_dirPath);
     m_layout->addRow(tr("文件名通配符"), m_pattern);

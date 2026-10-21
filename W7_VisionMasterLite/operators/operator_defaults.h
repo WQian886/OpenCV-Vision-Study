@@ -56,9 +56,16 @@
 // 因为 W6 命令行和 W7 算子要共用同一份判据。
 // 两份清单职责不重叠,别混。
 //
-// 金层 HSV 区间也不走这里 —— 它走 operators/pcb_color_ref.h
-// (pcbcolor::goldBand()),因为 W6 的共享核心也要用它。
+// 金层 HSV 区间也不走这里 —— 它走 common/pcb_core/pcb_color_ref.h
+// (pcbcolor::goldBand() / pcbcolor::kMaskVMul),因为 W6 的共享核心也要用它。
 //
+// ⚠ 路径别写错:这个文件**不在** operators/ 底下,在 common/pcb_core/。
+//   注释里写错路径,下一个人会以为 operators/ 下有一份,
+//   然后在 operators/ 里"再抄一份" —— 这就是本项目栽过五遍的坑。
+//
+//   注意:面板 buildUI() 的初值也必须取自 goldBand(),
+//   不能自己写 setValue(85) —— 那又是一份手抄副本。
+//   旋钮审计的用例 3e 盯着这件事。
 // ============================================================
 
 namespace w7 {

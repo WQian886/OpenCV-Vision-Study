@@ -320,6 +320,7 @@ set(HEADERS
     commands/edge_commands.h
     recent_files.h
     operators/operator_base.h
+    operators/operator_defaults.h   # 旋钮默认值的唯一一份 —— 列出来才在 IDE 里看得见
     operators/param_form.h
     operators/pin_types.h
     operators/operator_factory.h

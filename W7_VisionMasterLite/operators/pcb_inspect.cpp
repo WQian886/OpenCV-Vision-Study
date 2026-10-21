@@ -468,7 +468,10 @@ PcbInspectForm::PcbInspectForm(QWidget* parent) : ParamForm(parent) {}
 
 void PcbInspectForm::buildUI() {
     m_mode = new QComboBox;
-    m_mode->addItem(tr("真值坐标(按板型配方)"), "known_site");
+    // 默认项用声明值,别自己写一份 "known_site" ——
+    // 那是 PcbInspectDefaults::kMode 的抄本。
+    // (旋钮审计的用例 3f 盯着这件事。)
+    m_mode->addItem(tr("真值坐标(按板型配方)"), QString::fromUtf8(PcbInspectDefaults::kMode));
     m_mode->addItem(tr("自动轮廓(无配方,不判定)"), "auto_contour");
 
     // 板型配方下拉框。列的是 recipes/ 下真实存在的文件 ——
@@ -491,12 +494,22 @@ void PcbInspectForm::buildUI() {
         m_recipe->setEditable(true);   // 允许直接输路径加载自定义配方
     }
 
-    m_hLow  = new QSpinBox;  m_hLow->setRange(0, 179);  m_hLow->setValue(85);
-    m_sLow  = new QSpinBox;  m_sLow->setRange(0, 255);  m_sLow->setValue(80);
-    m_hHigh = new QSpinBox;  m_hHigh->setRange(0, 179); m_hHigh->setValue(115);
+    // ⚠ 这里以前是裸的 setValue(85) / setValue(80) / setValue(115) /
+    //   setValue(0.8) —— 那是**又一份抄副本**:金层区间的真实来源是
+    //   common/pcb_core/pcb_color_ref.h 的 pcbcolor::goldBand(),
+    //   run() 的兜底也是从那儿取的。数字一样,但它是第四份手抄的副本,
+    //   校准值一改,面板就悄悄对不上了 —— 而界面上看不出来。
+    //   旋钮审计的用例 3e 盯着这件事(兜底与面板初值都不许有裸字面量)。
+    m_hLow  = new QSpinBox;  m_hLow->setRange(0, 179);
+    m_hLow->setValue(pcbcolor::goldBand().hLo);
+    m_sLow  = new QSpinBox;  m_sLow->setRange(0, 255);
+    m_sLow->setValue(pcbcolor::goldBand().sLo);
+    m_hHigh = new QSpinBox;  m_hHigh->setRange(0, 179);
+    m_hHigh->setValue(pcbcolor::goldBand().hHi);
     // V 下界不再是绝对值,改成"板面基色 x 多少倍",用双精度小数的框。
     m_vMul = new QDoubleSpinBox; m_vMul->setRange(0.0, 4.0);
-    m_vMul->setDecimals(2); m_vMul->setSingleStep(0.05); m_vMul->setValue(0.8);
+    m_vMul->setDecimals(2); m_vMul->setSingleStep(0.05);
+    m_vMul->setValue(pcbcolor::kMaskVMul);
     m_minAreaPct = new QDoubleSpinBox; m_minAreaPct->setRange(0.0, 10.0);
     m_minAreaPct->setDecimals(3); m_minAreaPct->setSingleStep(0.001);
     m_minAreaPct->setValue(PcbInspectDefaults::kMinAreaPct);

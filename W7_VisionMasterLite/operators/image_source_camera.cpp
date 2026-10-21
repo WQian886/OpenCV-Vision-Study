@@ -171,8 +171,14 @@ QWidget* ImageSourceCamera::createParamWidget(QWidget* parent, const QJsonObject
 ImageSourceCameraForm::ImageSourceCameraForm(QWidget* parent) : ParamForm(parent) {}
 
 void ImageSourceCameraForm::buildUI() {
-    m_cameraIp = new QLineEdit;
-    m_cameraIp->setPlaceholderText("如 192.168.1.10");
+    // 相机 IP:用声明的默认值当初值。
+    //
+    // ⚠ 这里以前是 new QLineEdit(空) + setPlaceholderText("如 192.168.1.10")。
+    //   两个问题:
+    //   1. 框里初始是空的 → collect() 把空串写回 params →
+    //      defaultParams() 声明的默认值被吃掉了。
+    //   2. 提示语里那个 IP 是 ImageSourceCameraDefaults::kCameraIp 的抄本。
+    m_cameraIp = new QLineEdit(QString::fromUtf8(ImageSourceCameraDefaults::kCameraIp));
 
     m_exposure = new QDoubleSpinBox;
     m_exposure->setRange(0.01, 1000.0);

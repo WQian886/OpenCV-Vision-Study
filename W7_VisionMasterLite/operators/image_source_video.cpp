@@ -143,8 +143,13 @@ QWidget* ImageSourceVideo::createParamWidget(QWidget* parent,
 ImageSourceVideoForm::ImageSourceVideoForm(QWidget* parent) : ParamForm(parent) {}
 
 void ImageSourceVideoForm::buildUI() {
-    m_videoPath = new QLineEdit;
-    m_videoPath->setPlaceholderText("如 images/sample.avi");
+    // 视频路径:用声明的默认值当初值。
+    //
+    // ⚠ 这里以前是 new QLineEdit(空) + setPlaceholderText("如 images/sample.avi")。
+    //   框里初始是空的 → collect() 把空串写回 params →
+    //   defaultParams() 声明的默认值被吃掉了;
+    //   提示语里那个路径又是 kVideoPath 的一份抄本。
+    m_videoPath = new QLineEdit(QString::fromUtf8(ImageSourceVideoDefaults::kVideoPath));
 
     m_maxFrames = new QSpinBox;
     m_maxFrames->setRange(1, 100000);

@@ -264,8 +264,18 @@ void DlInferForm::buildUI() {
     m_conf->setRange(0.0, 1.0); m_conf->setSingleStep(0.05); m_conf->setValue(DlInferDefaults::kConfThreshold);
     m_iou = new QDoubleSpinBox;
     m_iou->setRange(0.0, 1.0); m_iou->setSingleStep(0.05); m_iou->setValue(DlInferDefaults::kNmsIou);
-    m_classes = new QLineEdit;
-    m_classes->setPlaceholderText("person,bicycle,car");
+    m_classes = new QLineEdit(QString::fromUtf8(DlInferDefaults::kClassNames));
+    // ⚠ 这里以前是 setPlaceholderText("person,bicycle,car") ——
+    //   那是 kClassNames 的**一份抄本**,而且只抄了前三个(逗号类名表
+    //   一共六个)。抄本比原文更容易骗人:它看起来像"举个例子",
+    //   于是没人去核对它和声明值是不是一回事。
+    //
+    //   现在直接用声明值当初值:用户一眼看到检测框上会标什么,
+    //   而且这一栏 collect() 写回 params 时写的就是它 ——
+    //   面板上摆的和算子实际用的是同一个串。
+    //
+    //   (model_path 那边只放 placeholder,不预填:模型文件得用户自己指,
+    //    一个空框比一个写着不存在的路径的框诚实。)
     m_outLayout = new QComboBox;
     m_outLayout->addItem(tr("YOLOv8  (1, 4+类别数, N)"),   QString::fromUtf8(DlInferDefaults::kOutputLayout));
     m_outLayout->addItem(tr("YOLOv5  (1, N, 5+类别数)"),   "yolov5");
