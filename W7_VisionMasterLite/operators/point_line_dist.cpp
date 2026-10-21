@@ -1,5 +1,6 @@
 #include "point_line_dist.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 #include <QSpinBox>
 #include <cmath>
 #include <QDir>
@@ -8,6 +9,13 @@
 #include <opencv2/imgproc.hpp>
 
 namespace w7 {
+
+// 坐标旋钮名 —— **算子和面板共用这一份**。
+// 以前是两份(Form::kKeys + run() 里的字面量),漏改一处就是
+// "面板配的键"和"算子读的键"对不上,而且不报错。
+namespace {
+const QStringList kCoordKeys = {"ax", "ay", "bx", "by", "cx", "cy"};
+}   // namespace
 
 QJsonObject PointLineDist::defaultParams() const {
     QJsonObject p;
@@ -20,12 +28,19 @@ QJsonObject PointLineDist::defaultParams() const {
 QJsonObject PointLineDist::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
 
-    const double ax = params.value("ax").toDouble(PointLineDistDefaults::kAx);
-    const double ay = params.value("ay").toDouble(PointLineDistDefaults::kAy);
-    const double bx = params.value("bx").toDouble(PointLineDistDefaults::kBx);
-    const double by = params.value("by").toDouble(PointLineDistDefaults::kBy);
-    const double cx = params.value("cx").toDouble(PointLineDistDefaults::kCx);
-    const double cy = params.value("cy").toDouble(PointLineDistDefaults::kCy);
+    // 坐标旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    // 兜底值来自 defaultParams() —— 声明值只有一份。
+    // ⚠ 以前读的是 toDouble(默认值),而面板上是 QSpinBox(整数) ——
+    //   面板和算子对"这个旋钮是什么类型"本来就没对齐。现在统一成整数。
+    QVector<int> c;
+    QString err;
+    if (!readIntKnobs(params, kCoordKeys, defaultParams(), &c, &err)) {
+        output["error"] = err;
+        return output;
+    }
+    const int ax = c.at(0), ay = c.at(1);
+    const int bx = c.at(2), by = c.at(3);
+    const int cx = c.at(4), cy = c.at(5);
 
     // 沿用 caliper_dist 的公式 + 退化处理
     const double abx = bx - ax, aby = by - ay;
@@ -108,8 +123,6 @@ QWidget* PointLineDist::createParamWidget(QWidget* parent, const QJsonObject& pa
 // === 参数面板(沿用 caliper_dist 的"6 个坐标循环"模板) ===
 // ============================================================
 
-const char* PointLineDistForm::kKeys[6] = {"ax", "ay", "bx", "by", "cx", "cy"};
-
 PointLineDistForm::PointLineDistForm(QWidget* parent) : ParamForm(parent) {}
 
 void PointLineDistForm::buildUI() {
@@ -127,15 +140,19 @@ void PointLineDistForm::buildUI() {
 }
 
 void PointLineDistForm::setParams(const QJsonObject& params) {
+    // 兜底用**声明的默认值**,不是 0。
+    // ⚠ 以前是 toInt(0) —— 和声明值不一致的第二份副本。
+    const QJsonObject d = PointLineDist().defaultParams();
     for (int i = 0; i < 6; ++i)
-        if (params.contains(kKeys[i]))
-            m_p[i]->setValue(params.value(kKeys[i]).toInt(0));
+        if (params.contains(kCoordKeys.at(i)))
+            m_p[i]->setValue(knobValueForWidget(params.value(kCoordKeys.at(i)),
+                                                d, kCoordKeys.at(i)));
 }
 
 QJsonObject PointLineDistForm::collect() const {
     QJsonObject p;
     for (int i = 0; i < 6; ++i)
-        p[kKeys[i]] = m_p[i]->value();
+        p[kCoordKeys.at(i)] = m_p[i]->value();
     return p;
 }
 

@@ -96,8 +96,12 @@ void CountCheckForm::buildUI() {
 }
 
 void CountCheckForm::setParams(const QJsonObject& params) {
-    if (params.contains("expected_min")) m_min->setValue(params["expected_min"].toInt());
-    if (params.contains("expected_max")) m_max->setValue(params["expected_max"].toInt());
+    // 兜底用**声明的默认值**(见 blob_count.cpp 里同一处的说明:
+    // toInt() 看着"没写兜底",其实是隐式退成 0 —— 和声明值不是一回事)。
+    if (params.contains("expected_min"))
+        m_min->setValue(params.value("expected_min").toInt(CountCheckDefaults::kExpectedMin));
+    if (params.contains("expected_max"))
+        m_max->setValue(params.value("expected_max").toInt(CountCheckDefaults::kExpectedMax));
 }
 
 QJsonObject CountCheckForm::collect() const {

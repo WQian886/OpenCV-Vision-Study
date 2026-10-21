@@ -1,5 +1,6 @@
 #include "caliper_dist.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 #include <QSpinBox>
 #include <cmath>
 #include <QDir>
@@ -8,6 +9,13 @@
 #include <opencv2/imgproc.hpp>
 
 namespace w7 {
+
+// 坐标旋钮名 —— **算子和面板共用这一份**。
+// 以前是两份(Form::kKeys + run() 里的字面量),漏改一处就是
+// "面板配的键"和"算子读的键"对不上,而且不报错。
+namespace {
+const QStringList kCoordKeys = {"ax", "ay", "bx", "by", "cx", "cy"};
+}   // namespace
 
 QJsonObject CaliperDist::defaultParams() const {
     QJsonObject p;
@@ -20,12 +28,22 @@ QJsonObject CaliperDist::defaultParams() const {
 QJsonObject CaliperDist::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
 
-    const double ax = params.value("ax").toDouble(CaliperDistDefaults::kAx);
-    const double ay = params.value("ay").toDouble(CaliperDistDefaults::kAy);
-    const double bx = params.value("bx").toDouble(CaliperDistDefaults::kBx);
-    const double by = params.value("by").toDouble(CaliperDistDefaults::kBy);
-    const double cx = params.value("cx").toDouble(CaliperDistDefaults::kCx);
-    const double cy = params.value("cy").toDouble(CaliperDistDefaults::kCy);
+    // 坐标旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    // 兜底值来自 defaultParams() —— 声明值只有一份。
+    //
+    // ⚠ 以前这里读的是 toDouble(默认值),而面板上是 **QSpinBox(整数)** ——
+    //   面板和算子对"这个旋钮是什么类型"本来就没对齐:
+    //   存盘里坐标是小数时,面板显示 0(整数框),算子却按小数算。
+    //   现在两边统一成整数像素坐标:面板能填的,算子就能用。
+    QVector<int> c;
+    QString err;
+    if (!readIntKnobs(params, kCoordKeys, defaultParams(), &c, &err)) {
+        output["error"] = err;
+        return output;
+    }
+    const int ax = c.at(0), ay = c.at(1);
+    const int bx = c.at(2), by = c.at(3);
+    const int cx = c.at(4), cy = c.at(5);
 
     const double abx = bx - ax, aby = by - ay;
     const double baseLen = std::sqrt(abx * abx + aby * aby);
@@ -108,8 +126,6 @@ QWidget* CaliperDist::createParamWidget(QWidget* parent, const QJsonObject& para
     return form;
 }
 
-const char* CaliperDistForm::kKeys[6] = {"ax", "ay", "bx", "by", "cx", "cy"};
-
 CaliperDistForm::CaliperDistForm(QWidget* parent) : ParamForm(parent) {}
 
 void CaliperDistForm::buildUI() {
@@ -127,15 +143,19 @@ void CaliperDistForm::buildUI() {
 }
 
 void CaliperDistForm::setParams(const QJsonObject& params) {
+    // 兜底用**声明的默认值**,不是 0。
+    // ⚠ 以前是 toInt(0) —— 和声明值不一致的第二份副本。
+    const QJsonObject d = CaliperDist().defaultParams();
     for (int i = 0; i < 6; ++i)
-        if (params.contains(kKeys[i]))
-            m_p[i]->setValue(params.value(kKeys[i]).toInt(0));
+        if (params.contains(kCoordKeys.at(i)))
+            m_p[i]->setValue(knobValueForWidget(params.value(kCoordKeys.at(i)),
+                                                d, kCoordKeys.at(i)));
 }
 
 QJsonObject CaliperDistForm::collect() const {
     QJsonObject p;
     for (int i = 0; i < 6; ++i)
-        p[kKeys[i]] = m_p[i]->value();
+        p[kCoordKeys.at(i)] = m_p[i]->value();
     return p;
 }
 

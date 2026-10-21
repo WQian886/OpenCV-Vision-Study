@@ -1,5 +1,6 @@
 #include "point_point_dist.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 #include <QSpinBox>
 #include <cmath>
 #include <QDir>
@@ -8,6 +9,17 @@
 #include <opencv2/imgproc.hpp>
 
 namespace w7 {
+
+// 坐标旋钮名 —— **算子和面板共用这一份**。
+//
+// ⚠ 以前这里是**两份**:Form::kKeys(面板 collect/setParams 用)
+//   和 run() 里手写的 params.value("x1")(算子用)。
+//   键名抄两份,迟早有一处漏改 —— 漏改的后果是
+//   "面板配的键"和"算子读的键"不是同一个:
+//   界面上调了不生效,而且**不报错**。
+namespace {
+const QStringList kCoordKeys = {"x1", "y1", "x2", "y2"};
+}   // namespace
 
 QJsonObject PointPointDist::defaultParams() const {
     QJsonObject p;
@@ -19,10 +31,24 @@ QJsonObject PointPointDist::defaultParams() const {
 QJsonObject PointPointDist::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
 
-    const int x1 = params.value("x1").toInt(PointPointDistDefaults::kX1);
-    const int y1 = params.value("y1").toInt(PointPointDistDefaults::kY1);
-    const int x2 = params.value("x2").toInt(PointPointDistDefaults::kX2);
-    const int y2 = params.value("y2").toInt(PointPointDistDefaults::kY2);
+    // 坐标旋钮:类型不对就报错,**不补默认值**。
+    //
+    // 兜底值来自 defaultParams() —— 声明值只有一份,
+    // 不用再在这里手写第二份 .toInt(PointPointDistDefaults::kX1)。
+    //
+    // ⚠ 以前这里没有类型检查:params.value("x1").toInt(默认值) 在
+    //   值是字符串 "100" 时返回**默认值**(Qt 不解析字符串),
+    //   值是小数 25.7 时也返回默认值(不截断)。
+    //   也就是说用户写进去的坐标被**整个丢掉**,算子拿默认值算,
+    //   还报出一个看着正常的距离 —— 测量结果直接决定判废。
+    QVector<int> c;
+    QString err;
+    if (!readIntKnobs(params, kCoordKeys, defaultParams(), &c, &err)) {
+        output["error"] = err;
+        return output;
+    }
+    const int x1 = c.at(0), y1 = c.at(1);
+    const int x2 = c.at(2), y2 = c.at(3);
 
     const double dx = double(x2 - x1);
     const double dy = double(y2 - y1);
@@ -80,8 +106,6 @@ QWidget* PointPointDist::createParamWidget(QWidget* parent, const QJsonObject& p
 // === 参数面板(沿用 line_fit 的"4 个坐标循环"模板) ===
 // ============================================================
 
-const char* PointPointDistForm::kKeys[4] = {"x1", "y1", "x2", "y2"};
-
 PointPointDistForm::PointPointDistForm(QWidget* parent) : ParamForm(parent) {}
 
 void PointPointDistForm::buildUI() {
@@ -97,16 +121,24 @@ void PointPointDistForm::buildUI() {
 }
 
 void PointPointDistForm::setParams(const QJsonObject& params) {
+    // 兜底用**声明的默认值**,不是 0。
+    //
+    // ⚠ 以前是 toInt(0) —— 那是一份和声明值不一致的副本:
+    //   存盘里 x1 存成了字符串时,面板显示 0 而不是声明的 100,
+    //   用户看一眼不会觉得有问题,点一下"应用参数"就把 0 存进流水线,
+    //   测量结果整个变了 —— 而界面上看不出任何异常。
+    const QJsonObject d = PointPointDist().defaultParams();
     for (int i = 0; i < 4; ++i) {
-        if (params.contains(kKeys[i]))
-            m_coord[i]->setValue(params.value(kKeys[i]).toInt(0));
+        if (params.contains(kCoordKeys.at(i)))
+            m_coord[i]->setValue(knobValueForWidget(params.value(kCoordKeys.at(i)),
+                                                    d, kCoordKeys.at(i)));
     }
 }
 
 QJsonObject PointPointDistForm::collect() const {
     QJsonObject p;
     for (int i = 0; i < 4; ++i)
-        p[kKeys[i]] = m_coord[i]->value();
+        p[kCoordKeys.at(i)] = m_coord[i]->value();
     return p;
 }
 

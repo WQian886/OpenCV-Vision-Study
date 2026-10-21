@@ -1,5 +1,6 @@
 #include "angle.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 #include <QSpinBox>
 #include <cmath>
 #include <QDir>
@@ -8,6 +9,14 @@
 #include <opencv2/imgproc.hpp>
 
 namespace w7 {
+
+// 坐标旋钮名 —— **算子和面板共用这一份**。
+// 以前是两份(Form::kKeys + run() 里的字面量),漏改一处就是
+// "面板配的键"和"算子读的键"对不上,而且不报错。
+namespace {
+const QStringList kCoordKeys = {"x1", "y1", "x2", "y2",
+                                "x3", "y3", "x4", "y4"};
+}   // namespace
 
 namespace {
 // 单条线段的角度(0~180°),与 line_fit 完全一致的归一化:
@@ -38,14 +47,18 @@ QJsonObject Angle::defaultParams() const {
 QJsonObject Angle::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
 
-    const int x1 = params.value("x1").toInt(AngleDefaults::kX1);
-    const int y1 = params.value("y1").toInt(AngleDefaults::kY1);
-    const int x2 = params.value("x2").toInt(AngleDefaults::kX2);
-    const int y2 = params.value("y2").toInt(AngleDefaults::kY2);
-    const int x3 = params.value("x3").toInt(AngleDefaults::kX3);
-    const int y3 = params.value("y3").toInt(AngleDefaults::kY3);
-    const int x4 = params.value("x4").toInt(AngleDefaults::kX4);
-    const int y4 = params.value("y4").toInt(AngleDefaults::kY4);
+    // 坐标旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    // 兜底值来自 defaultParams() —— 声明值只有一份。
+    QVector<int> c;
+    QString err;
+    if (!readIntKnobs(params, kCoordKeys, defaultParams(), &c, &err)) {
+        output["error"] = err;
+        return output;
+    }
+    const int x1 = c.at(0), y1 = c.at(1);
+    const int x2 = c.at(2), y2 = c.at(3);
+    const int x3 = c.at(4), y3 = c.at(5);
+    const int x4 = c.at(6), y4 = c.at(7);
 
     const double a1 = lineAngleDeg(x1, y1, x2, y2);
     const double a2 = lineAngleDeg(x3, y3, x4, y4);
@@ -134,9 +147,6 @@ QWidget* Angle::createParamWidget(QWidget* parent, const QJsonObject& params) {
 // === 参数面板(8 个坐标,沿用 line_fit 的"循环"模板) ===
 // ============================================================
 
-const char* AngleForm::kKeys[8] = {"x1", "y1", "x2", "y2",
-                                   "x3", "y3", "x4", "y4"};
-
 AngleForm::AngleForm(QWidget* parent) : ParamForm(parent) {}
 
 void AngleForm::buildUI() {
@@ -155,16 +165,20 @@ void AngleForm::buildUI() {
 }
 
 void AngleForm::setParams(const QJsonObject& params) {
+    // 兜底用**声明的默认值**,不是 0。
+    // ⚠ 以前是 toInt(0) —— 和声明值不一致的第二份副本。
+    const QJsonObject d = Angle().defaultParams();
     for (int i = 0; i < 8; ++i) {
-        if (params.contains(kKeys[i]))
-            m_coord[i]->setValue(params.value(kKeys[i]).toInt(0));
+        if (params.contains(kCoordKeys.at(i)))
+            m_coord[i]->setValue(knobValueForWidget(params.value(kCoordKeys.at(i)),
+                                                    d, kCoordKeys.at(i)));
     }
 }
 
 QJsonObject AngleForm::collect() const {
     QJsonObject p;
     for (int i = 0; i < 8; ++i)
-        p[kKeys[i]] = m_coord[i]->value();
+        p[kCoordKeys.at(i)] = m_coord[i]->value();
     return p;
 }
 

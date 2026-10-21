@@ -45,7 +45,8 @@ protected:
     QJsonObject collect() const override;
 private:
     QSpinBox* m_coord[4] = {nullptr, nullptr, nullptr, nullptr};
-    static const char* kKeys[4];
+    // 旋钮名在 point_point_dist.cpp 的 kCoordKeys 里 —— 算子和面板共用一份,
+    // 以前这里是 Form::kKeys,和 run() 里的字面量是**两份**。
 };
 
 } // namespace w7

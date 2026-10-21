@@ -49,7 +49,8 @@ private:
     // 4 个坐标输入框。存成数组,collect/setParams 里按 0..3 循环,
     // 免得四处各写一遍 x1/y1/x2/y2,改的时候漏掉一个
     QSpinBox* m_coord[4] = {nullptr, nullptr, nullptr, nullptr};
-    static const char* kKeys[4];
+    // 旋钮名在 line_fit.cpp 的 kCoordKeys 里 —— 算子和面板共用一份,
+    // 以前这里是 Form::kKeys,和 run() 里的字面量是**两份**。
 };
 
 } // namespace w7

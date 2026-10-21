@@ -1,5 +1,6 @@
 #include "line_fit.h"
 #include "operator_defaults.h"
+#include "param_read.h"
 #include <QSpinBox>
 #include <cmath>
 #include <QDir>
@@ -8,6 +9,13 @@
 #include <opencv2/imgproc.hpp>
 
 namespace w7 {
+
+// 坐标旋钮名 —— **算子和面板共用这一份**。
+// 以前是两份(Form::kKeys + run() 里的字面量),漏改一处就是
+// "面板配的键"和"算子读的键"对不上,而且不报错。
+namespace {
+const QStringList kCoordKeys = {"x1", "y1", "x2", "y2"};
+}   // namespace
 
 // ============================================================
 // === 角度范围:本算子的核心设计决策 ===
@@ -33,10 +41,16 @@ QJsonObject LineFit::defaultParams() const {
 QJsonObject LineFit::run(const QJsonObject& params, const QJsonObject& inputs) {
     QJsonObject output;
 
-    const int x1 = params.value("x1").toInt(LineFitDefaults::kX1);
-    const int y1 = params.value("y1").toInt(LineFitDefaults::kY1);
-    const int x2 = params.value("x2").toInt(LineFitDefaults::kX2);
-    const int y2 = params.value("y2").toInt(LineFitDefaults::kY2);
+    // 坐标旋钮:类型不对就报错,不补默认值(理由见 param_read.h)。
+    // 兜底值来自 defaultParams() —— 声明值只有一份。
+    QVector<int> c;
+    QString err;
+    if (!readIntKnobs(params, kCoordKeys, defaultParams(), &c, &err)) {
+        output["error"] = err;
+        return output;
+    }
+    const int x1 = c.at(0), y1 = c.at(1);
+    const int x2 = c.at(2), y2 = c.at(3);
 
     const double dx = double(x2 - x1);
     const double dy = double(y2 - y1);
@@ -112,10 +126,7 @@ QWidget* LineFit::createParamWidget(QWidget* parent, const QJsonObject& params) 
 // === 参数面板 ===
 // ============================================================
 
-const char* LineFitForm::kKeys[4] = {"x1", "y1", "x2", "y2"};
-
 LineFitForm::LineFitForm(QWidget* parent) : ParamForm(parent) {}
-
 void LineFitForm::buildUI() {
     const QString labels[4] = {tr("起点 X"), tr("起点 Y"),
                                tr("终点 X"), tr("终点 Y")};
@@ -131,16 +142,22 @@ void LineFitForm::buildUI() {
 }
 
 void LineFitForm::setParams(const QJsonObject& params) {
+    // 兜底用**声明的默认值**,不是 0。
+    // ⚠ 以前是 toInt(0) —— 和声明值不一致的第二份副本:
+    //   存盘里坐标存成了字符串时,面板显示 0 而不是声明的值,
+    //   用户点一下"应用参数"就把 0 存进流水线,量出来的长度整个变了。
+    const QJsonObject d = LineFit().defaultParams();
     for (int i = 0; i < 4; ++i) {
-        if (params.contains(kKeys[i]))
-            m_coord[i]->setValue(params.value(kKeys[i]).toInt(0));
+        if (params.contains(kCoordKeys.at(i)))
+            m_coord[i]->setValue(knobValueForWidget(params.value(kCoordKeys.at(i)),
+                                                    d, kCoordKeys.at(i)));
     }
 }
 
 QJsonObject LineFitForm::collect() const {
     QJsonObject p;
     for (int i = 0; i < 4; ++i)
-        p[kKeys[i]] = m_coord[i]->value();
+        p[kCoordKeys.at(i)] = m_coord[i]->value();
     return p;
 }
 

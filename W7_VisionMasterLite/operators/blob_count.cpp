@@ -61,7 +61,12 @@ void BlobCountForm::buildUI() {
 
 void BlobCountForm::setParams(const QJsonObject& params) {
     if (params.contains("min_area")) {
-        m_minArea->setValue(params["min_area"].toInt());
+        // 兜底用**声明的默认值**。
+        // ⚠ 以前是 toInt() —— 那是**没有兜底**:Qt 的 toInt() 默认参数是 0,
+        //   于是存盘里 min_area 存成了字符串时,面板显示 0 而不是 20,
+        //   用户点一下"应用参数"就把 0 存进流水线了。
+        //   旋钮审计的用例 3g 盯着这件事。
+        m_minArea->setValue(params.value("min_area").toInt(BlobCountDefaults::kMinArea));
     }
 }
 

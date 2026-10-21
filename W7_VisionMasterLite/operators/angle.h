@@ -49,7 +49,8 @@ protected:
     QJsonObject collect() const override;
 private:
     QSpinBox* m_coord[8] = {nullptr};
-    static const char* kKeys[8];
+    // 旋钮名在 angle.cpp 的 kCoordKeys 里 —— 算子和面板共用一份,
+    // 以前这里是 Form::kKeys,和 run() 里的字面量是**两份**。
 };
 
 } // namespace w7

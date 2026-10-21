@@ -218,9 +218,10 @@ void ImageSourceCameraForm::buildUI() {
 
 void ImageSourceCameraForm::setParams(const QJsonObject& params) {
     if (params.contains("camera_ip")) m_cameraIp->setText(params["camera_ip"].toString());
-    if (params.contains("exposure"))  m_exposure->setValue(params["exposure"].toDouble());
+    if (params.contains("exposure"))
+        m_exposure->setValue(params.value("exposure").toDouble(ImageSourceCameraDefaults::kExposureMs));
     if (params.contains("trigger_mode")) {
-        int v = params["trigger_mode"].toInt();
+        int v = params.value("trigger_mode").toInt(ImageSourceCameraDefaults::kTriggerMode);
         for (int i = 0; i < m_trigger->count(); ++i) {
             if (m_trigger->itemData(i).toInt() == v) {
                 m_trigger->setCurrentIndex(i);
