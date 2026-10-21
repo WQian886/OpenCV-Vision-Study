@@ -12,7 +12,7 @@ namespace w7 {
 QJsonObject TemplateMatch::defaultParams() const {
     QJsonObject p;
     p["template_path"] = QString::fromUtf8(TemplateMatchDefaults::kTemplatePath);
-    p["method"]        = cv::TM_CCOEFF_NORMED;
+    p["method"]        = TemplateMatchDefaults::kMethod;
     p["threshold"]     = TemplateMatchDefaults::kThreshold;
     return p;
 }
@@ -33,7 +33,7 @@ QJsonObject TemplateMatch::run(const QJsonObject& params, const QJsonObject& inp
         return output;
     }
 
-    int method = params.value("method").toInt(cv::TM_CCOEFF_NORMED);
+    int method = params.value("method").toInt(TemplateMatchDefaults::kMethod);
     double threshold = params.value("threshold").toDouble(TemplateMatchDefaults::kThreshold);
 
     // ============================================================
@@ -174,6 +174,20 @@ void TemplateMatchForm::buildUI() {
     m_method->addItem("TM_CCORR_NORMED",          cv::TM_CCORR_NORMED);
     m_method->addItem("TM_SQDIFF_NORMED",         cv::TM_SQDIFF_NORMED);
 
+    // 面板初值 = **声明的默认值**,不是"列表第一项"。
+    // ⚠ 以前靠"TM_CCOEFF_NORMED 恰好排在第一位"来当默认值 ——
+    //   那是**巧合**,不是声明:哪天把声明的默认值改了、
+    //   或者把列表顺序调了,面板上摆的方法和算子跑的方法
+    //   就不是一回事了(界面上摆一个"调了不生效"的旋钮 = 骗人)。
+    //   旋钮审计的用例 3e 盯着 setValue,但 combo 的初值它看不见,
+    //   这条靠写代码本身保证。
+    for (int i = 0; i < m_method->count(); ++i) {
+        if (m_method->itemData(i).toInt() == TemplateMatchDefaults::kMethod) {
+            m_method->setCurrentIndex(i);
+            break;
+        }
+    }
+
     m_threshold = new QDoubleSpinBox;
     m_threshold->setRange(0.0, 1.0);
     m_threshold->setSingleStep(0.05);
@@ -187,7 +201,7 @@ void TemplateMatchForm::buildUI() {
 void TemplateMatchForm::setParams(const QJsonObject& params) {
     if (params.contains("template_path")) m_tplPath->setText(params["template_path"].toString());
     if (params.contains("method")) {
-        int method = params["method"].toInt();
+        int method = params.value("method").toInt(TemplateMatchDefaults::kMethod);
         for (int i = 0; i < m_method->count(); ++i) {
             if (m_method->itemData(i).toInt() == method) {
                 m_method->setCurrentIndex(i);
@@ -195,7 +209,9 @@ void TemplateMatchForm::setParams(const QJsonObject& params) {
             }
         }
     }
-    if (params.contains("threshold")) m_threshold->setValue(params["threshold"].toDouble());
+    // 兜底用**声明的默认值**(toDouble() 看着"没写兜底",其实是隐式退成 0)。
+    if (params.contains("threshold"))
+        m_threshold->setValue(params.value("threshold").toDouble(TemplateMatchDefaults::kThreshold));
 }
 
 QJsonObject TemplateMatchForm::collect() const {

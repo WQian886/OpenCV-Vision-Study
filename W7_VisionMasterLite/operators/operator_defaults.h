@@ -65,8 +65,22 @@
 //
 //   注意:面板 buildUI() 的初值也必须取自 goldBand(),
 //   不能自己写 setValue(85) —— 那又是一份手抄副本。
-//   旋钮审计的用例 3e 盯着这件事。
+//   旋钮审计的用例 3e 盯着这件事.
+//
+// ------------------------------------------------------------
+// 为什么这个文件要 include OpenCV
+// ------------------------------------------------------------
+//
+// template_match 的"匹配方法"默认值是 OpenCV 的枚举
+// cv::TM_CCOEFF_NORMED。写死 5 的话没人知道 5 是什么,
+// 写 cv::TM_CCOEFF_NORMED 才是能读懂的 —— 所以这里 include
+// opencv2/imgproc.hpp,让那个枚举在本文件里有名字。
+//
+// ⚠ 这个 include 只为了这一个常量。别把 OpenCV 的东西
+//   往这个文件里搬 —— 它是"旋钮默认值清单",不是通用头文件。
 // ============================================================
+
+#include <opencv2/imgproc.hpp>
 
 namespace w7 {
 
@@ -108,10 +122,22 @@ struct CountCheckDefaults {
 
 // ============================================================
 // template_match — 模板匹配
+//
+// ⚠ kMethod 以前直接写 cv::TM_CCOEFF_NORMED,在**三处**各写一遍:
+//   defaultParams() 的声明、run() 的兜底、setParams() 的兜底。
+//   看着是同一个枚举,但改默认值要改三处,漏一处就变成
+//   "面板上摆的方法"和"算子跑的方法"不是一回事 ——
+//   那正是本项目栽过五遍的那个坑的第六次化身。
+//
+// ⚠ 同一个枚举在 template_match.cpp 里还会出现:
+//   run() 的**合法范围**检查(method < TM_SQDIFF || method > TM_CCOEFF_NORMED)。
+//   那是**范围边界**,不是默认值 —— 两者不是一回事,不要混:
+//   把默认方法改成 TM_SQDIFF 不会改掉合法范围。
 // ============================================================
 struct TemplateMatchDefaults {
     static constexpr double      kThreshold   = 0.9;
     static constexpr const char* kTemplatePath = "templates/R.png";
+    static constexpr int         kMethod      = cv::TM_CCOEFF_NORMED;
 };
 
 // ============================================================
