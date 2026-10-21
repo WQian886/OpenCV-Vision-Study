@@ -81,6 +81,7 @@
 #include "operator_factory.h"
 #include "dl_infer.h"
 #include "image_source_camera.h"
+#include "param_read.h"   // KnobKind —— 用例 9 要按旋钮类型分别取"坏值"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -217,6 +218,43 @@ static int matchBracket(const QString& s, int open, QChar openC, QChar closeC) {
         else if (s[i] == closeC) { --depth; if (depth == 0) return i; }
     }
     return -1;
+}
+
+// 按**顶层逗号**切参数 —— 括号/方括号/花括号里的逗号不算。
+//
+// 为什么不能直接 split(",") :
+//   readIntKnobs(params, kKeys, defaultParams(), &out, &err) 没问题,
+//   但键名里带逗号的那种(readTextKnob(params, d, "a,b", ...))就会被切成两半。
+//   而且 defaultParams() 里的括号也必须整体跳过。
+static QStringList splitTopLevel(const QString& s) {
+    QStringList out;
+    int depth = 0;
+    bool inStr = false, inChr = false;
+    int start = 0;
+    for (int i = 0; i < s.size(); ++i) {
+        const QChar c = s[i];
+        if (inStr) {
+            if (c == QLatin1Char('\\')) { ++i; continue; }
+            if (c == QLatin1Char('"')) inStr = false;
+            continue;
+        }
+        if (inChr) {
+            if (c == QLatin1Char('\\')) { ++i; continue; }
+            if (c == QLatin1Char('\'')) inChr = false;
+            continue;
+        }
+        if (c == QLatin1Char('"')) { inStr = true; continue; }
+        if (c == QLatin1Char('\'')) { inChr = true; continue; }
+        if (c == QLatin1Char('(') || c == QLatin1Char('[') || c == QLatin1Char('{')) { ++depth; continue; }
+        if (c == QLatin1Char(')') || c == QLatin1Char(']') || c == QLatin1Char('}')) { --depth; continue; }
+        if (c == QLatin1Char(',') && depth == 0) {
+            out.append(s.mid(start, i - start).trimmed());
+            start = i + 1;
+        }
+    }
+    const QString tail = s.mid(start).trimmed();
+    if (!tail.isEmpty() || !out.isEmpty()) out.append(tail);
+    return out;
 }
 
 // 找出所有 `name(` 的**函数定义**并返回函数体。
@@ -520,9 +558,11 @@ struct OperatorSource {
     QSet<QString> readsLive;      // 当前构建的 run() 读到的 key
     QSet<QString> readsAll;       // 所有分支的 run() 读到的 key
     QVector<FallbackRead> fallbacks;   // run() 里的兜底读法(见下)
+    QVector<FallbackRead> helperFallbacks;  // 新读法(readXxxKnob)里的兜底
     QString buildUi;              // buildUI() 的函数体(没有面板就空)
     QStringList setValueArgs;     // buildUI() 里每个 setValue(...) 的参数
     QStringList helperIssues;     // 审计**认不出来**的地方(见 parseHelperReads)
+    QStringList helperFallbackIssues;  // 新读法的兜底**抄了第二份**(不是认不出)
     QString setParamsBody;        // setParams() 的函数体(没有面板就空)
     QVector<ValueRead> setParamsReads;   // setParams() 里的兜底读法
 };
@@ -642,32 +682,90 @@ static QMap<QString, QStringList> parseKeyLists(const QString& src) {
     return out;
 }
 
+// ============================================================
 // 认出 helper 读法。返回:读到的键 + 审计自己认不出来的地方。
+//
+// 2026-10-21 第四轮扩到**两种**形式:
+//
+//   一组:readIntKnobs(params, kKeys, defaultParams(), &out, &err)
+//   单个:readIntKnob(params, defaultParams(), "min_area", &out, &err)
+//
+// 为什么"单个"也要认:键名直接写在调用处,一眼看得见;
+// "一组"那种把键名放进常量清单的,适合键多、类型一样的场合
+// (五个测量算子的坐标、pcb_defect_judge 的 16 个判据阈值)。
+// 两种形式审计都得认 —— 认不出就会判成"死旋钮",那是撒谎。
+//
+// ⚠ 解析方式:正则只用来**定位调用**,参数用 matchBracket/splitTopLevel 切。
+//   因为参数里有括号(defaultParams())、有引号(键名),
+//   用正则切参数切不准 —— 切错了就是"认不出",而"认不出"会撒谎。
+//
+// fallbackIssues 和 issues 分开,是两回事:
+//   issues          —— 审计**认不出**(键名清单找不到、键名不是字面量)
+//   fallbackIssues  —— 兜底**抄了第二份**(不是 defaultParams())
+// 混在一起的话,报出来的理由会指错方向。
+// ============================================================
 static QSet<QString> parseHelperReads(const QString& body,
                                       const QMap<QString, QStringList>& keyLists,
-                                      QStringList* issues) {
+                                      QStringList* issues,
+                                      QStringList* fallbackIssues,
+                                      QVector<FallbackRead>* fallbacks) {
     QSet<QString> keys;
-    const QRegularExpression re(
-        QStringLiteral("\\b(readIntKnobs|readDoubleKnobs)\\s*\\(\\s*"
-                       "params\\s*,\\s*([A-Za-z_]\\w*)\\s*,\\s*([^,)]*)"));
+    const QRegularExpression re(QStringLiteral("\\b(read\\w+Knobs?)\\s*\\("));
     auto it = re.globalMatch(body);
     while (it.hasNext()) {
         const auto m = it.next();
-        const QString listName = m.captured(2);
-        if (!keyLists.contains(listName)) {
-            // 认不出键名清单 → **明说认不出**,不装作"这个旋钮没被读"
-            issues->append(QString("审计认不出键名清单 %1(在 read%2 里)")
-                               .arg(listName, m.captured(1)));
+        const QString fn = m.captured(1);
+        const bool plural = fn.endsWith(QLatin1Char('s'));
+        const int open = m.capturedEnd() - 1;          // '(' 的位置
+        const int close = matchBracket(body, open, QLatin1Char('('), QLatin1Char(')'));
+        if (close < 0) {
+            issues->append(QString("认不出 %1 的参数(括号不配对)").arg(fn));
             continue;
         }
-        const QStringList& ks = keyLists.value(listName);
-        for (const QString& k : ks) keys.insert(k);
+        const QStringList args = splitTopLevel(body.mid(open + 1, close - open - 1));
+        if (args.size() < 3 || !args.first().startsWith(QLatin1String("params"))) {
+            issues->append(QString("认不出 %1 的调用形式").arg(fn));
+            continue;
+        }
+
+        QString defaults;
+        QStringList readKeys;
+        if (plural) {
+            const QString listName = args.at(1);
+            defaults = args.at(2);
+            if (!keyLists.contains(listName)) {
+                // 认不出键名清单 → **明说认不出**,不装作"这个旋钮没被读"
+                issues->append(QString("审计认不出键名清单 %1(在 %2 里)")
+                                   .arg(listName, fn));
+                continue;
+            }
+            readKeys = keyLists.value(listName);
+        } else {
+            defaults = args.at(1);
+            const QString keyLit = args.at(2);
+            if (keyLit.length() < 2 || !keyLit.startsWith(QLatin1Char('"')) ||
+                !keyLit.endsWith(QLatin1Char('"'))) {
+                issues->append(QString("认不出 %1 的键名(不是字面量:%2)").arg(fn, keyLit));
+                continue;
+            }
+            readKeys << keyLit.mid(1, keyLit.length() - 2);
+        }
+
+        // 键名先记上 —— 记不上就会被判成"死旋钮"。
+        // 那是**另一种**错误(会把人引到完全错的方向),
+        // 不能拿它盖住真正的问题。
+        for (const QString& k : readKeys) keys.insert(k);
+
         // 兜底必须是 defaultParams() —— 那是声明值的唯一一份。
         // 传别的东西进来,就等于在 helper 外面又抄了一份默认值。
-        if (!m.captured(3).contains(QStringLiteral("defaultParams"))) {
-            issues->append(QString("read%1 的兜底不是 defaultParams()(是 %2)—— "
-                                   "声明值只能有一份")
-                               .arg(m.captured(1), m.captured(3).trimmed()));
+        if (!defaults.contains(QLatin1String("defaultParams"))) {
+            fallbackIssues->append(QString("%1 的兜底不是 defaultParams()(是 %2)—— "
+                                            "声明值只能有一份").arg(fn, defaults));
+            continue;
+        }
+        if (fallbacks) {
+            for (const QString& k : readKeys)
+                fallbacks->append({k, defaults});
         }
     }
     return keys;
@@ -806,14 +904,17 @@ static bool parseOperator(const QString& path, bool hasOnnx, bool hasMvs,
     for (const auto& body : functionBodies(allSrc, QStringLiteral("run")))
         op.readsAll.unite(parseReads(body));
 
-    // 新读法(readIntKnobs 之类):键名在常量里,上面那套认不出来。
-    // 认不出就会把 28 个坐标旋钮全判成"死旋钮" —— 那是撒谎。
+    // 新读法(readIntKnob / readIntKnobs 之类):键名在常量里或字面量里,
+    // 上面那套认不出来。认不出就会把 28 个坐标旋钮全判成"死旋钮" —— 那是撒谎。
     const QMap<QString, QStringList> keyLists = parseKeyLists(scanSrc);
     for (const auto& body : functionBodies(liveSrc, QStringLiteral("run")))
-        op.readsLive.unite(parseHelperReads(body, keyLists, &op.helperIssues));
+        op.readsLive.unite(parseHelperReads(body, keyLists, &op.helperIssues,
+                                           &op.helperFallbackIssues, &op.helperFallbacks));
     for (const auto& body : functionBodies(allSrc, QStringLiteral("run")))
-        op.readsAll.unite(parseHelperReads(body, keyLists, &op.helperIssues));
+        op.readsAll.unite(parseHelperReads(body, keyLists, &op.helperIssues,
+                                           &op.helperFallbackIssues, &op.helperFallbacks));
     op.helperIssues.removeDuplicates();
+    op.helperFallbackIssues.removeDuplicates();
 
     // 兜底读法:**所有分支**都收。
     //
@@ -1039,6 +1140,38 @@ static void test_defaults_have_single_source(const QVector<OperatorSource>& ops)
         }
     }
 
+    // 3i:引用的 Defaults 必须是**本算子**的
+    //
+    // 为什么这条是第四轮才补上的:
+    //   第三轮之前,run() 里的兜底写的是 `XxxDefaults::kY`,
+    //   3d 那条查的就是"它是不是本算子的 Defaults" ——
+    //   拿别的算子的默认值来顶自己的旋钮,那也是抄副本,
+    //   而且比抄成字面量更隐蔽:它看着像"引用了常量",其实引用错了。
+    //
+    //   第四轮把旋钮全迁到 readXxxKnob 之后,run() 里的兜底
+    //   统一变成 defaultParams() —— 3d 查不到 Defaults 引用了,
+    //   **那条检查就跟着消失了**。
+    //
+    //   ⚠ 删掉一条断言 = 少一层保险,而且没人会注意到:
+    //   测试还是绿的,只是少查了一件事。
+    //   所以这条检查要**搬家** —— 从 run() 的兜底搬到 defaultParams() 上:
+    //   声明才是兜底真正指向的地方,兜底现在只是指着它。
+    const QRegularExpression ownRe(QStringLiteral("\\b(\\w+Defaults)::(k\\w+)\\b"));
+    for (const auto& op : ops) {
+        const QString own = ownDefaultsStructName(QFileInfo(op.file).completeBaseName());
+        for (const auto& kv : op.defaultExprs) {
+            auto uit = ownRe.globalMatch(kv.second);
+            while (uit.hasNext()) {
+                const auto um = uit.next();
+                const QString st = um.captured(1);
+                check(st == own,
+                      QString("%1.%2 的默认值引用了 %3::%4 —— 那是**别的算子**的默认值,"
+                              "本算子该用 %5::(自己的那一份)")
+                          .arg(op.opName, kv.first, st, um.captured(2), own));
+            }
+        }
+    }
+
     // 3c:整个 operators/ 目录下,只有 operator_defaults.h 能定义 Defaults 结构体
     QDir dir(operatorsDir());
     const QStringList files = dir.entryList(QDir::Files);
@@ -1100,6 +1233,13 @@ static const QVector<DefaultsMember>& defaultsMembers() {
 //   那一层是**安全下限**(防 frame_step=0 把帧循环卡死),
 //   不是默认值的副本 —— 但它确实让"声明值"和"实际兜底值"
 //   在运行时才相等,而不是在源码里就相等。记在欠账里,没消掉。
+//
+// ⚠ 第四轮起,这条要查**两种**兜底写法:
+//   旧写法  params.value("x").toInt(XxxDefaults::kX)
+//   新写法  readIntKnob(params, defaultParams(), "x", &v, &err)
+// 全迁完之后旧写法会一个不剩 —— 那时候这条要是还只查旧写法,
+// 它就变成**恒真的空断言**了(和第一轮那个坑一模一样)。
+// 所以"查到的条数 > 0"那个守卫数的是**两种加起来**。
 // ============================================================
 static void test_fallbacks_have_single_source(const QVector<OperatorSource>& ops) {
     beginCase("3d. 兜底不许抄第二份:run() 里的兜底值必须来自同一份常量");
@@ -1112,6 +1252,8 @@ static void test_fallbacks_have_single_source(const QVector<OperatorSource>& ops
     int total = 0;
     for (const auto& op : ops) {
         const QString own = ownDefaultsStructName(QFileInfo(op.file).completeBaseName());
+
+        // 旧写法:params.value("x").toXxx(兜底)
         for (const auto& fb : op.fallbacks) {
             ++total;
             if (exprHasBareNumber(fb.expr) || exprHasBareString(fb.expr)) {
@@ -1119,6 +1261,35 @@ static void test_fallbacks_have_single_source(const QVector<OperatorSource>& ops
                       QString("%1.%2 的兜底写的是裸字面量(%3) —— "
                               "它得是 operator_defaults.h 里的那个常量,"
                               "不然 run() 用的值和 defaultParams() 声明的值就不是同一个数")
+                          .arg(op.opName, fb.key, fb.expr));
+                continue;
+            }
+            const QRegularExpression useRe(QStringLiteral("\\b(\\w+Defaults)::(k\\w+)\\b"));
+            auto uit = useRe.globalMatch(fb.expr);
+            while (uit.hasNext()) {
+                const auto um = uit.next();
+                const QString st = um.captured(1);
+                check(st == own,
+                      QString("%1.%2 的兜底引用了 %3::%4 —— 那是**别的算子**的默认值,"
+                              "本算子该用 %5")
+                          .arg(op.opName, fb.key, st, um.captured(2), own));
+            }
+        }
+
+        // 新写法:readXxxKnob(s)(params, <兜底>, ...)
+        //
+        // 兜底必须来自 defaultParams() —— 传别的东西进来,
+        // 就等于在 helper 外面又抄了一份默认值。
+        for (const QString& issue : op.helperFallbackIssues) {
+            ++total;
+            check(false, QString("%1: %2").arg(op.opName, issue));
+        }
+        for (const auto& fb : op.helperFallbacks) {
+            ++total;
+            if (exprHasBareNumber(fb.expr) || exprHasBareString(fb.expr)) {
+                check(false,
+                      QString("%1.%2 的兜底写的是裸字面量(%3) —— "
+                              "它得是 operator_defaults.h 里的那个常量")
                           .arg(op.opName, fb.key, fb.expr));
                 continue;
             }
@@ -1793,34 +1964,129 @@ static void test_runtime_missing_is_explained() {
 // 用例 9:旋钮值类型不对时,必须说出来
 // ============================================================
 //
-// 2026-10-21:五个测量算子的坐标旋钮改走 operators/param_read.h 的
-// readIntKnobs —— key 在但类型不对 → **报错**,不补默认值。
+// 2026-10-21 第三轮:五个测量算子的坐标旋钮改走 operators/param_read.h。
+// 2026-10-21 第四轮:**全部**算子都迁过去了 ——
+//   整数旋钮 readIntKnob / 小数旋钮 readDoubleKnob / 文本旋钮 readTextKnob。
 //
 // 为什么这条要单独钉:旧代码 params.value("x1").toInt(默认值)
 // 在类型不对时是**静默**的。实测(Qt 行为探针,不是照文档猜):
 //   · 字符串 "100" → 返回默认值(Qt **不解析**字符串)
 //   · 小数 25.7     → 返回默认值(**不截断**)
-// 于是用户写进去的坐标被**整个丢掉**,算子拿默认值算,
-// 还报出一个看着正常的距离 —— 测量结果直接决定判废。
+// 于是用户写进去的值被**整个丢掉**,算子拿默认值算,
+// 还报出一个看着正常的结果 —— 而这些结果直接决定判废。
 //
 // 这条测的是"**说出来了**",不是"值对不对" ——
 // 值对不对由真值表(用例 6)管。
 //
-// ⚠ 边界:目前只有**测量类**算子走了这套读法。
-//   其余算子还是 params.value("k").toXxx(默认值),
-//   类型不对时同样静默 —— 那是欠账,登记在笔记里。
-//   这条用例只盯已经迁移的那五个,不假装全做完了。
+// ------------------------------------------------------------
+// ⚠ "坏值"必须按旋钮类型分别取,不能一个值打天下
+// ------------------------------------------------------------
+//   整数旋钮:字符串 "100" 是坏的;25.7 也是坏的(整数旋钮不能有小数)
+//   小数旋钮:字符串 "0.9" 是坏的;25.7 是**好的** —— 小数旋钮存小数天经地义
+//   文本旋钮:数字 100 是坏的;"100" 是**好的** —— 文本旋钮存字符串天经地义
+//
+// 所以每个用例有两个"坏值",而且**小数旋钮还多一条反向断言**:
+// 25.7 不许报错 ——
+// 只查"该报错的时候报错了"会漏掉"不该报错的时候也报错",
+// 那同样是错的(用户填了合法值却被拒,而且没说是哪不对)。
 // ============================================================
-static void test_knob_type_mismatch_is_reported() {
+static void test_knob_type_mismatch_is_reported(const QString& maskPath,
+                                                 const QString& imgPath,
+                                                 const QString& boardPath) {
     beginCase("9. 旋钮值类型不对时,必须说出来(不能静默按默认值算)");
 
-    struct Case { const char* opName; const char* badKey; };
+    // 这个算子要什么输入才能走到"读旋钮"那一步。
+    //
+    // ⚠ 这个前提很重要:旋钮读在 run() 的**哪一段**,决定了它报不报错。
+    //   比如 template_match 的 method/threshold 读在 imread **之后** ——
+    //   没给图的话它先报 "imread failed",根本走不到旋钮那一步。
+    //   所以测它必须给一张真的图。
+    //
+    // ⚠ ImgTpl 比 Img 多给一个 template_path:
+    //   template_match 的模板路径优先从**上游**取(输入口接的图),
+    //   取不到才用参数里的 template_path。
+    //   而 method/threshold 读在 imread **之后** ——
+    //   模板路径不给对,它先报 "imread failed",走不到旋钮那一步。
+    //   (template_path 那个用例反而**不能**给上游模板:
+    //   给了就绕过参数里那一次读,那个旋钮就测不到了。)
+    enum class Need { None, Mask, Img, ImgTpl, Board, Judge };
+
+    struct Case {
+        const char* opName;
+        const char* badKey;
+        w7::KnobKind kind;
+        Need need;
+    };
     const QVector<Case> cases = {
-        {"line_fit",         "x1"},
-        {"point_point_dist", "x2"},
-        {"caliper_dist",     "ax"},
-        {"point_line_dist",  "cy"},
-        {"angle",            "y4"},
+        // 测量类(第三轮迁的)
+        {"line_fit",          "x1",      w7::KnobKind::Int,    Need::None},
+        {"point_point_dist",  "x2",      w7::KnobKind::Int,    Need::None},
+        {"caliper_dist",      "ax",      w7::KnobKind::Int,    Need::None},
+        {"point_line_dist",   "cy",      w7::KnobKind::Int,    Need::None},
+        {"angle",             "y4",      w7::KnobKind::Int,    Need::None},
+        // 整数旋钮(第四轮迁的)
+        {"blob_count",        "min_area",       w7::KnobKind::Int, Need::Mask},
+        {"count_check",       "expected_min",   w7::KnobKind::Int, Need::None},
+        {"circle_fit",        "min_area",       w7::KnobKind::Int, Need::Mask},
+        {"image_source_video","max_frames",     w7::KnobKind::Int, Need::None},
+        {"image_source_camera","trigger_mode",  w7::KnobKind::Int, Need::None},
+        {"template_match",    "method",         w7::KnobKind::Int, Need::ImgTpl},
+        // 小数旋钮
+        {"circle_fit",        "min_circularity", w7::KnobKind::Double, Need::Mask},
+        {"image_source_camera","exposure",       w7::KnobKind::Double, Need::None},
+        {"pcb_inspect",       "min_area_pct",   w7::KnobKind::Double, Need::Board},
+        {"template_match",    "threshold",      w7::KnobKind::Double, Need::ImgTpl},
+        // 文本旋钮
+        {"image_source_dir",  "dir_path",        w7::KnobKind::Text, Need::None},
+        {"image_source_video","video_path",      w7::KnobKind::Text, Need::None},
+        {"image_source_camera","camera_ip",      w7::KnobKind::Text, Need::None},
+        {"dl_infer",          "model_path",      w7::KnobKind::Text, Need::None},
+        {"pcb_inspect",       "mode",            w7::KnobKind::Text, Need::Board},
+        {"template_match",    "template_path",   w7::KnobKind::Text, Need::Img},
+        // 判废算子:旋钮在上游组件**之后**才读,得先真的跑一遍 pcb_inspect。
+        {"pcb_defect_judge",  "dark_min_pct",    w7::KnobKind::Double, Need::Judge},
+        {"pcb_defect_judge",  "mask_v_mul",      w7::KnobKind::Double, Need::Judge},
+    };
+
+    // 前置:给判废算子准备组件清单。
+    //
+    // 为什么不能编一个假清单:那会让测试**测不到真东西** ——
+    // 判废算子拿到认不出的标签会先报错,根本走不到旋钮那一步。
+    // 这里跑的是**真的** pcb_inspect,拿的是**真的**组件清单。
+    QJsonArray judgeComps;
+    {
+        OperatorBase* insp = createOperatorByName("pcb_inspect");
+        if (!insp) {
+            check(false, "造不出 pcb_inspect(判废算子的前置)");
+        } else {
+            QJsonObject ip = insp->defaultParams();
+            const QJsonObject req = requiredKnobs("pcb_inspect");
+            for (auto it = req.begin(); it != req.end(); ++it) ip[it.key()] = it.value();
+            judgeComps = insp->run(ip, QJsonObject{{"image_path", boardPath}})
+                             .value("components").toArray();
+            delete insp;
+        }
+        check(!judgeComps.isEmpty(),
+              QString("前置:pcb_inspect 产出 %1 个组件(给 pcb_defect_judge 用)")
+                  .arg(judgeComps.size()));
+    }
+
+    // 坏值:按旋钮类型取
+    auto badValue1 = [](w7::KnobKind kind) -> QJsonValue {
+        switch (kind) {
+        case w7::KnobKind::Int:    return QJsonValue("100");   // 字符串
+        case w7::KnobKind::Double: return QJsonValue("0.9");   // 字符串
+        case w7::KnobKind::Text:   return QJsonValue(100);     // 数字
+        }
+        return QJsonValue();
+    };
+    auto badValue2 = [](w7::KnobKind kind) -> QJsonValue {
+        switch (kind) {
+        case w7::KnobKind::Int:    return QJsonValue(25.7);    // 小数不是整数
+        case w7::KnobKind::Double: return QJsonValue(25.7);    // 合法!不能报错
+        case w7::KnobKind::Text:   return QJsonValue(25.7);    // 数字不是文本
+        }
+        return QJsonValue();
     };
 
     for (const auto& c : cases) {
@@ -1832,29 +2098,65 @@ static void test_knob_type_mismatch_is_reported() {
         }
         const QString badKey = QString::fromUtf8(c.badKey);
 
-        // ① 字符串:必须报错,而且要**点名是哪个旋钮**
-        QJsonObject p1;
-        p1[badKey] = "100";
-        const QJsonObject o1 = op->run(p1, QJsonObject());
+        // 这个算子要什么输入
+        QJsonObject inputs;
+        switch (c.need) {
+        case Need::None: break;
+        case Need::Mask: inputs["mask_path"] = maskPath; break;
+        case Need::Img:  inputs["image_path"] = imgPath; break;
+        case Need::ImgTpl:
+            inputs["image_path"] = imgPath;
+            inputs["template_path"] = imgPath;
+            break;
+        case Need::Board: inputs["image_path"] = boardPath; break;
+        case Need::Judge:
+            inputs["image_path"] = boardPath;
+            inputs["components"] = judgeComps;
+            break;
+        }
+        // 必填旋钮(HSV 区间那些)每次都给全 ——
+        // 缺了它们算子会先报"阈值不合法",走不到旋钮那一步。
+        const QJsonObject req = requiredKnobs(opName);
+        QJsonObject base;
+        for (auto it = req.begin(); it != req.end(); ++it) base[it.key()] = it.value();
+
+        // ① 坏值一:必须报错,而且要**点名是哪个旋钮**
+        QJsonObject p1 = base;
+        p1[badKey] = badValue1(c.kind);
+        const QJsonObject o1 = op->run(p1, inputs);
         const QString e1 = o1.value("error").toString();
         check(e1.contains(badKey),
-              QString("%1 的 %2 存成字符串 → 必须报错并点名这个旋钮(实际:\"%3\")")
-                  .arg(opName, badKey, e1));
+              QString("%1 的 %2 存成错类型(%3) → 必须报错并点名这个旋钮(实际:\"%4\")")
+                  .arg(opName, badKey, badValue1(c.kind).toVariant().toString(), e1));
 
-        // ② 小数:同样要报(旧代码是**整个值丢掉**,不是四舍五入)
-        QJsonObject p2;
-        p2[badKey] = 25.7;
-        const QJsonObject o2 = op->run(p2, QJsonObject());
+        // ② 坏值二:
+        //    整数旋钮:25.7 也是坏的(旧代码是**整个值丢掉**,不是四舍五入)
+        //    文本旋钮:数字不是文本
+        //    小数旋钮:25.7 是**合法的** —— 不许报错
+        QJsonObject p2 = base;
+        p2[badKey] = badValue2(c.kind);
+        const QJsonObject o2 = op->run(p2, inputs);
         const QString e2 = o2.value("error").toString();
-        check(e2.contains(badKey),
-              QString("%1 的 %2 存成小数 → 必须报错并点名这个旋钮(实际:\"%3\")")
-                  .arg(opName, badKey, e2));
+        if (c.kind == w7::KnobKind::Double) {
+            check(!e2.contains(badKey),
+                  QString("%1 的 %2 是小数旋钮,存 25.7 是**合法**的 → 不许报错(实际:\"%3\")")
+                      .arg(opName, badKey, e2));
+        } else {
+            check(e2.contains(badKey),
+                  QString("%1 的 %2 存成小数(25.7) → 必须报错并点名这个旋钮(实际:\"%3\")")
+                      .arg(opName, badKey, e2));
+        }
 
         // ③ 缺这个旋钮:不算错(用户没配),按声明的默认值跑
-        const QJsonObject o3 = op->run(QJsonObject(), QJsonObject());
-        check(!o3.contains("error"),
-              QString("%1 缺 %2 → 不报错(用户没配,按声明的默认值算)")
-                  .arg(opName, badKey));
+        //
+        //    判据是"错误信息里不许提到这个旋钮",而不是"不许有错误" ——
+        //    有些算子本来就会因为别的理由报错(没给图、目录不存在),
+        //    那些错误和这个旋钮没关系,不该算这条的失败。
+        const QJsonObject o3 = op->run(base, inputs);
+        const QString e3 = o3.value("error").toString();
+        check(!e3.contains(badKey),
+              QString("%1 缺 %2 → 不该因为这个旋钮报错(实际:\"%3\")")
+                  .arg(opName, badKey, e3));
 
         delete op;
     }
@@ -1933,7 +2235,7 @@ int main(int argc, char* argv[]) {
     test_default_value_truth_table();
     test_audited_sources_are_the_compiled_ones();
     test_runtime_missing_is_explained();
-    test_knob_type_mismatch_is_reported();
+    test_knob_type_mismatch_is_reported(maskPath, imgPath, boardPath);
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;
