@@ -46,7 +46,7 @@ W7_VisionMasterLite/
 │   ├── caliper_dist            #   卡尺距离(点到线)
 │   ├── dl_postprocess          #   letterbox / NMS / YOLOv5-v8 解析
 │   └── dl_infer                #   ONNX 推理(ONNX Runtime 条件编译)
-├── tests/                      # 14 个无头回归测试(1214 断言)
+├── tests/                      # 15 个无头回归测试(1382 断言)
 ├── (无 images/)                # 测试图**只有一份**,在 W6_PCB_DefectProject/images/
 │                               #   (那边才是生成器所在地)。构建时暂存进
 │                               #   build/test_work/<套件名>/images/。
@@ -326,21 +326,21 @@ CMake 会真实探测并在 configure 时打印结果:
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,1214 断言 / 14 个套件)
+## 🧪 回归测试(无头,1382 断言 / 15 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
-# 一次跑完全部 14 个套件
+# 一次跑完全部 15 个套件
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
 > ⚠️ **`-C Release` 不能省。** 生成器是 VS 多配置版，`CMAKE_CONFIGURATION_TYPES`
 > 里 Debug 和 Release 都在，而 ctest 不带 `-C` 时**默认按 Debug 找 exe**。
-> 只构建过 Release 的话，14 个套件会全部报 `Not Run`——
+> 只构建过 Release 的话，15 个套件会全部报 `Not Run`——
 > 报错长这样：
 >
 > ```
-> 0% tests passed, 14 tests failed out of 14
+> 0% tests passed, 15 tests failed out of 15
 > 	  1 - undo_redo (Not Run)
 > ```
 >
@@ -350,9 +350,10 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 
 | 套件 | 断言 | 测什么 | 需要 |
 |---|---|---|---|
-| `pcb_core` | 163 | **共享判定核心自己的测试**:JSON 解析(拒绝前导零/截断/尾随逗号)、配方 6 类错误分支、**拿不到依据时拒绝判定而不是报 PASS**、端到端对照真值表 | OpenCV(**不依赖 Qt**) |
+| `pcb_core` | 279 | **共享判定核心自己的测试**:JSON 解析(拒绝前导零/截断/尾随逗号)、配方 6 类错误分支、**拿不到依据时拒绝判定而不是报 PASS**、端到端对照真值表 | OpenCV(**不依赖 Qt**) |
+| `qr_ocr` | 36 | **QR/OCR 共享核心自己的测试**(W6/W7 共用同一份源码):解码失败不崩、模糊图明确报"没解出来"而不是给个空结果 | OpenCV(**不依赖 Qt**) |
 | `undo_redo` | 151 | 增删改节点/连线的往返、参数保留、同名节点 UUID 精确指认、节点消失后命令静默 no-op、**连线 payload 编解码**、**批量删除的记账分类**、**撤销栈里不许有空命令**、**竖线存一次再打开还是竖的**、**老文件没有方向字段时退回默认** | Qt(不链 OpenCV) |
-| `pcb_operators` | 215 | **W6 那 8 张样本图**:baseline 零缺陷,7 张缺陷图各自命中自己那类、**没有判定依据时拒绝判定而不是报 PASS** | OpenCV |
+| `pcb_operators` | 231 | **W6 那 8 张样本图**:baseline 零缺陷,7 张缺陷图各自命中自己那类、**没有判定依据时拒绝判定而不是报 PASS** | OpenCV |
 | `dl_postprocess` | 49 | letterbox 补边/缩放、NMS 阈值、YOLOv5-v8 布局解析、退化输入不越界 | OpenCV |
 | `image_sources` | 20 | 帧循环契约(按 frame_index 真的换帧/换张)、坏输入不崩 | OpenCV |
 | `step_result` | 37 | 状态点判定边界、每步缓存用 UUID 做 key、**boundingRect 圈住端口圆**、**拖线时节点不跟着跑**、**endConnectionDrag 之后移动锁还锁着**、**release 时把跑偏的节点拉回来** | Qt |
@@ -363,6 +364,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `template_match` | 28 | **三种匹配方法的相似度方向统一**、模板比原图大、纯色模板、非法 method、阈值真的在控 | OpenCV |
 | `detection_operators` | 42 | **HSV 数组残缺不越界**、**两个实例的 mask 不互相覆盖**、面积阈值用 `>=`、**阈值填反要说人话而不是静默全判废** | OpenCV |
 | `operator_library` | 37 | **没有算子会从算子库里消失**、旧实现确实丢了 `dl_infer`、没见过的分类也现建分组、分组不重不乱序 | QtCore |
+| `operator_knobs` | 168 | **旋钮审计**:每个旋钮都得对得上 —— 登记了却没被 `run()` 读(**死旋钮**)、被读了却没登记、默认值抄了多份(`operator_defaults.h` 是唯一一份)、**空参数跑出来的结果必须和声明的默认参数一样**、编译期停用的旋钮必须在**带原因的豁免清单**里登记(且清单过期会报红) | OpenCV + Qt |
 
 ### 默认流水线上的三个算子(为什么补这层测试)
 

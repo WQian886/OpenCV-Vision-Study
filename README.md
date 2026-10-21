@@ -19,7 +19,7 @@
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 477 条断言**
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，14 个无头回归测试共 1214 条断言
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，15 个无头回归测试共 1382 条断言
 
 ## 🔗 两个共享核心（common/）
 
@@ -71,7 +71,7 @@ cd W7_VisionMasterLite
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
-14 个套件 / 1214 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+15 个套件 / 1382 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试，
 `pcb_core` 则是共享判定核心自己的测试（**W6 和 W7 链的是同一份源码**）。
 
@@ -91,7 +91,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 >
 > 看着像代码全坏了，其实一个测试都没跑。
 
-> 测试失败时想看是哪条断言挂了，CMakeLists 里已经给 11 个套件都设了
+> 测试失败时想看是哪条断言挂了，CMakeLists 里已经给 15 个套件都设了
 > `QT_FORCE_STDERR_LOGGING=1`。不加的话 Qt 6 在 Windows 上会把 `qInfo`
 > 送到调试通道而不是 stderr，`--output-on-failure` 只能看到一个非零退出码。
 
@@ -101,7 +101,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 ```
 
-一条命令跑完：**7 个工程全部编译（Release）→ W6 3 套件 + W7 14 套件
+一条命令跑完：**7 个工程全部编译（Release）→ W6 3 套件 + W7 15 套件
 全部跑通 → W5 的 exe 冒烟 → 检查源码树没被写脏**。
 
 最后一条是重点：测试产物必须落进 `build/`，源码树必须一个字节都不变。
@@ -117,7 +117,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 17 份 + 29 张 atomic 卡，~364 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 18 份 + 32 张 atomic 卡，~384 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -183,7 +183,7 @@ OpenCV/
 ├── common/cmake/          # 三方依赖路径(本机默认值 + CI 覆盖)
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 检查源码树没被写脏
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（15 份 + 22 张 atomic 卡）
+├── notes/                 # 变更日志（18 份 + 32 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -193,8 +193,8 @@ OpenCV/
 ## 📊 统计
 
 - 7 个 C++ 项目 + 2 个共享核心
-- 103 个 C++ 文件 / ~25500 行（含注释与空行）
-- 17 份变更日志 + 29 张 atomic 卡 / ~364 KB
-- **17 个无头回归测试 / 1691 条断言**（W7 14 个 / 1214，W6 3 个 / 477；
+- 105 个 C++ 文件 / ~26500 行（含注释与空行）
+- 18 份变更日志 + 32 张 atomic 卡 / ~384 KB
+- **18 个无头回归测试 / 1859 条断言**（W7 15 个 / 1382，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
