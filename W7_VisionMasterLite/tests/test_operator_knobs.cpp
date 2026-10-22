@@ -3139,6 +3139,121 @@ static void test_panel_greys_dead_knobs() {
               .arg(keysMapped).arg(controlsFound));
 }
 
+// ============================================================
+// 用例 11:旋钮压根没登记时,必须说出来（不能静默退成 0）
+// ============================================================
+//
+// 欠账 13 记的那条:`operators/param_read.h` 的 readKnob 里有一个分支 ——
+// 「key 既不在 params,也不在声明的默认值里」—— 以前**没有单独的用例**。
+//
+// 为什么以前没测(不是"测不了",是**绕远了**):
+//   要触发它,得让某个算子读一个没登记的 key;
+//   而用例 2(没登记的旋钮)从**源码层**就把这种情况挡了 ——
+//   那个算子根本不会被跑到。
+//   于是这条分支是「双保险」里的**第二道**:
+//   第一道(源码 lint)正常情况下根本不会让它走到。
+//
+// 这一轮换个角度:**不绕道算子,直接测 helper**。
+// param_read.h 是 header-only 的 inline 函数 ——
+// 调用方要用的东西,测试可以**直接调**。
+//
+// 为什么这条值得单独测:
+//   它就是「以前静默退成 0」的那条路。
+//   静默退成 0 的后果:算子拿着一个**从没声明过的值**在跑,
+//   界面上看不出任何异常 —— 属于本项目最忌讳的那一类。
+//
+// ⚠ 这条用例要**同时**验两件事,少一件都不算数:
+//   ① 该报错的时候报了
+//   ② **不该报的时候没报**,而且错法分得清
+//   (「压根没登记」和「类型不对」是两种病,措辞必须分开 ——
+//    用例 9 从算子那层验过「类型不对」,这里补上另一半。)
+// ============================================================
+static void test_unregistered_knob_is_reported() {
+    beginCase("11. 旋钮压根没登记时,必须说出来(不能静默退成 0)");
+
+    const QJsonObject empty;
+    int branches = 0;
+
+    // ---- 分支 A:key 不在 params,在 defaults → 退声明值,不报错 ----
+    {
+        ++branches;
+        QJsonObject defaults;
+        defaults["x"] = 42;
+        int v = -1;
+        QString err;
+        const bool ok = readIntKnob(empty, defaults, "x", &v, &err);
+        check(ok, "key 不在 params 但在声明的默认值里 → 退声明值,不报错");
+        check(v == 42,
+              QString("退回来的值就是声明值(实际 %1)").arg(v));
+        check(err.isEmpty(),
+              QString("这一支不该有错误信息(实际 \"%1\")").arg(err));
+    }
+
+    // ---- 分支 B:key 既不在 params,也不在 defaults → 报错（欠账 13 的正主）----
+    {
+        ++branches;
+        int v = -1;
+        QString err;
+        const bool ok = readIntKnob(empty, empty, "never_registered", &v, &err);
+        check(!ok,
+              "key 既不在参数里、也不在声明的默认值里 → 必须报错"
+              "(以前是静默退成 0,算子会拿着一个从没声明过的值在跑)");
+        check(err.contains("never_registered"),
+              QString("报错要点名是哪个旋钮(实际 \"%1\")").arg(err));
+        check(err.contains("压根没登记"),
+              QString("报错要说清是\"压根没登记\",不是别的病(实际 \"%1\")").arg(err));
+        check(!err.contains("不是数字"),
+              QString("这一支不该说成\"类型不对\" —— 两种病要分得清(实际 \"%1\")").arg(err));
+    }
+
+    // ---- 分支 C:key 在 params,类型不对 → 报错,但**不是**"没登记" ----
+    //
+    // 这一支是对照组:它保证分支 B 那条断言不是"只要报错就过"。
+    {
+        ++branches;
+        QJsonObject defaults;
+        defaults["x"] = 42;
+        QJsonObject params;
+        params["x"] = "not a number";
+        int v = -1;
+        QString err;
+        const bool ok = readIntKnob(params, defaults, "x", &v, &err);
+        check(!ok, "key 在 params 里但类型不对 → 同样必须报错");
+        check(err.contains("不是数字") || err.contains("不是整数")
+              || err.contains("超出 int 范围"),
+              QString("类型不对那一支该说的是类型(实际 \"%1\")").arg(err));
+        check(!err.contains("压根没登记"),
+              QString("类型不对不能写成\"压根没登记\" —— 那是另一种病(实际 \"%1\")").arg(err));
+    }
+
+    // ---- 分支 D:一组读法也走同一条路 ----
+    {
+        ++branches;
+        QVector<int> vs;
+        QString err;
+        const bool ok = readIntKnobs(empty, QStringList{"never_registered"}, empty, &vs, &err);
+        check(!ok, "一组读法:key 压根没登记 → 同样必须报错");
+        check(err.contains("never_registered"),
+              QString("一组读法的报错也要点名是哪个旋钮(实际 \"%1\")").arg(err));
+    }
+
+    // ---- 分支 E:声明那一侧自己坏了,措辞也得跟"用户配坏了"分开 ----
+    {
+        ++branches;
+        QJsonObject defaults;
+        defaults["x"] = "not a number";   // 声明值自己类型不对
+        int v = -1;
+        QString err;
+        const bool ok = readIntKnob(empty, defaults, "x", &v, &err);
+        check(!ok, "声明的默认值自己类型不对 → 必须报错(不能拿一个坏值去跑)");
+        check(err.contains("声明默认值"),
+              QString("声明那一侧坏了,措辞要分得清(实际 \"%1\")").arg(err));
+    }
+
+    check(branches >= 5,
+          QString("这条用例一共核了 %1 个分支(要是 0,说明它自己没跑起来)").arg(branches));
+}
+
 static void makeProbeImages(QString& maskPath, QString& imgPath) {
     QDir().mkpath("images");
 
@@ -3219,6 +3334,7 @@ int main(int argc, char* argv[]) {
     test_runtime_missing_is_explained();
     test_knob_type_mismatch_is_reported(maskPath, imgPath, boardPath);
     test_panel_greys_dead_knobs();
+    test_unregistered_knob_is_reported();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;
