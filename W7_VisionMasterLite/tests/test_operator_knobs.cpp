@@ -2778,6 +2778,19 @@ static void test_panel_greys_dead_knobs() {
                   .arg(opName).arg(btns.size()));
         QPushButton* apply = btns.isEmpty() ? nullptr : btns.first();
         if (!apply) { delete op; continue; }
+        // 按钮必须能点。
+        //
+        // 为什么单拎一条:它是 collect() 的唯一出口,**也是**用户唯一的
+        // "把面板上的值写回流水线"的动作 —— 按钮灰了,用户什么都应用不了。
+        //
+        // 这一条是被一个变异逼出来的:把**整个面板**一起灰掉
+        // (省事写法:一行 setEnabled(false) 搞定),按钮也跟着灰了,
+        // 于是 collect() 拿不到值,后面一串检查全被跳过 ——
+        // 红是红了,但红的是"拿不到 collect()",不是"用户按不动应用"。
+        // **红得对,但红得不够准** —— 那就要把病因单拎出来。
+        check(apply->isEnabled(),
+              QString("%1 的面板上'应用参数'按钮必须能点"
+                      "(它灰了 = 用户什么都应用不了)").arg(opName));
 
         // ---- 枚举输入控件 ----
         //
@@ -2816,6 +2829,24 @@ static void test_panel_greys_dead_knobs() {
               QString("%1 的面板上没有审计认不出的控件类型(实际 %2 个认不出)")
                   .arg(opName).arg(unknownTypes));
         controlsFound += inputs.size();
+
+        // ---- 置灰的控件**个数**:一条不依赖探针的独立证据 ----
+        //
+        // 为什么放在探针**前面**:下面那个"改控件 → 看 collect() 哪个 key 变了"
+        // 的探针,要是拿不到值就会 `continue`,把后面一串检查全跳过去。
+        // "灰了几个"这件事跟探针无关 —— 就算 collect() 拿不到,
+        // 这一条也必须已经报过红(而不是跟着一起被跳过)。
+        int greyCount = 0;
+        for (QWidget* w : inputs) if (!w->isEnabled()) ++greyCount;
+        if (runtimeOk) {
+            check(greyCount == 0,
+                  QString("%1 的运行时可用 → 面板上不该有被置灰的控件(实际 %2 个)")
+                      .arg(opName).arg(greyCount));
+        } else {
+            check(greyCount == deadKeys.size(),
+                  QString("%1 的面板上应该正好有 %2 个控件被置灰,实际 %3 个")
+                      .arg(opName).arg(deadKeys.size()).arg(greyCount));
+        }
 
         // ---- 控件 ↔ key 的映射:靠行为,不靠名字 ----
         PanelProbe probe(form, apply);
