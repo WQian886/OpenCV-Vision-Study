@@ -387,7 +387,7 @@ world 构建和模块化构建都不用改。
 那个包装 config 的正则**认不出这个版本**（`ci.ps1` 的报错里写过这件事）。
 内层那个 config 靠 `../../../` 算回 `opencv/build`，不认编译器 → 最稳。
 
-### 4.5 本机彩排（四次，全部实测）
+### 4.5 本机彩排（六次，全部实测）
 
 | 彩排 | 验的是 | 结果 |
 |---|---|---|
@@ -396,6 +396,7 @@ world 构建和模块化构建都不用改。
 | C | tesseract 搜索 | 找到 `D:\Program Files\Tesseract-OCR\tesseract.exe` ✅ |
 | D | Qt 包名 | `--dry-run` 解析出 qtbase 等 ✅（不下载 2 GB）|
 | **E** | **整套 CI 对着官方 world 包跑** | **`ALL CHECKS PASSED`** ✅ —— 见 4.5.1 |
+| **F** | **整份 `ci.yml` 在本机跑**（解析 YAML 执行它的 `run:` 块）| **`ALL WORKFLOW STEPS PASSED`** ✅ —— 见 4.5.3 |
 
 外加一次**完整路径**彩排：下载好的 `.exe` → 解压（走 bsdtar 兜底）→ 发现 → 断言 ✅。
 
@@ -458,7 +459,75 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1 `
 > 这不是"猜 runner 上有什么"，是**查镜像清单**。
 > 剩下的真不确定项又少了一条。
 
-### 4.5.3 顺带查清的：「W7 必须用 CMake 4.3.1」的真实原因
+### 4.5.3 彩排 F：把**整份 YAML** 在本机跑一遍
+
+前面所有彩排验的都是「**脚本**」。但 `ci.yml` 里还有一层没验过的东西：
+**编排** —— 哪条命令在什么时候跑、上一步的变量怎么传到下一步。
+
+以前这一步只能靠推上 GitHub 才知道。而 GitHub Actions 的工作流是 **YAML**，
+YAML 不是能在自己机器上执行的程序 —— 这就是它「只能推上去才知道」的原因。
+
+所以新写了一个 `tools/ci-local.ps1`，它**解析 `ci.yml` 并逐条执行里面的 `run:` 块**：
+
+| runner 的行为 | 本机模拟器怎么做的 |
+|---|---|
+| 每个 step 用 `shell: pwsh` 跑 | 写成临时 .ps1，用 pwsh 执行 |
+| `$ErrorActionPreference='stop'` + `exit $LASTEXITCODE` | 一模一样包在脚本外面 |
+| `GITHUB_ENV` 里的值传给**后续** step | 每步结束后读回来写进环境变量 |
+| `GITHUB_PATH` 追加到 PATH | 同上 |
+| `RUNNER_TEMP` / `GITHUB_WORKSPACE` / `CI=true` | 都按 runner 的样子设 |
+| `uses: actions/checkout` | 跳过（代码就在本机）|
+
+**关键在于它不抄任何东西** —— 它读 YAML、执行 YAML。
+所以「本机跑的」和「GitHub 跑的」**是同一批命令**，不是两份会漂移的副本。
+
+实测（pwsh 7.6.6，和 runner 镜像上的版本一致）：
+
+```
+-- STEP 1 : Provision dependencies
+   [ci-deps] opencv libs  : …\vc16\lib  [opencv_world4130.lib]
+   [ci-deps] opencv dlls  : …\vc16\bin  [opencv_world4130.dll]
+-- STEP 2 : Run CI
+   -DOpenCV_DIR=…\vc16\lib  -DOpenCV_BIN_DIR=…\vc16\bin
+   -DCMAKE_PREFIX_PATH=…\Qt\6.8.3\msvc2022_64     ← 变量确实传过来了
+   100% tests passed, 0 tests failed out of 3
+   100% tests passed, 0 tests failed out of 15
+   smoke : W5 qr --no-gui
+   clean : tests added nothing to the source tree
+   ALL CHECKS PASSED
+ALL WORKFLOW STEPS PASSED (run locally, on this machine)
+```
+
+> **这一步验到的是"管道"**：`GITHUB_ENV` 那一段是**最容易静默失败**的地方 ——
+> 变量没传过去，ci.ps1 收到的就是空串，报错是
+> "OpenCVConfig.cmake not found under: "，而真正的原因是三步之前。
+> 这种错只有真跑一遍编排才看得见。
+
+⚠ 三处**本机与 runner 的已知差异**（都记在这儿，免得下一个人以为完全等价）：
+
+1. **shell**：本机没有 pwsh 7 的话，脚本会**直接报错**，不会退回 5.1 ——
+   5.1 和 7 的编码默认值、错误语义都不同，跑了也不算同一个实验。
+   （本机这次是拉了一份官方便携版 pwsh 7.6.6，版本和 runner 镜像一致。）
+2. **Qt 那一步**：本机用 junction 把已有的 6.8.3 摆成 aqt 的目录布局，
+   模拟"已装好"的状态，省掉 2 GB 下载。
+   真的 aqt 安装动作**只用 `--dry-run` 验过包名解析**（彩排 D）。
+3. **tesseract**：本机本来就装了（在 D 盘），所以走的是"已存在"那条路，
+   **没有**跑过 choco 的安装动作。
+
+### 4.5.4 那三条"纯环境性的"，现在还剩几条
+
+彩排 F 之后，剩下的又少了一条：
+
+| 项 | 彩排 F 之后 |
+|---|---|
+| 三步的命令本身 | ✅ 验过（彩排 A~D） |
+| 官方包能不能编译链接 | ✅ 验过（彩排 E） |
+| runner 镜像上有没有那些工具 | ✅ 查过官方镜像清单 |
+| **workflow 的编排、变量交接** | ✅ **验过**（彩排 F）|
+| choco 装 tesseract 的**动作** | ❌ 本机没 choco |
+| GitHub 的**调度器 / runner 镜像 / 网络** | ❌ 环境本身 |
+
+### 4.5.5 顺带查清的：「W7 必须用 CMake 4.3.1」的真实原因
 
 本机一直有条规矩：W7 必须用 VS 自带的 CMake 4.3.1，Qt 那套 3.30.5 不行。
 这次顺手验了它到底为什么：
@@ -514,22 +583,27 @@ return "D:\\Program Files\\Tesseract-OCR\\tesseract.exe";
 | tesseract 安装路径 | ✅ 读包验的（装到哪、PATH 怎么加） |
 | 解压 | ✅ 实测（7z 与 bsdtar 两条路都试过，本机走的是 bsdtar） |
 | **对着官方包真的能编译链接** | ✅ **本机实测**（彩排 E：整套 CI 对着 world 包 `ALL CHECKS PASSED`）|
+| **workflow 的编排、变量交接** | ✅ **本机实测**（彩排 F：解析 `ci.yml` 执行它的 `run:` 块，`ALL WORKFLOW STEPS PASSED`）|
 | **runner 镜像上有没有 choco / 7z / python / VS** | ✅ **查了官方镜像清单**（4.5.2）|
-| **runner 的 cmake 配它的 VS 能不能用** | ✅ 版本对得上（4.5.3）|
+| **runner 的 cmake 配它的 VS 能不能用** | ✅ 版本对得上（4.5.5）|
 | **choco 装 tesseract 这一步本身** | ❌ 仍需真 runner（本机没 choco；路径已查过包，安装动作没跑过）|
-| **整个 job 在 GitHub 基础设施上跑** | ❌ 仍需真 runner（编排、`GITHUB_ENV` 传递、超时、runner 侧的网络）|
-| **下载带宽 / 超时** | ❌ 仍需真 runner（本机 185 MB 下了十几秒，但 runner 的网络不一定）|
+| **GitHub 的调度器 / runner 镜像 / 网络** | ❌ 环境本身 |
 
-> ⚠ 注意最后三行**为什么不能在本机消掉**：
+> ⚠ 剩下那两行**为什么不能在本机消掉**：
 > 它们不是"知识缺口"，是**环境本身**——
 > 只有真的在 GitHub 的机器上跑一次，才知道 GitHub 的网络给不给力、
-> `GITHUB_ENV` 传过去的那几个路径在那个 shell 里还在不在。
+> choco 那个安装动作会不会成功。
 > 硬说"本机也能验"，那就是拿"验过命令"冒充"验过环境"——
 > 那是本项目记过的第 11 条教训：**别把两件事混成一件**。
 >
 > 但反过来也要说清楚：**该验的都验了**。
-> 剩下的三条里没有一条是"代码写错了"——
+> 剩下的两条里没有一条是"代码写错了"——
 > 都是"这个环境到底长什么样"。
+>
+> 而且现在**整条链已经能在本机端到端跑**（彩排 F）：
+> 从依赖准备到 7 个工程编译、18 个套件、W5 冒烟、源码树洁净检查，
+> 跑的就是 `ci.yml` 里那几行命令。
+> 推上 GitHub 剩下的只是"让同一批命令在别人的机器上再跑一遍"。
 
 ### 4.8 为什么值得先做这件事
 
@@ -710,6 +784,18 @@ powershell -ExecutionPolicy Bypass -File tools/ci-deps.ps1
 
 ⚠ 彩排和真跑**是同一个文件** —— 这正是把它从 YAML 里搬出来的理由。
 
+**整份 GitHub Actions workflow 在本机跑**（第四章 4.5.3）：
+
+```powershell
+# 先确认有 pwsh（PowerShell 7）；没有就装一份便携版的
+powershell -ExecutionPolicy Bypass -File tools/ci-local.ps1 -ListOnly
+powershell -ExecutionPolicy Bypass -File tools/ci-local.ps1 `
+    -PwshExe 'C:/path/to/pwsh.exe'
+```
+
+它**解析 `.github/workflows/ci.yml` 并执行里面的 `run:` 块** ——
+不抄任何东西，所以本机跑的 和 GitHub 跑的是同一批命令。
+
 CI 的构建产物落在 `<仓库>/build/ci/<工程名>/`（`build/` 在 `.gitignore` 里），
 所以第 5 步"源码树没被写脏"这句话仍然成立。
 
@@ -749,6 +835,9 @@ CI 的构建产物落在 `<仓库>/build/ci/<工程名>/`（`build/` 在 `.gitig
 | world 包的 `${OpenCV_LIBS}` 映射能过 | 同上：15/15 套件全绿，exe 旁边是 `opencv_world4130.dll` |
 | **runner 镜像上有什么** | 查 `actions/runner-images` 的 `Windows2022-Readme.md`：Chocolatey 2.7.4 / 7zip 26.04 / Python 3.12.10 / VS Enterprise 2022 17.14 |
 | 「W7 必须用 CMake 4.3.1」的真实原因 | CMake 3.30.5 报 `CMAKE_CXX_COMPILER not set`（认不出 VS 2026）；加 vcvars64 后同一个 3.30.5 配得出来 → 是**工具认不认编译器**，不是工程要 4.x |
+| **整份 `ci.yml` 在本机跑通** | `tools/ci-local.ps1`（解析 YAML 执行 `run:` 块）→ `ALL WORKFLOW STEPS PASSED` |
+| **`GITHUB_ENV` 交接真的通了** | 彩排 F 的第 2 步收到的 `-DOpenCV_DIR` / `-DOpenCV_BIN_DIR` / `-DCMAKE_PREFIX_PATH` 正是第 1 步写进去的值 |
+| **模拟器的 shell 和 runner 一致** | 拉便携版 pwsh **7.6.6**（runner 镜像清单上的版本），默认编码 UTF-8 与 runner 相同 |
 
 ---
 
@@ -804,3 +893,21 @@ CI 的构建产物落在 `<仓库>/build/ci/<工程名>/`（`build/` 在 `.gitig
 > choco 那个安装动作、job 在 GitHub 基础设施上的编排、runner 侧的网络。
 > 这三条**没法在本机消掉** —— 但它们也**都不是代码写错了**。
 > 硬说"本机也能验"，就是拿"验过命令"冒充"验过环境"。
+
+> **再补一条（彩排 F，2026-10-22）：**
+>
+> **"只能推上去才知道"这件事，本身也可以拆。**
+>
+> `ci.yml` 是 **YAML** —— YAML 不是能在本机执行的程序，
+> 所以"workflow 的编排"一向只能推上去才知道。
+> 但**编排是可以模拟的**：把 runner 干的那几件事（本机做一遍）列出来 ——
+> 用哪个 shell、`GITHUB_ENV` 怎么传给下一步、失败怎么退出、
+> `RUNNER_TEMP` 在哪 —— 然后**把 YAML 里的 `run:` 块读出来执行**。
+>
+> 于是本机跑的不再是"照着 YAML 手敲一遍"，
+> 而是**那几行命令本身**。没有副本，就没有漂移。
+>
+> ⚠ 顺带发现的最容易静默失败的一处：**`GITHUB_ENV`**。
+> 变量没传过去，ci.ps1 收到的是空串，报错是
+> "OpenCVConfig.cmake not found under: " ——
+> 而真正的原因在三步之前。这种错只有真跑一遍编排才看得见。

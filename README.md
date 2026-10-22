@@ -115,15 +115,18 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 > OpenCV 各验了一遍；这一步当场挖出三个会让 CI 第一次跑就挂的真 bug）。
 > **整套 CI 也对着官方 OpenCV 4.13.0 world 包跑通了**
 > （`ALL CHECKS PASSED`），runner 镜像清单也查过（choco / 7zip / Python / VS 都在）。
+> **整份 workflow 也能在本机跑**：`tools/ci-local.ps1` 解析 `ci.yml` 并执行它里面的
+> `run:` 块（`GITHUB_ENV` 交接、shell、退出码都按 runner 的规矩来），
+> 结果 `ALL WORKFLOW STEPS PASSED` —— 本机跑的和 GitHub 跑的是同一批命令。
 > 真正干活的那几步（配置 / 编译 / 测试 / 源码树检查）已在本机
-> `tools/ci.ps1` 跑通。**还没在真实 runner 上验过的**只剩三条**纯环境性**的
-> （choco 那个安装动作、job 在 GitHub 基础设施上的编排、runner 侧的网络带宽），
+> `tools/ci.ps1` 跑通。**还没在真实 runner 上验过的**只剩两条**纯环境性**的
+> （choco 那个安装动作、GitHub 自己的调度与网络），
 > 哪些验过、哪些没验过，见
 > [notes_CI_2026-10.md](./notes/notes_CI_2026-10.md)。
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 18 份 + 42 张 atomic 卡，~473 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 18 份 + 42 张 atomic 卡，~479 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -201,7 +204,7 @@ OpenCV/
 
 - 7 个 C++ 项目 + 2 个共享核心
 - 106 个 C++ 文件 / ~29310 行（含注释与空行）
-- 18 份变更日志 + 42 张 atomic 卡 / ~473 KB
+- 18 份变更日志 + 42 张 atomic 卡 / ~479 KB
 - **18 个无头回归测试 / 2064 条断言**（W7 15 个 / 1587，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
