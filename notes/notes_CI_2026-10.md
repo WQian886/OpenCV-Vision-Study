@@ -223,7 +223,7 @@ Windows PowerShell 5.1 读**没有 BOM** 的 `.ps1` 时按 ANSI 解析 ——
 | 步骤 | 做什么 | 验证状态 |
 |---|---|---|
 | `actions/checkout` | 拉代码 | ✅ 标准动作 |
-| `tools/ci-deps.ps1` | 装 tesseract / Qt 6.8.3 / OpenCV 4.13.0 | ✅ **命令本身已本机实测**；❌ 只剩 runner 特有那几条（见 4.7）|
+| `tools/ci-deps.ps1` | 装 tesseract / Qt 6.8.3 / OpenCV 4.13.0 | ✅ **命令本身已本机实测**；✅ **整套 CI 也对着官方包跑通了**；❌ 只剩 runner 特有那三条（见 4.7）|
 | `tools/ci.ps1` | 真正干活的那五步 | ✅ **本机跑通 4 次** |
 
 ### 3.1 为什么 OpenCV 那步是「发现」而不是「写死路径」
@@ -395,6 +395,7 @@ world 构建和模块化构建都不用改。
 | B | 本机**模块化**安装（`D:\opencv-src\build\install`）| config=`…/lib`、lib=`opencv_calib3d4130.lib`、dll=`…/bin` ✅ |
 | C | tesseract 搜索 | 找到 `D:\Program Files\Tesseract-OCR\tesseract.exe` ✅ |
 | D | Qt 包名 | `--dry-run` 解析出 qtbase 等 ✅（不下载 2 GB）|
+| **E** | **整套 CI 对着官方 world 包跑** | **`ALL CHECKS PASSED`** ✅ —— 见 4.5.1 |
 
 外加一次**完整路径**彩排：下载好的 `.exe` → 解压（走 bsdtar 兜底）→ 发现 → 断言 ✅。
 
@@ -409,6 +410,81 @@ Install-ChocolateyPath $env:ProgramFiles\Tesseract-OCR
 
 → 装到 `C:\Program Files\Tesseract-OCR`，并且被加进 PATH。
 **工作流断言的那个路径是对的**（之前只是"看起来对"，现在是查过包的）。
+
+### 4.5.1 彩排 E：把**整个 CI** 对着官方 world 包跑一遍
+
+前面几次彩排验的都是"找得对不对"。这一条验的是**"找到之后，货色到底能不能用"**：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/ci.ps1 `
+    -OpenCvLib '…/opencv/build/x64/vc16/lib' `
+    -OpenCvBin '…/opencv/build/x64/vc16/bin' `
+    -QtRoot    'D:/Qt/6.8.3/msvc2022_64' `
+    -BuildRoot 'build/ci_world'
+```
+
+结果：**`ALL CHECKS PASSED`**
+
+| 步骤 | 结果 |
+|---|---|
+| W6 三个套件 | **3/3 通过** |
+| W7 十五个套件 | **15/15 通过** |
+| W5 冒烟（真解出一个串号）| ✅ |
+| 源码树零污染 | ✅ |
+
+而且测试 exe 旁边躺着的确实是 `opencv_world4130.dll`（**world 构建**的那个，不是本机模块化的那一堆）。
+
+> **这一条把 4.7 里原本最没底的那格填上了。**
+> 之前担心的是：官方包只给一个合并库，而项目链接的是 `${OpenCV_LIBS}`
+> （一串模块名）—— 这个映射到底能不能过，**只有真链接一次才知道**。
+> 现在知道了：**能过**。
+>
+> ⚠ 而且我验的是**更难的那个方向**：本机编译器是 MSVC 19.51（VS 2026），
+> 官方包是 v142 构建的 —— **新编译器链旧库**。
+> runner 上是 VS 2022（v143）链 v142，那是**常规方向**，更稳。
+
+### 4.5.2 顺带查清的：runner 镜像上到底有什么
+
+不用 runner 也能查 —— GitHub 官方把每张镜像装了什么写成了一份清单
+（`actions/runner-images` 仓库的 `Windows2022-Readme.md`）。核对 `windows-2022`：
+
+| provisioning 依赖的东西 | 镜像上有没有 | 备注 |
+|---|---|---|
+| `choco install tesseract` | ✅ **Chocolatey 2.7.4** | |
+| 解压 SFX | ✅ **7zip 26.04** | 脚本里 7z / bsdtar 两条路都有 |
+| `python -m pip install aqtinstall` | ✅ **Python 3.12.10**（和本机同版本）| pip 26.2.1 |
+| C++ 编译器 | ✅ **Visual Studio Enterprise 2022 17.14** | v143 |
+
+> 这不是"猜 runner 上有什么"，是**查镜像清单**。
+> 剩下的真不确定项又少了一条。
+
+### 4.5.3 顺带查清的：「W7 必须用 CMake 4.3.1」的真实原因
+
+本机一直有条规矩：W7 必须用 VS 自带的 CMake 4.3.1，Qt 那套 3.30.5 不行。
+这次顺手验了它到底为什么：
+
+```
+$ cmake-3.30.5 -S W7_VisionMasterLite -B ...
+CMake Error: CMAKE_CXX_COMPILER not set, after EnableLanguage
+```
+
+**不是 W7 要 CMake 4.x**（七个工程的 `cmake_minimum_required` 全是 3.21），
+是 **CMake 3.30 不认识 VS 2026**（它只认到 VS 17.x），
+所以**发现不到编译器**。加上 vcvars64 之后同一个 3.30.5 就能配出来：
+
+```
+-- The CXX compiler identification is MSVC 19.51.36256.0
+-- Configuring done / Generating done
+```
+
+> ⚠ **所以这条不用改代码**：`windows-2022` 镜像自带的 CMake 3.31.6 配镜像自带的
+> VS 2022（v143）—— **版本对得上**，是配好的一对。
+> 而 `ci.ps1` 的 cmake 探测是 **PATH 优先**（`Get-Command`），
+> runner 上会直接拿到镜像自带的那份，不靠那些 `D:/...` 硬编码路径撞运气。
+>
+> 记下来是因为：**"某工程必须用某个工具版本"这种规矩，得知道它到底为什么** ——
+> 否则换个环境就变成"玄学",而真正的原因（工具认不认编译器）是可以查的。
+
 
 ### 4.6 顺手修的：产品代码里的机器事实
 
@@ -437,18 +513,23 @@ return "D:\\Program Files\\Tesseract-OCR\\tesseract.exe";
 | OpenCV 布局 | ✅ 实测（对着真包装的**两种**形状都验过） |
 | tesseract 安装路径 | ✅ 读包验的（装到哪、PATH 怎么加） |
 | 解压 | ✅ 实测（7z 与 bsdtar 两条路都试过，本机走的是 bsdtar） |
-| **choco 在 runner 上能不能装** | ❌ 仍需真 runner（本机没 choco） |
-| **aqt 在 runner 镜像上跑不跑得动** | ❌ 仍需真 runner |
-| **下载带宽 / 超时** | ❌ 仍需真 runner（本机 185 MB 下了十几秒，但 runner 的网络不一定） |
-| **对着官方 world 包真的能编译链接** | ❌ 本机是 MSVC 19.51，官方包是 v142 构建；链接层面没验 |
+| **对着官方包真的能编译链接** | ✅ **本机实测**（彩排 E：整套 CI 对着 world 包 `ALL CHECKS PASSED`）|
+| **runner 镜像上有没有 choco / 7z / python / VS** | ✅ **查了官方镜像清单**（4.5.2）|
+| **runner 的 cmake 配它的 VS 能不能用** | ✅ 版本对得上（4.5.3）|
+| **choco 装 tesseract 这一步本身** | ❌ 仍需真 runner（本机没 choco；路径已查过包，安装动作没跑过）|
+| **整个 job 在 GitHub 基础设施上跑** | ❌ 仍需真 runner（编排、`GITHUB_ENV` 传递、超时、runner 侧的网络）|
+| **下载带宽 / 超时** | ❌ 仍需真 runner（本机 185 MB 下了十几秒，但 runner 的网络不一定）|
 
-最后一条是**唯一还可能真出问题**的：包找到了、路径对了，
-但 `find_package(OpenCV)` 拿到 world 构建时 `${OpenCV_LIBS}` 能不能链接通 ——
-本机没法验（编译器版本对不上），**得在 runner 上验（runner 是 VS 2022，和 v142 同代）**。
-
-> ⚠ 顺带一个发现：**runner 的编译器比本机旧**（windows-2022 = VS 2022 v143，本机 = VS 2026 v143/v145 系）。
-> 项目用的是 C++17，VS 2022 完全支持 ✓；
-> 但这条以前没人写过 —— 它属于"只有真 runner 才能验"的那一类。
+> ⚠ 注意最后三行**为什么不能在本机消掉**：
+> 它们不是"知识缺口"，是**环境本身**——
+> 只有真的在 GitHub 的机器上跑一次，才知道 GitHub 的网络给不给力、
+> `GITHUB_ENV` 传过去的那几个路径在那个 shell 里还在不在。
+> 硬说"本机也能验"，那就是拿"验过命令"冒充"验过环境"——
+> 那是本项目记过的第 11 条教训：**别把两件事混成一件**。
+>
+> 但反过来也要说清楚：**该验的都验了**。
+> 剩下的三条里没有一条是"代码写错了"——
+> 都是"这个环境到底长什么样"。
 
 ### 4.8 为什么值得先做这件事
 
@@ -591,7 +672,7 @@ M1 与 ③a 的 M1 是同一个变异，但**观察点不同**：
 | **W1–W4 没有测试** | 4 个工程只有 `main.cpp`，CI 里**只编译不测** | 这 4 个是入门 demo（读写/滤波/轮廓/模板匹配），算法薄。但"只编译"就是"没测"，**别把它当测过了** |
 | **W5 只有冒烟** | W5 没有自己的测试套件。CI 只验证"exe 能跑并解出串号" | QR/OCR 的**核心**被 `common/qr_ocr` 的 36 条断言覆盖（两个工程各跑一遍）。W5 的 `main.cpp`（参数解析、`--no-gui`、退出码）**只有冒烟这一层** |
 | **W6 的 `main.cpp` 没被跑** | W6 的 CLI 逻辑被 `w6_cli` 的 163 条断言覆盖，但 `main.cpp` 的参数解析只在 CI 里被**编译** | 缺口比 W5 小（`runReport` / `writeCSV` 都测了），但确实没跑 |
-| **依赖准备步骤未在真 runner 上验证** | 见第三、四章 | ⚠ **2026-10-22 变了**：三步的**命令本身**已在本机实测（还挖出三个真 bug 并修了）。仍需真 runner 的只剩：choco 能不能装、aqt 在 runner 上跑不跑得动、下载带宽，以及**对着 world 包真的能链接** |
+| **依赖准备步骤未在真 runner 上验证** | 见第三、四章 | ⚠ **2026-10-22 变了**：三步的**命令本身**已在本机实测（挖出三个真 bug 并修了），**整套 CI 也对着官方 world 包跑通了**（彩排 E），runner 镜像清单也查过。仍需真 runner 的只剩三条**环境性**的：choco 装 tesseract 这一步的动作、job 在 GitHub 基础设施上的编排、runner 侧的网络带宽 |
 | **`ctest -j` 并行没测过** | CI 脚本跑的是串行 | 每套件一份工作目录，理论上可以并行（下轮可以改成 `-j` 提速）|
 | **应用的运行时产物仍进源码树** | W7 应用跑起来时算子会往 `images/` 写 `w7_*.png`；W6 的 `inspect` 写 `w6_inspect_*.png` | 那是**应用**行为不是测试行为，`.gitignore` 兜着。CI 的第 5 步只查"**测试**有没有往里写" |
 
@@ -664,6 +745,10 @@ CI 的构建产物落在 `<仓库>/build/ci/<工程名>/`（`build/` 在 `.gitig
 | 新脚本吃**两种** OpenCV 形状 | 彩排 A（官方 world 包）与彩排 B（本机模块化安装）都定位到正确的 config/lib/dll |
 | 解压可行 | bsdtar 直接读 SFX（`tar -tf` 能列目录）；7z 也在 runner 镜像上 |
 | `tools/ci-deps.ps1` 是纯 ASCII | 逐字节扫 `> 127` → 0 个 |
+| **整套 CI 对着官方 world 包跑通** | `ci.ps1 -OpenCvLib <pkg>/lib -OpenCvBin <pkg>/bin` → `ALL CHECKS PASSED`（W6 3/3 + W7 15/15 + W5 冒烟 + 源码树零污染）|
+| world 包的 `${OpenCV_LIBS}` 映射能过 | 同上：15/15 套件全绿，exe 旁边是 `opencv_world4130.dll` |
+| **runner 镜像上有什么** | 查 `actions/runner-images` 的 `Windows2022-Readme.md`：Chocolatey 2.7.4 / 7zip 26.04 / Python 3.12.10 / VS Enterprise 2022 17.14 |
+| 「W7 必须用 CMake 4.3.1」的真实原因 | CMake 3.30.5 报 `CMAKE_CXX_COMPILER not set`（认不出 VS 2026）；加 vcvars64 后同一个 3.30.5 配得出来 → 是**工具认不认编译器**，不是工程要 4.x |
 
 ---
 
@@ -700,3 +785,22 @@ CI 的构建产物落在 `<仓库>/build/ci/<工程名>/`（`build/` 在 `.gitig
 > 本机验的那份和 runner 跑的那份**是同一个文件**。
 >
 > **证据不会因为环境缺了就少要，只是取证的路换了一条。**
+
+> **补一条（彩排 E，2026-10-22）：**
+>
+> 拿到包之后还能再进一步 —— **把整个 CI 对着那个包跑一遍**，
+> 而不只是"把找路径的那段跑一遍"。
+>
+> 彩排 A~D 验的是「**找得对不对**」，
+> 彩排 E 验的是「**找到之后货色能不能用**」——
+> 也就是 `find_package` 拿到 world 构建时 `${OpenCV_LIBS}` 那个映射到底过不过。
+> 这是**最没底**的一格，而它也没用到 runner。
+>
+> ⚠ 顺手还查了 GitHub 官方那张**镜像清单**（`actions/runner-images`），
+> 确认 runner 上有 Chocolatey / 7zip / Python / VS 2022。
+> **不用 runner 也能查"runner 上有什么"** —— 有一张公开的清单在那儿。
+>
+> 于是欠账从「三步全没验过」缩到三条**纯环境性**的：
+> choco 那个安装动作、job 在 GitHub 基础设施上的编排、runner 侧的网络。
+> 这三条**没法在本机消掉** —— 但它们也**都不是代码写错了**。
+> 硬说"本机也能验"，就是拿"验过命令"冒充"验过环境"。

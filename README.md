@@ -113,15 +113,17 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 > ⚠️ 依赖准备那几步**命令本身已在本机实测过**
 > （`tools/ci-deps.ps1 -VerifyOnly`，还对着官方包和本机那套**两种**形状的
 > OpenCV 各验了一遍；这一步当场挖出三个会让 CI 第一次跑就挂的真 bug）。
+> **整套 CI 也对着官方 OpenCV 4.13.0 world 包跑通了**
+> （`ALL CHECKS PASSED`），runner 镜像清单也查过（choco / 7zip / Python / VS 都在）。
 > 真正干活的那几步（配置 / 编译 / 测试 / 源码树检查）已在本机
-> `tools/ci.ps1` 跑通。**还没在真实 runner 上验过的**只剩 runner 特有的那几条
-> （choco 能不能装、aqt 在 runner 镜像上跑不跑得动、下载带宽），
+> `tools/ci.ps1` 跑通。**还没在真实 runner 上验过的**只剩三条**纯环境性**的
+> （choco 那个安装动作、job 在 GitHub 基础设施上的编排、runner 侧的网络带宽），
 > 哪些验过、哪些没验过，见
 > [notes_CI_2026-10.md](./notes/notes_CI_2026-10.md)。
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 18 份 + 42 张 atomic 卡，~467 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 18 份 + 42 张 atomic 卡，~473 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -198,8 +200,8 @@ OpenCV/
 ## 📊 统计
 
 - 7 个 C++ 项目 + 2 个共享核心
-- 106 个 C++ 文件 / ~29290 行（含注释与空行）
-- 18 份变更日志 + 42 张 atomic 卡 / ~467 KB
+- 106 个 C++ 文件 / ~29310 行（含注释与空行）
+- 18 份变更日志 + 42 张 atomic 卡 / ~473 KB
 - **18 个无头回归测试 / 2064 条断言**（W7 15 个 / 1587，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
