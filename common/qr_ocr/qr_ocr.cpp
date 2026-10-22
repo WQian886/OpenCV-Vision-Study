@@ -87,7 +87,29 @@ QrResult readQr(const cv::Mat& img) {
 // ============================================================
 std::string defaultTesseractPath() {
 #ifdef _WIN32
-    return "D:\\Program Files\\Tesseract-OCR\\tesseract.exe";
+    // ⚠ 路径不能写死成**某一台机器**的事实。
+    //
+    //   以前这里写的是 D:\Program Files\Tesseract-OCR\tesseract.exe ——
+    //   那是这台机器的装法。而 chocolatey 装的是
+    //   C:\Program Files\Tesseract-OCR(它的 chocolateyinstall.ps1
+    //   里 Install-ChocolateyPath 用的就是 %ProgramFiles%)。
+    //
+    //   写死的后果不是"多试一个地方":在别的机器上,
+    //   "默认位置"指向一个压根不存在的文件,
+    //   错误消息还会把人引到那个不存在的目录去。
+    //   (CI 上就是靠 PATH 兜底才找到的 —— 那是运气,不是设计。)
+    //
+    //   现在按标准位置逐个找,找到真的那个就返回它;
+    //   一个都没有,才返回标准位置 —— 错误消息总得有个地方可说。
+    const char* kCandidates[] = {
+        "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+        "D:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+    };
+    std::error_code ec;
+    for (const char* c : kCandidates) {
+        if (fs::exists(fs::path(c), ec) && !ec) return std::string(c);
+    }
+    return std::string(kCandidates[0]);
 #else
     return std::string();
 #endif

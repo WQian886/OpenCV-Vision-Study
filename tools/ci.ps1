@@ -13,7 +13,7 @@
       1. Preflight. Every tool and every third-party path must exist.
          A missing dependency FAILS HERE, loudly. It never "skips".
       2. All 7 projects configure and build (Release).
-      3. W6 (3 suites) and W7 (14 suites) run and pass.
+      3. W6 (3 suites) and W7 (15 suites) run and pass.
       4. W5's executable still runs. W5 has no test suite of its own,
          so this smoke check is the only thing CI says about W5.
          It asserts a serial number was actually decoded, using the

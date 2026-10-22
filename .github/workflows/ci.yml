@@ -2,27 +2,33 @@
 # CI: build all 7 projects, run all test suites, prove the source tree stays clean
 #
 # The steps that actually do the work live in tools/ci.ps1.
-# This file only *provisions* the machine, then calls that script.
+# The steps that provision the machine live in tools/ci-deps.ps1.
 #
 # Why a script and not a pile of YAML:
 #   a CI that only exists inside YAML is a CI nobody can run before
 #   pushing -- so its first real execution is also its first
 #   debugging session. tools/ci.ps1 runs the same steps locally.
 #
+# ⚠ Same argument for the provisioning steps. They used to live here
+#   as inline YAML, which meant they were the one part of this file
+#   that had NEVER been executed. tools/ci-deps.ps1 is now the only
+#   copy, and the local rehearsal runs that same file.
+#
 # What the job guarantees:
 #   · 7 projects compile (Release)
-#   · 17 ctest suites pass (W6 3 + W7 14)
+#   · 18 ctest suites pass (W6 3 + W7 15)
 #   · W5's executable still decodes a QR
 #   · the source tree is byte-identical after all of that
 #     (test products must land in build/, never in the source tree)
 #
-# ⚠ NOT VERIFIED END TO END on a GitHub runner yet.
-#   The dependency provisioning (Qt + OpenCV download) was written
-#   against the documented layout and is *discovery based* on purpose,
-#   but it has not been executed on a real runner. The steps that
-#   matter -- configure, build, test, clean-tree check -- ARE verified:
-#   they run unchanged locally via tools/ci.ps1.
-#   See notes/notes_CI_2026-10.md for exactly what is and is not proven.
+# ⚠ STILL NOT VERIFIED END TO END on a GitHub runner.
+#   The dependency provisioning is verified locally against the real
+#   packages (see notes/notes_CI_2026-10.md for what that proved and
+#   what only a real runner can still prove). What remains runner
+#   specific: choco being available and admin-capable, aqtinstall
+#   running on the runner image, and the download bandwidth.
+#   The steps that matter -- configure, build, test, clean-tree
+#   check -- ARE verified: they run unchanged locally via tools/ci.ps1.
 # ============================================================
 
 name: CI
@@ -48,93 +54,37 @@ jobs:
       - uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # Tesseract
+      # Dependencies: Tesseract / Qt 6.8.3 / OpenCV 4.13.0
       #
-      # The shared QR/OCR core calls tesseract as an external program.
-      # Without it, the OCR half of common/qr_ocr's suite is SKIPPED
-      # (and says so). A CI where the OCR path is quietly never
-      # exercised is worse than a CI that fails, so the install is
-      # mandatory and a failure here fails the job.
+      # tools/ci-deps.ps1 is the ONLY copy of these commands, and it
+      # is the same file the local rehearsal runs.  What we verify
+      # locally is literally what runs here.
+      #
+      # The three traps it was written to survive (all three were real
+      # bugs in the previous inline version -- see
+      # notes/notes_CI_2026-10.md):
+      #
+      #   1. aqt's architecture argument is win64_msvc2022_64.
+      #      'msvc2022_64' is NOT an alias: aqt dies with
+      #      "The packages ['qt_base'] were not found".
+      #
+      #   2. The official OpenCV Windows package is a *world* build:
+      #      opencv_world4130.lib / .dll, and NO opencv_core4130.*.
+      #      A lookup that names a module finds nothing and the job
+      #      dies with "no opencv_core*.dll found".
+      #
+      #   3. The import lib and OpenCVConfig.cmake sit in the SAME
+      #      directory (…/x64/vc16/lib).  A lookup that expects a
+      #      <cfg>/lib/ subdirectory finds nothing.
+      #
+      # The script asserts the paths it reports really hold the files
+      # it claims -- a path we report but that is empty is a lie the
+      # build would only find much later, with a much worse message.
       # ------------------------------------------------------------
-      - name: Install Tesseract OCR
+      - name: Provision dependencies
         shell: pwsh
         run: |
-          choco install tesseract -y --no-progress
-          if ($LASTEXITCODE -ne 0) { throw "choco install tesseract failed" }
-          $t = 'C:\Program Files\Tesseract-OCR\tesseract.exe'
-          if (-not (Test-Path $t)) { throw "tesseract.exe not found at $t" }
-          "tesseract: $t"
-
-      # ------------------------------------------------------------
-      # Qt 6.8.3
-      #
-      # Pinned to the exact version this project is developed against.
-      # A different Qt minor version can change behaviour, and a CI
-      # that tests a different Qt than the one you ship is a lie.
-      # ------------------------------------------------------------
-      - name: Install Qt 6.8.3
-        shell: pwsh
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install aqtinstall
-          python -m aqt install-qt windows desktop 6.8.3 msvc2022_64 `
-                 --outputdir "$env:RUNNER_TEMP\Qt"
-          $qt = "$env:RUNNER_TEMP\Qt\6.8.3\msvc2022_64"
-          if (-not (Test-Path (Join-Path $qt 'lib/cmake/Qt6'))) {
-            throw "Qt6 cmake package not found under $qt"
-          }
-          "QT_ROOT=$qt" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      # ------------------------------------------------------------
-      # OpenCV 4.13.0
-      #
-      # Downloaded as the official prebuilt Windows package, then
-      # *discovered* -- the layout is not assumed:
-      #   OpenCV_DIR = the directory that holds OpenCVConfig.cmake
-      #                AND a lib/ subdirectory containing the import libs
-      #   OpenCV_BIN_DIR = the directory that holds opencv_core*.dll
-      #
-      # Guessing the layout is how CI jobs end up failing with
-      # "cannot open opencv_core4130.lib" and nobody knows why.
-      # Discovering it, and failing loudly when it cannot be found,
-      # is the difference between a 5-minute fix and a 5-hour one.
-      # ------------------------------------------------------------
-      - name: Download OpenCV 4.13.0
-        shell: pwsh
-        run: |
-          $url = 'https://github.com/opencv/opencv/releases/download/4.13.0/opencv-4.13.0-windows.exe'
-          $exe = "$env:RUNNER_TEMP\opencv-4.13.0-windows.exe"
-          $pkg = "$env:RUNNER_TEMP\opencv"
-          Invoke-WebRequest -Uri $url -OutFile $exe
-          & 'C:\Program Files\7-Zip\7z.exe' x $exe "-o$pkg" -y | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "7z failed to extract $exe" }
-
-          # --- find the config directory that actually has the libs ---
-          $cfgDir = $null
-          foreach ($c in (Get-ChildItem $pkg -Recurse -Filter 'OpenCVConfig.cmake' -File)) {
-            $libCandidate = Join-Path $c.DirectoryName 'lib'
-            if (Test-Path $libCandidate) {
-              $libs = Get-ChildItem $libCandidate -Filter 'opencv_core*.lib' -File -ErrorAction SilentlyContinue
-              if ($libs) { $cfgDir = $c.DirectoryName; break }
-            }
-          }
-          if (-not $cfgDir) {
-            # fall back to any config file, and let CMake be the judge
-            $any = Get-ChildItem $pkg -Recurse -Filter 'OpenCVConfig.cmake' -File | Select-Object -First 1
-            if (-not $any) { throw "no OpenCVConfig.cmake found under $pkg" }
-            $cfgDir = $any.DirectoryName
-            Write-Warning "no config+lib pair found; falling back to $cfgDir"
-          }
-
-          # --- find the DLL directory ---
-          $dll = Get-ChildItem $pkg -Recurse -Filter 'opencv_core*.dll' -File | Select-Object -First 1
-          if (-not $dll) { throw "no opencv_core*.dll found under $pkg" }
-          $binDir = $dll.DirectoryName
-
-          "OPENCV_LIB=$cfgDir"  | Out-File -FilePath $env:GITHUB_ENV -Append
-          "OPENCV_BIN=$binDir" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "opencv config: $cfgDir"
-          "opencv dlls  : $binDir"
+          ./tools/ci-deps.ps1
 
       # ------------------------------------------------------------
       # The actual CI
@@ -142,15 +92,16 @@ jobs:
       - name: Run CI
         shell: pwsh
         run: |
-          # tesseract was installed by choco; make sure it is on PATH
-          # for this step (the runner refreshes the env per step, but
-          # being explicit costs nothing and removes a whole class of
-          # "it worked on my machine" confusion).
-          $tess = 'C:\Program Files\Tesseract-OCR'
-          if (Test-Path $tess) { $env:PATH = "$tess;$env:PATH" }
+          # tesseract was installed by the provisioning step; make sure
+          # it is on PATH for this step (the runner refreshes the env
+          # per step, but being explicit costs nothing and removes a
+          # whole class of "it worked on my machine" confusion).
+          if ($env:TESSERACT_EXE) {
+            $tess = Split-Path -Parent $env:TESSERACT_EXE
+            $env:PATH = "$tess;$env:PATH"
+          }
 
           ./tools/ci.ps1 `
             -OpenCvLib $env:OPENCV_LIB `
             -OpenCvBin $env:OPENCV_BIN `
             -QtRoot    $env:QT_ROOT
-          if ($LASTEXITCODE -ne 0) { throw "ci.ps1 failed with $LASTEXITCODE" }
