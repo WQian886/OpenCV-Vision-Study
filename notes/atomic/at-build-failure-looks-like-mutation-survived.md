@@ -126,6 +126,61 @@ restored: pass=142 fail=0     ← 还原后
 对策：`.ps1` 要么存成 **UTF-8 with BOM**，要么**整个脚本纯 ASCII**。
 （本次选了后者 —— 脚本里的输出用英文，比加 BOM 更不容易再踩。）
 
+### 复发第二次（2026-10-22）：这次它**不报错**，它**吃掉一行代码**
+
+第七轮变异脚本里我又写了中文注释（明知道规矩，还是写了）。
+
+上一次那个坑是**响亮的**：语法错误，脚本跑不起来，一眼看见。
+这次是**安静的**：
+
+```
+=== M42 (expect KILL): ...
+  KILLED (fails=1) [UNEXPECTED]
+=== M43 (expect KILL): ...
+  KILLED (fails=1) [UNEXPECTED]
+=== M44 (expect SURVIVE): ...
+  SURVIVED (fails=0) [UNEXPECTED]
+BAD M42  expected=KILL  got=KILLED
+BAD M43  expected=KILL  got=KILLED
+BAD M44  expected=SURVIVE  got=SURVIVED
+unexpected results = 3
+```
+
+**三个全对，被报成三个全错。**
+
+真相：文件无 BOM → 5.1 按 GBK 读 → 中文注释被错解，
+错解出来的字节里有一个让 PowerShell 以为这行还没结束 ——
+于是**紧跟其后的那一行代码被并进了注释**：
+
+```powershell
+$expectedVerdict = if ($m.Expect -eq 'KILL') { 'KILLED' } else { 'SURVIVED' }
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 这一行整行变成了注释
+```
+
+变量恒为 `$null` → 每次比较都是 false → 每次都判"不符合预期"。
+
+> **同一个坑，两种死法：**
+> 上一次是脚本跑不起来（吵），这一次是脚本跑起来了、跑得**很自信**、结论**全错**（安静）。
+>
+> **安静的那种更贵** —— 吵的那种会把你叫醒，安静的那种会替你下结论。
+
+### 为什么值得单独记一条检查
+
+`[IO.File]::ReadAllBytes` 数一下 > 127 的字节就行，**零成本**：
+
+```powershell
+$b = [System.IO.File]::ReadAllBytes($p)
+$n = 0; foreach ($x in $b) { if ($x -gt 127) { $n++ } }
+# n 必须是 0
+```
+
+这一轮还顺手扫了**仓库里三个正式的 `.ps1`**（`tools/ci.ps1`、
+`tools/ci-deps.ps1`、`tools/ci-local.ps1`）—— 全是纯 ASCII ✓。
+也就是说这条规矩在**入库的代码**里守住了，只有我这个**临时脚本**犯了。
+
+> 教训：**规矩要守在临时文件里**。
+> 临时脚本没人 review，它活得更久，出错时也没人认得它是谁。
+
 ## 检查清单
 
 做自动化实验（变异测试、参数扫描、批量实验）时：
@@ -133,5 +188,6 @@ restored: pass=142 fail=0     ← 还原后
 - [ ] 构建失败会**抛异常**，不会被 `| Out-Null` 吞掉？
 - [ ] 每轮之前跑一次基线，数字必须和上一轮**完全一致**？
 - [ ] "N 个变异全部存活"先怀疑装置，而不是先怀疑测试？
-- [ ] `.ps1` 存成 UTF-8 with BOM，或者纯 ASCII？
+- [ ] 脚本里**只有一种颜色**的时候，先怀疑"结论全错"而不是"规则不灵"？
+- [ ] `.ps1` 存成 UTF-8 with BOM，或者纯 ASCII？（数一下 > 127 的字节，**别靠眼睛**）
 - [ ] 脚本里写文件用的是 `[IO.File]::WriteAllText` 而不是 `Copy-Item`（mtime 问题见 `at-ninja-mtime-stale-binary.md`）？
