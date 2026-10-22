@@ -216,19 +216,21 @@ Windows PowerShell 5.1 读**没有 BOM** 的 `.ps1` 时按 ANSI 解析 ——
 
 ---
 
-## 三、GitHub Actions workflow（**依赖准备那几步未验证**）
+## 三、GitHub Actions workflow（依赖准备那几步：**2026-10-22 已在本机验完**，见第四章）
 
 `.github/workflows/ci.yml`：
 
 | 步骤 | 做什么 | 验证状态 |
 |---|---|---|
 | `actions/checkout` | 拉代码 | ✅ 标准动作 |
-| `choco install tesseract` | 装 tesseract（OCR 那条路要它）| ❌ **未在真 runner 上跑过** |
-| `aqtinstall` 装 Qt **6.8.3** | 版本**钉死**在开发时用的那个 | ❌ **未在真 runner 上跑过** |
-| 下载官方 OpenCV **4.13.0** 预编译包 + 7z 解压 + **布局发现** | 找 `OpenCVConfig.cmake` 和 `opencv_core*.dll` | ❌ **未在真 runner 上跑过** |
+| `tools/ci-deps.ps1` | 装 tesseract / Qt 6.8.3 / OpenCV 4.13.0 | ✅ **命令本身已本机实测**；❌ 只剩 runner 特有那几条（见 4.7）|
 | `tools/ci.ps1` | 真正干活的那五步 | ✅ **本机跑通 4 次** |
 
 ### 3.1 为什么 OpenCV 那步是「发现」而不是「写死路径」
+
+⚠ **本节写于 2026-10-20；第四章（2026-10-22）把它推翻了** ——
+下面这段发现逻辑**假设的形状压根不存在**，真跑起来会直接 throw。
+留在这里不是为了正确，是为了记住**当时为什么会那样想**。
 
 本机试过下载官方包，**网络超时**（`操作超时`），所以布局没法在这里实测。
 于是这一步改成一个**不依赖记忆**的发现过程：
@@ -250,6 +252,13 @@ $dll = Get-ChildItem $pkg -Recurse -Filter 'opencv_core*.dll' -File | Select-Obj
 而没人知道为什么的经典原因。
 **发现 + 找不到就大声失败**，是把"5 分钟能修"和"5 小时能修"分开的地方。
 
+> ⚠ 但"不依赖记忆"和"依赖事实"是两回事。
+> 这一版确实不依赖记忆 —— 它依赖的是**一个从来没验证过的假设**
+> （"config 旁边有个 lib/，里面是 opencv_core*.lib"）。
+> **假设也是猜测的一种，只是穿着"发现"的外衣。**
+> 第四章的收法是：把假设换成**唯一一条真事实** —— 「库文件在哪，DLL 就在哪」。
+
+
 ### 3.2 tesseract 装不上就让 job 失败
 
 `common/qr_ocr` 的 36 条断言里，有一部分依赖 tesseract；
@@ -270,7 +279,198 @@ $dll = Get-ChildItem $pkg -Recurse -Filter 'opencv_core*.dll' -File | Select-Obj
 
 ---
 
-## 四、★ CI 第一次跑就逮到的两个真 bug
+## 四、依赖准备那三步：本机验完了（2026-10-22）
+
+### 4.1 起因：卡住这条路的不是"没有 runner"，是"下载超时"
+
+第三章那三步一直挂着「❌ 未在真 runner 上跑过」。
+当时写下的原因是：
+
+> 本机试过下载官方包，**网络超时**（`操作超时`），所以布局没法在这里实测。
+
+也就是说，**卡住的不是"缺一个 GitHub runner"，是"包没下下来"**。
+2026-10-22 下载重试成功了（185.5 MB，官方 release 链接仍有效），
+于是这一步第一次能**在动手写之前**看清那个包长什么样。
+
+结果：**那三步里有三个会让 CI 第一次跑就挂的真 bug。**
+
+### 4.2 先把「唯一一份」立起来，再验
+
+原来的三步是 `.github/workflows/ci.yml` 里的一段内联 YAML。
+内联 YAML 有一个致命的性质：**它是整个仓库里唯一一份从没执行过的代码** ——
+跑不了、测不了、也改不动。
+
+所以第一步不是去修那三步，而是把它们**搬成一个脚本**：
+
+```
+tools/ci-deps.ps1        ← 唯一一份 provisioning 命令
+    ├─ .github/workflows/ci.yml  → 调它
+    └─ 本机彩排                   → 也调它（-VerifyOnly）
+```
+
+这样"本机验的那份"和"runner 跑的那份"**是同一个文件** ——
+不是"验了一份副本"，那正是本项目栽过五遍的坑（抄副本）。
+
+### 4.3 挖出来的三个真 bug
+
+#### ① Qt 的架构参数写错了（**必挂**）
+
+工作流里写的是 `aqt install-qt windows desktop 6.8.3 msvc2022_64`。
+实测：
+
+```
+$ python -m aqt install-qt windows desktop 6.8.3 msvc2022_64 --dry-run
+ERROR : The packages ['qt_base'] were not found while parsing XML of package information!
+
+$ python -m aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 --dry-run
+INFO  : DRY RUN: Would download and install the following:
+INFO  :   - qtbase: ... qt6.683.win64_msvc2022_64 ...
+```
+
+`msvc2022_64` **不是别名**，真实名字是 `win64_msvc2022_64`。
+`aqt list-qt windows desktop --arch 6.8.3` 列出来的也只有 `win64_*` 那一套。
+
+> ⚠ 这个 bug 的性质值得记一笔：**它不会"下载失败"，它会"下载之前就报错"** ——
+> 看起来像网络问题，实际是参数写错。差一步就会去查网络。
+
+#### ② OpenCV 的库名假设错了（**必挂**）
+
+工作流里找的是 `opencv_core*.lib` / `opencv_core*.dll`。
+**官方预编译包是 world 构建**：
+
+```
+opencv/build/x64/vc16/lib/opencv_world4130.lib     ← 只有这一个库
+opencv/build/x64/vc16/bin/opencv_world4130.dll     ← 只有这一个 DLL
+```
+
+整个包里**一个 `opencv_core4130.*` 都没有**（6 个 DLL 里三个是 java 绑定）。
+于是：
+
+- 找 `opencv_core*.lib` → 找不到 → 「config + lib」那个候选永远选不中
+- 找 `opencv_core*.dll` → 找不到 → **直接 `throw`** → job 挂在那儿
+
+本机用的是**模块化**构建（`opencv_core4130.lib` 一堆，没有 world），
+所以本地怎么测都不会暴露这个错 —— **两份 OpenCV 的"形状"不一样**。
+
+#### ③ OpenCV 的目录形状假设错了（**不挂，但会挑错**）
+
+工作流找的是「config 所在目录**旁边**有个 `lib/`」：
+
+```powershell
+$libCandidate = Join-Path $c.DirectoryName 'lib'
+```
+
+而实际布局是 **config 和 import lib 在同一个目录**：
+
+```
+opencv/build/x64/vc16/lib/OpenCVConfig.cmake
+opencv/build/x64/vc16/lib/opencv_world4130.lib
+```
+
+所以 `<config>/lib/` 从来不存在 → 那个判据**从来没成立过**，
+每次都掉进"退而求其次"分支，随机挑一个 config 文件。
+
+### 4.4 收法：一条不认模块名的判据
+
+新脚本里的发现逻辑**一个模块名都不提**：
+
+1. 找 `opencv_*.lib`（排除 java 目录）→ 它的**目录**就是库目录；
+2. 库目录里（或其上层）找 `OpenCVConfig.cmake` → 就是 config 目录；
+3. **DLL 的名字由库名推出来**（`opencv_world4130.lib` → `opencv_world4130.dll`），
+   找到它的目录就是 bin 目录。
+
+第 3 条是关键：**一条规则同时吃两种形状** ——
+world 构建和模块化构建都不用改。
+
+⚠ 挑 config 时特意**不**选顶层那个包装 config（`opencv/build/OpenCVConfig.cmake`）：
+它自己要按编译器版本去推 `x64/vc16`，而本机是 MSVC 19.51（VS 2026），
+那个包装 config 的正则**认不出这个版本**（`ci.ps1` 的报错里写过这件事）。
+内层那个 config 靠 `../../../` 算回 `opencv/build`，不认编译器 → 最稳。
+
+### 4.5 本机彩排（四次，全部实测）
+
+| 彩排 | 验的是 | 结果 |
+|---|---|---|
+| A | 官方 **world** 包（已解包）| config=`…/x64/vc16/lib`、lib=`opencv_world4130.lib`、dll=`…/x64/vc16/bin` ✅ |
+| B | 本机**模块化**安装（`D:\opencv-src\build\install`）| config=`…/lib`、lib=`opencv_calib3d4130.lib`、dll=`…/bin` ✅ |
+| C | tesseract 搜索 | 找到 `D:\Program Files\Tesseract-OCR\tesseract.exe` ✅ |
+| D | Qt 包名 | `--dry-run` 解析出 qtbase 等 ✅（不下载 2 GB）|
+
+外加一次**完整路径**彩排：下载好的 `.exe` → 解压（走 bsdtar 兜底）→ 发现 → 断言 ✅。
+
+⚠ **tesseract 那一步是"读包验的"，不是"跑出来的"**：
+本机没有 choco，所以没法本地跑 `choco install tesseract`。
+但那个 nupkg 可以直接下载下来读它的 `chocolateyinstall.ps1`：
+
+```powershell
+Install-ChocolateyInstallPackage @packageArgs   # /S 静默装 UB Mannheim 的安装器
+Install-ChocolateyPath $env:ProgramFiles\Tesseract-OCR
+```
+
+→ 装到 `C:\Program Files\Tesseract-OCR`，并且被加进 PATH。
+**工作流断言的那个路径是对的**（之前只是"看起来对"，现在是查过包的）。
+
+### 4.6 顺手修的：产品代码里的机器事实
+
+`common/qr_ocr/qr_ocr.cpp` 的 `defaultTesseractPath()` 写死了
+
+```cpp
+return "D:\\Program Files\\Tesseract-OCR\\tesseract.exe";
+```
+
+那是**这台机器**的装法；choco 装的是 `C:\Program Files\...`。
+写死的后果不只是"多试一个地方"：在别的机器上，"默认位置"指向一个压根不存在的文件，
+**错误消息还会把人引到那个不存在的目录去**。
+（CI 上是靠 PATH 兜底才找到的 —— 那是运气，不是设计。）
+
+现在按标准位置逐个找，找到真的那个就返回；一个都没有才返回标准位置（错误消息总得有个地方可说）。
+
+> 这跟第三章讲的是同一件事：**路径是某一台机器的事实**。
+> 上一轮把 CMakeLists 里 28 处硬编码清了，却漏了产品代码里这一处。
+
+### 4.7 现在还剩什么
+
+| 项 | 状态 |
+|---|---|
+| 三步的命令**本身** | ✅ **本机实测过**（彩排 A~D + 一次完整路径） |
+| Qt 包名 | ✅ 实测（`--dry-run` 解析成功） |
+| OpenCV 布局 | ✅ 实测（对着真包装的**两种**形状都验过） |
+| tesseract 安装路径 | ✅ 读包验的（装到哪、PATH 怎么加） |
+| 解压 | ✅ 实测（7z 与 bsdtar 两条路都试过，本机走的是 bsdtar） |
+| **choco 在 runner 上能不能装** | ❌ 仍需真 runner（本机没 choco） |
+| **aqt 在 runner 镜像上跑不跑得动** | ❌ 仍需真 runner |
+| **下载带宽 / 超时** | ❌ 仍需真 runner（本机 185 MB 下了十几秒，但 runner 的网络不一定） |
+| **对着官方 world 包真的能编译链接** | ❌ 本机是 MSVC 19.51，官方包是 v142 构建；链接层面没验 |
+
+最后一条是**唯一还可能真出问题**的：包找到了、路径对了，
+但 `find_package(OpenCV)` 拿到 world 构建时 `${OpenCV_LIBS}` 能不能链接通 ——
+本机没法验（编译器版本对不上），**得在 runner 上验（runner 是 VS 2022，和 v142 同代）**。
+
+> ⚠ 顺带一个发现：**runner 的编译器比本机旧**（windows-2022 = VS 2022 v143，本机 = VS 2026 v143/v145 系）。
+> 项目用的是 C++17，VS 2022 完全支持 ✓；
+> 但这条以前没人写过 —— 它属于"只有真 runner 才能验"的那一类。
+
+### 4.8 为什么值得先做这件事
+
+欠账 9 的原文是「CI 没在真 runner 上跑过」。
+这句话听着像"缺一个环境"，其实**缺的是证据**。
+而证据的绝大部分**根本不需要 runner** —— 需要的是那个包本身。
+
+于是顺序变成：
+
+1. 把唯一的依赖（那个包）拿到手 ✅
+2. 把命令抽成一份、让本机和 runner 跑同一份 ✅
+3. 在本机把这三步**每一步**都跑一遍 ✅
+4. 剩下的才是真正需要 runner 的那几条
+
+> **"没在真环境上验过"是个结论，不该是个借口。**
+> 先问一句：**这条证据真的只有在真环境上才拿得到吗？**
+> 大部分时候，答案是"不是"——
+> 而"不是"的部分，就是**当场就能挖出真 bug** 的那部分。
+
+---
+
+## 五、★ CI 第一次跑就逮到的两个真 bug
 
 这两个是本轮**最有价值的产出**。它们的共同点：
 **在本地永远测不出来**，因为本地的目录布局"长得不像仓库根"。
@@ -365,9 +565,13 @@ static QString findMainWindowCpp() {
 
 > 详见原子卡 `notes/atomic/at-lookalike-dir-fools-the-locator.md`
 
+> 第四章那条教训单独成卡：
+> `notes/atomic/at-no-runner-is-not-a-reason.md`
+> —— **"没有真环境"是一句结论，不是一个理由。**
+
 ---
 
-## 五、变异验证（2 个，全杀）
+## 六、变异验证（2 个，全杀）
 
 | # | 变异 | 结果 |
 |---|---|---|
@@ -380,20 +584,20 @@ M1 与 ③a 的 M1 是同一个变异，但**观察点不同**：
 
 ---
 
-## 六、CI 检不出的东西（已知盲区，列出来备查）
+## 七、CI 检不出的东西（已知盲区，列出来备查）
 
 | 项 | 现状 | 判断 |
 |---|---|---|
 | **W1–W4 没有测试** | 4 个工程只有 `main.cpp`，CI 里**只编译不测** | 这 4 个是入门 demo（读写/滤波/轮廓/模板匹配），算法薄。但"只编译"就是"没测"，**别把它当测过了** |
 | **W5 只有冒烟** | W5 没有自己的测试套件。CI 只验证"exe 能跑并解出串号" | QR/OCR 的**核心**被 `common/qr_ocr` 的 36 条断言覆盖（两个工程各跑一遍）。W5 的 `main.cpp`（参数解析、`--no-gui`、退出码）**只有冒烟这一层** |
 | **W6 的 `main.cpp` 没被跑** | W6 的 CLI 逻辑被 `w6_cli` 的 163 条断言覆盖，但 `main.cpp` 的参数解析只在 CI 里被**编译** | 缺口比 W5 小（`runReport` / `writeCSV` 都测了），但确实没跑 |
-| **依赖准备步骤未在真 runner 上验证** | 见第三章 | 第一次 push 大概率要改 `ci.yml` 里那三步 |
+| **依赖准备步骤未在真 runner 上验证** | 见第三、四章 | ⚠ **2026-10-22 变了**：三步的**命令本身**已在本机实测（还挖出三个真 bug 并修了）。仍需真 runner 的只剩：choco 能不能装、aqt 在 runner 上跑不跑得动、下载带宽，以及**对着 world 包真的能链接** |
 | **`ctest -j` 并行没测过** | CI 脚本跑的是串行 | 每套件一份工作目录，理论上可以并行（下轮可以改成 `-j` 提速）|
 | **应用的运行时产物仍进源码树** | W7 应用跑起来时算子会往 `images/` 写 `w7_*.png`；W6 的 `inspect` 写 `w6_inspect_*.png` | 那是**应用**行为不是测试行为，`.gitignore` 兜着。CI 的第 5 步只查"**测试**有没有往里写" |
 
 ---
 
-## 七、怎么用
+## 八、怎么用
 
 ```powershell
 # 本机：一条命令跑完全部五步
@@ -409,12 +613,28 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1 `
     -QtRoot    'C:/Qt/6.8.3/msvc2022_64'
 ```
 
+依赖准备那三步（第四章新增）：
+
+```powershell
+# 彩排：只验，不下载不安装（≈30 秒）
+powershell -ExecutionPolicy Bypass -File tools/ci-deps.ps1 -VerifyOnly
+
+# 只验 OpenCV 的布局 —— 对着本机那套**模块化**安装
+powershell -ExecutionPolicy Bypass -File tools/ci-deps.ps1 -VerifyOnly `
+    -SkipTesseract -SkipQt -OpenCVRoot 'D:/opencv-src/build/install'
+
+# 真装（会下几个 GB）
+powershell -ExecutionPolicy Bypass -File tools/ci-deps.ps1
+```
+
+⚠ 彩排和真跑**是同一个文件** —— 这正是把它从 YAML 里搬出来的理由。
+
 CI 的构建产物落在 `<仓库>/build/ci/<工程名>/`（`build/` 在 `.gitignore` 里），
 所以第 5 步"源码树没被写脏"这句话仍然成立。
 
 ---
 
-## 八、核实清单
+## 九、核实清单
 
 本文所有数字与输出，均于 2026-10-20 当天在本机实测：
 
@@ -430,9 +650,24 @@ CI 的构建产物落在 `<仓库>/build/ci/<工程名>/`（`build/` 在 `.gitig
 | PowerShell stderr 坑 | 第一次跑的真实报错（`ctest.exe : Errors while running CTest` + 脚本行号）|
 | 「源码树干净」语义写错 | 第二次跑的真实报错（把 13 个未提交改动判成泄漏）|
 
+### 2026-10-22 新增（第四章）
+
+| 论断 | 核实方式 |
+|---|---|
+| 官方 OpenCV 4.13.0 包的**真实布局** | 下载真包（185.5 MB）→ 解包 → 逐个目录 `Test-Path` + 列文件 |
+| 那个包里**没有** `opencv_core4130.*` | `Get-ChildItem -Recurse -Filter 'opencv_core*.lib'/'*.dll'` → 零结果；只有 `opencv_world4130.*` |
+| config 和 import lib **在同一个目录** | `opencv/build/x64/vc16/lib/` 里同时有 `OpenCVConfig.cmake` 和 `opencv_world4130.lib` |
+| 头文件路径仍然对 | 内层 config 用 `../../../` 算回 `opencv/build`，`opencv/build/include/opencv2` 下 297 个 `.hpp` |
+| `msvc2022_64` 不是 aqt 的合法架构名 | `aqt install-qt ... msvc2022_64 --dry-run` → `ERROR: The packages ['qt_base'] were not found` |
+| `win64_msvc2022_64` 是合法的 | 同一命令换成规范名 → `DRY RUN: Would download ... qtbase ...` |
+| tesseract 装到哪 | 下载 choco 的 nupkg，读 `chocolateyinstall.ps1`：`Install-ChocolateyPath $env:ProgramFiles\Tesseract-OCR` |
+| 新脚本吃**两种** OpenCV 形状 | 彩排 A（官方 world 包）与彩排 B（本机模块化安装）都定位到正确的 config/lib/dll |
+| 解压可行 | bsdtar 直接读 SFX（`tar -tf` 能列目录）；7z 也在 runner 镜像上 |
+| `tools/ci-deps.ps1` 是纯 ASCII | 逐字节扫 `> 127` → 0 个 |
+
 ---
 
-## 九、一句话带走
+## 十、一句话带走
 
 > **CI 的第一批产出，通常不是"CI 跑起来了"，而是"CI 第一次跑就挖出了本地测不到的 bug"。**
 >
@@ -443,3 +678,25 @@ CI 的构建产物落在 `<仓库>/build/ci/<工程名>/`（`build/` 在 `.gitig
 >
 > 所以：定位用的判据必须是**只有一处会有**的东西；
 > 构建系统明明知道的路径，就不要让测试去猜。
+
+---
+
+> **补一条（2026-10-22，第四章）：**
+>
+> **"没在真环境上验过"是个结论，不该是个借口。**
+>
+> 欠账挂了很久的那条「CI 三步依赖准备没在真 runner 上验过」，
+> 听着像"缺一个环境"，其实**缺的是证据**。
+> 而证据的绝大部分**根本不需要 runner** —— 需要的是**那个包本身**。
+>
+> 包一下来，三步里当场挖出**三个会让 CI 第一次跑就挂的真 bug**：
+> 一个参数名错、一个库名假设错、一个目录形状假设错。
+>
+> 三个都在"从没执行过的那段代码"里 ——
+> 而那段代码之所以从没被执行过，
+> 是因为它**写在唯一一份没人跑得了的地方**（YAML 里）。
+>
+> 所以先做的那件事不是"修 bug"，是**把那三步搬成一个本机也跑得了的脚本**：
+> 本机验的那份和 runner 跑的那份**是同一个文件**。
+>
+> **证据不会因为环境缺了就少要，只是取证的路换了一条。**
