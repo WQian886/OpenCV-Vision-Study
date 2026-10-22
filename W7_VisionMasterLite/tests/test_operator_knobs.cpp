@@ -794,6 +794,17 @@ struct OperatorSource {
     QStringList collectKeys;      // collect() 写出的 key(面板能设哪些旋钮)
     QVector<LocalConst> localConsts;    // 算子文件里自己定义的常量
     bool runMentionsParams = false;      // run() 里到底碰没碰 params
+    QString runBodyLive;           // 当前构建的 run() 函数体
+    QString runBodyAll;            // 所有分支的 run() 函数体
+    // 读取状态**未知**的旋钮(审计认不出那处读法)—— 见 findUnresolvedReads
+    //
+    // ⚠ 这跟"死旋钮"是**两回事**,不能混:
+    //   死旋钮     = 确认没人读它   → 该改旋钮
+    //   读取状态未知 = 审计认不出   → 该改审计
+    // 混在一起的话,审计会撒谎,而且是"看起来很肯定"地撒谎:
+    // 旋钮明明被读了,审计说它没被读,人会跑去删一个好好着的旋钮。
+    QMap<QString, QString> unresolvedLive;   // key -> 证据(当前构建)
+    QMap<QString, QString> unresolvedAll;    // key -> 证据(所有分支)
 };
 
 // defaultParams() 里登记的 key 与右值表达式
@@ -1008,6 +1019,155 @@ static QSet<QString> parseHelperReads(const QString& body,
     return keys;
 }
 
+// ============================================================
+// 配对括号 —— **跳过字符串字面量**
+// ============================================================
+//
+// 为什么不用 matchBracket():它不认字符串。
+//   run() 里只要有一处字符串里带半个括号(比如 "imread failed: ("),
+//   后面的配对就全错位 —— 错位之后"参数表"取到的就是乱码,
+//   认不出的结论也就建立在乱码上。
+//
+// ⚠ 这不是假想:本仓库的算子里有
+//   output["error"] = "imread failed: " + maskPath;
+//   这种拼接,字符串内容里随时可能出现括号。
+static int matchBracketSkipStr(const QString& s, int open) {
+    int depth = 0;
+    bool inStr = false, inChr = false;
+    for (int i = open; i < s.size(); ++i) {
+        const QChar c = s[i];
+        if (inStr) {
+            if (c == QLatin1Char('\\')) { ++i; continue; }
+            if (c == QLatin1Char('"')) inStr = false;
+            continue;
+        }
+        if (inChr) {
+            if (c == QLatin1Char('\\')) { ++i; continue; }
+            if (c == QLatin1Char('\'')) inChr = false;
+            continue;
+        }
+        if (c == QLatin1Char('"')) { inStr = true; continue; }
+        if (c == QLatin1Char('\'')) { inChr = true; continue; }
+        if (c == QLatin1Char('(')) ++depth;
+        else if (c == QLatin1Char(')')) { --depth; if (depth == 0) return i; }
+    }
+    return -1;
+}
+
+// 取 '(' 之前的"接收者链":params.value / obj.get / fetchInt
+//
+// 为什么要往前看:params 可能是**接收者**而不是参数 ——
+//   params.value("x")  的参数表里只有 "x",看不到 params;
+//   但这次调用确实碰到 params 了,证据比"参数表里有键名"更强。
+static QString callPrefix(const QString& s, int open) {
+    int i = open - 1;
+    while (i >= 0 && s[i].isSpace()) --i;
+    if (i < 0) return {};
+    if (!(s[i].isLetterOrNumber() || s[i] == QLatin1Char('_'))) return {};
+    const int end = i + 1;
+    while (i >= 0 && (s[i].isLetterOrNumber() || s[i] == QLatin1Char('_'))) --i;
+    for (;;) {
+        int j = i;
+        while (j >= 0 && s[j].isSpace()) --j;
+        if (j < 0 || s[j] != QLatin1Char('.')) break;
+        --j;
+        while (j >= 0 && s[j].isSpace()) --j;
+        if (j < 0 || !(s[j].isLetterOrNumber() || s[j] == QLatin1Char('_'))) break;
+        while (j >= 0 && (s[j].isLetterOrNumber() || s[j] == QLatin1Char('_'))) --j;
+        i = j;
+    }
+    return s.mid(i + 1, end - i - 1);
+}
+
+// ============================================================
+// 读取状态**未知**的旋钮 —— 审计认不出那处读法
+// ============================================================
+//
+// 为什么要有它:
+//
+//   用例 1 / 3k 判"死旋钮"的依据是"审计没把这个 key 认成被读过"。
+//   一旦有人写了**新的读取封装**(名字不是 readXxxKnob),
+//   审计就认不出 —— 于是它会把那个 key 判成"死旋钮"。
+//
+//   那是**撒谎**:旋钮明明被读了,审计说它没被读,
+//   会把人引到完全错误的方向(去查旋钮,其实旋钮好着呢)。
+//   第三轮就栽过这一回 —— 28 条假"死旋钮"。
+//
+//   所以每个登记过的旋钮得归到**三档**之一:
+//     ① 确认被读了        → 正常
+//     ② 确认没被读        → 死旋钮,报红
+//     ③ 读取状态**未知**  → 报红,但理由是"审计得升级"
+//
+// 证据怎么找:
+//
+//   run() 里存在一次调用,它的**参数位**上带着这个 key ——
+//   要么是字面量("min_area"),要么是**键名清单常量**(kCoordKeys)。
+//
+//   这正是"自定义封装"的样子:
+//       fetchInt(params, "min_area", 10)
+//       fetchInts(params, kCoordKeys, defaultParams(), &out, &err)
+//
+// ⚠ 宁窄勿宽:
+//   键名必须**整条**落在某个调用的参数位上,才算证据。
+//   qInfo() << "min_area" 这种(日志里提到键名)不算 —— 那不是读。
+//   而且判错的方向是安全的:报出去的是"读取状态未知"而不是"死旋钮",
+//   它把人引去改审计,而不是去删旋钮。
+// ============================================================
+static QMap<QString, QString> findUnresolvedReads(
+        const QString& runBody,
+        const QMap<QString, QStringList>& keyLists,
+        const QSet<QString>& recognized,
+        const QStringList& keysOfInterest) {
+    QMap<QString, QString> out;
+    if (runBody.isEmpty() || keysOfInterest.isEmpty()) return out;
+
+    const QSet<QString> interest(keysOfInterest.begin(), keysOfInterest.end());
+    const QRegularExpression identRe(QStringLiteral("[A-Za-z_][A-Za-z_0-9]*"));
+    const QRegularExpression paramsRe(QStringLiteral("\\bparams\\b"));
+
+    for (int open = 0; open < runBody.size(); ++open) {
+        if (runBody.at(open) != QLatin1Char('(')) continue;
+        const int close = matchBracketSkipStr(runBody, open);
+        if (close < 0) continue;                 // 括号不配对 —— 不当证据
+        const QString argsText = runBody.mid(open + 1, close - open - 1);
+
+        // 这次调用**碰到 params 了吗**?
+        //   碰到 → 强证据(就是"把参数对象传进封装"的样子)
+        //   没碰 → 弱证据(封装从别处拿参数,或者压根不是读)
+        const QString prefix = callPrefix(runBody, open);
+        const bool mentionsParams =
+            argsText.contains(paramsRe) || prefix.contains(paramsRe);
+
+        // 参数位上带出来的键名
+        QSet<QString> keysHere;
+        const QStringList args = splitTopLevelArgs(argsText);
+        for (const QString& arg : args) {
+            // ① 字面量:"min_area"
+            if (arg.length() >= 2 && arg.startsWith(QLatin1Char('"')) &&
+                arg.endsWith(QLatin1Char('"')))
+                keysHere.insert(arg.mid(1, arg.length() - 2));
+            // ② 键名清单常量:kCoordKeys / kCoordKeys.at(i)
+            auto it = identRe.globalMatch(arg);
+            while (it.hasNext()) {
+                const QString id = it.next().captured(0);
+                if (!keyLists.contains(id)) continue;
+                for (const QString& k : keyLists.value(id)) keysHere.insert(k);
+            }
+        }
+
+        for (const QString& k : keysHere) {
+            if (!interest.contains(k)) continue;
+            if (recognized.contains(k)) continue;   // 审计已经认出来了
+            if (out.contains(k)) continue;           // 一条证据够了,别刷屏
+            out.insert(k, mentionsParams
+                ? QString("run() 里那次调用把 params 和它放在了一起"
+                          "(像是新的读取封装),审计认不出那处读法")
+                : QString("run() 里那次调用的参数位上带着它,审计认不出那处读法"));
+        }
+    }
+    return out;
+}
+
 // 读一个文件(定义在下面"找源码目录"那一节)
 static QString readAll(const QString& path, bool* ok);
 
@@ -1194,22 +1354,32 @@ static bool parseOperator(const QString& path, bool hasOnnx, bool hasMvs,
     if (op.opName.isEmpty()) return false;
     parseDefaults(defs.first(), op);
 
-    for (const auto& body : functionBodies(liveSrc, QStringLiteral("run")))
-        op.readsLive.unite(parseReads(body));
-    for (const auto& body : functionBodies(allSrc, QStringLiteral("run")))
-        op.readsAll.unite(parseReads(body));
+    const QStringList liveRuns = functionBodies(liveSrc, QStringLiteral("run"));
+    const QStringList allRuns  = functionBodies(allSrc, QStringLiteral("run"));
+    op.runBodyLive = liveRuns.join(QLatin1Char('\n'));
+    op.runBodyAll  = allRuns.join(QLatin1Char('\n'));
+
+    for (const auto& body : liveRuns) op.readsLive.unite(parseReads(body));
+    for (const auto& body : allRuns)  op.readsAll.unite(parseReads(body));
 
     // 新读法(readIntKnob / readIntKnobs 之类):键名在常量里或字面量里,
     // 上面那套认不出来。认不出就会把 28 个坐标旋钮全判成"死旋钮" —— 那是撒谎。
     const QMap<QString, QStringList> keyLists = parseKeyLists(scanSrc);
-    for (const auto& body : functionBodies(liveSrc, QStringLiteral("run")))
+    for (const auto& body : liveRuns)
         op.readsLive.unite(parseHelperReads(body, keyLists, &op.helperIssues,
                                            &op.helperFallbackIssues, &op.helperFallbacks));
-    for (const auto& body : functionBodies(allSrc, QStringLiteral("run")))
+    for (const auto& body : allRuns)
         op.readsAll.unite(parseHelperReads(body, keyLists, &op.helperIssues,
                                            &op.helperFallbackIssues, &op.helperFallbacks));
     op.helperIssues.removeDuplicates();
     op.helperFallbackIssues.removeDuplicates();
+
+    // 读取状态**未知**的旋钮 —— 必须在 readsLive/readsAll 都算完之后才算:
+    //   "没被认出来"这件事,得拿"审计已经认出的那批"当参照。
+    //
+    // 名单用 declared:用例 1 问的是"登记了却没读"的那些旋钮。
+    op.unresolvedLive = findUnresolvedReads(op.runBodyLive, keyLists,
+                                            op.readsLive, op.declared);
 
     // 兜底读法:**所有分支**都收。
     //
@@ -1239,6 +1409,14 @@ static bool parseOperator(const QString& path, bool hasOnnx, bool hasMvs,
     const QStringList collectBodies = functionBodies(liveSrc, QStringLiteral("collect"));
     if (!collectBodies.isEmpty())
         op.collectKeys = parseCollectKeys(collectBodies.first(), keyLists);
+
+    // 读取状态**未知**(所有分支那一版)——
+    //   名单用 collectKeys:用例 3k 问的是"面板能设的旋钮,run() 读没读"。
+    //   名单为空(这个算子没面板)时退回 declared,别让这条变成空断言。
+    QStringList interest3k = op.collectKeys;
+    if (interest3k.isEmpty()) interest3k = op.declared;
+    op.unresolvedAll = findUnresolvedReads(op.runBodyAll, keyLists,
+                                           op.readsAll, interest3k);
 
     // 算子文件里自己定义的常量(3j 要用)
     op.localConsts = parseLocalConsts(scanSrc);
@@ -1334,10 +1512,13 @@ static void test_no_dead_knobs(const QVector<OperatorSource>& ops) {
         //   碰了而我一个 key 都没认出来 → 那是我瞎了,不是你写错了。
         if (op.runMentionsParams && op.readsAll.isEmpty() && !op.declared.isEmpty()) {
             check(false,
-                  QString("%1: 审计一个旋钮都没认出来,可它的 run() 明明用了 params —— "
+                  QString("%1: 审计一个旋钮都没认出来(认不出的有 %2 个:%3),"
+                          "可它的 run() 明明用了 params —— "
                           "这是**审计认不出这处读法**(不是旋钮死了),"
+                          "这 %2 个旋钮的读取状态全是**未知**,"
                           "得先把审计升级,别去改旋钮")
-                      .arg(op.opName));
+                      .arg(op.opName).arg(op.declared.size())
+                      .arg(op.declared.join(", ")));
             continue;
         }
         // 审计认不出这个算子的某种读法时,**不能**判成"死旋钮" ——
@@ -1358,6 +1539,19 @@ static void test_no_dead_knobs(const QVector<OperatorSource>& ops) {
                 ++exempted;
                 qInfo().noquote() << "  [豁免]" << op.opName << "." << key
                                   << " —— " << ex->reason;
+                continue;
+            }
+            // ⚠ 认不出 ≠ 没读。这条最要紧:
+            //   以前这里只有"死旋钮"和"豁免"两档,中间那档(读取状态未知)
+            //   被悄悄塞进了"死旋钮" —— 于是审计**撒谎**:
+            //   旋钮明明被读了,审计说它没被读,人会去删一个好好着的旋钮。
+            const QString evidence = op.unresolvedLive.value(key);
+            if (!evidence.isEmpty()) {
+                check(false,
+                      QString("%1.%2 的读取状态**未知**:%3 —— "
+                              "这条不能判成死旋钮(那是在撒谎),"
+                              "得先把审计升级成认得这处读法")
+                          .arg(op.opName, key, evidence));
                 continue;
             }
             check(false,
@@ -2128,10 +2322,13 @@ static void test_panel_knobs_are_known(const QVector<OperatorSource>& ops) {
         //   两句互相打架,而**后一句是假的**。
         //   假的那句更危险:它会让人去查旋钮,其实旋钮好着呢。
         if (op.runMentionsParams && op.readsAll.isEmpty() && !op.declared.isEmpty()) {
+            const QStringList blind =
+                op.collectKeys.isEmpty() ? op.declared : op.collectKeys;
             check(false,
-                  QString("%1: 审计一个 key 都没认出来,可它的 run() 明明用了 params —— "
+                  QString("%1: 审计一个 key 都没认出来(认不出的有 %2 个:%3),"
+                          "可它的 run() 明明用了 params —— "
                           "这条不能判成死旋钮,得先把审计升级")
-                      .arg(op.opName));
+                      .arg(op.opName).arg(blind.size()).arg(blind.join(", ")));
             continue;
         }
         for (const QString& key : op.collectKeys) {
@@ -2143,6 +2340,18 @@ static void test_panel_knobs_are_known(const QVector<OperatorSource>& ops) {
                           .arg(op.opName, key));
             }
             if (!op.readsAll.contains(key)) {
+                // ⚠ 和用例 1 同一道护栏:认不出 ≠ 没读。
+                //   少了这一档,这条就会把"审计认不出"说成"死旋钮" ——
+                //   而那句是假的,假的那句更危险。
+                const QString evidence = op.unresolvedAll.value(key);
+                if (!evidence.isEmpty()) {
+                    check(false,
+                          QString("%1 面板 collect() 写出了 %2,但审计认不出 run() "
+                                  "是怎么读它的(%3)—— 读取状态**未知**,"
+                                  "这条不能判成死旋钮,得先把审计升级")
+                              .arg(op.opName, key, evidence));
+                    continue;
+                }
                 check(false,
                       QString("%1 面板 collect() 写出了 %2,但 run() 里没找到读它的地方 —— "
                               "死旋钮:界面上摆着,调了不生效")
@@ -3254,6 +3463,140 @@ static void test_unregistered_knob_is_reported() {
           QString("这条用例一共核了 %1 个分支(要是 0,说明它自己没跑起来)").arg(branches));
 }
 
+// ============================================================
+// 用例 12:「读取状态未知」这个判定本身 —— 该红的红,不该红的没红
+// ============================================================
+//
+// 为什么要有这条:
+//
+//   用例 1 / 3k 判"读取状态未知"靠的是 findUnresolvedReads(),
+//   而 findUnresolvedReads() 是**一条规则** —— 规则写在纸上不算数,
+//   得能回答两个问题:
+//
+//     · 该红的红了吗?  (自定义封装出现时,能不能认出来)
+//     · 不该红的没红吗?(正常读法 / 只是日志里提了一嘴时,会不会误报)
+//
+// ⚠ 这条测的是**合成出来的 run() 体**,不是真算子:
+//   真算子上"自定义封装"这一例现在是**零实例**
+//   (谁也没写这种封装),零实例的规则只能靠变异证明自己活着 ——
+//   那太慢,而且证明的是"变异能被抓到",不是"规则判得对"。
+//   这里直接喂合成输入,把规则的**两条腿**都钉住。
+//
+// ⚠ 为什么不用真算子当样本:
+//   拿真算子当样本,这条就变成了"审计自己审自己" ——
+//   审计认错了,用例也跟着错,两边一起绿。
+// ============================================================
+static void test_unresolved_read_detection() {
+    beginCase("12. 读取状态未知:审计认不出读法时必须点名,正常读法不许误报");
+
+    // 一份假的键名清单(五个测量算子的坐标旋钮就是长这个样)
+    const QMap<QString, QStringList> keyLists = {
+        {"kCoordKeys", {"x1", "y1", "x2", "y2"}}
+    };
+    const QSet<QString> none;
+
+    // ---- ① 自定义封装(带 params):该认出来 ----
+    {
+        const QString body =
+            QStringLiteral("int a = fetchInt(params, \"min_area\", 10);");
+        const auto r = findUnresolvedReads(body, keyLists, none, {"min_area"});
+        check(r.contains("min_area"),
+              "自定义封装 fetchInt(params, \"min_area\", ...) —— "
+              "审计得认出 min_area 的读取状态是**未知**(不能判成死旋钮)");
+        check(r.value("min_area").contains(QLatin1String("params")),
+              QString("证据要点明那次调用带着 params(实际 \"%1\")")
+                  .arg(r.value("min_area")));
+    }
+
+    // ---- ② 自定义封装(不带 params):也得认出来 ----
+    //
+    // 为什么这一支也要:封装完全可能从成员变量里拿参数,
+    // 那时调用参数表里根本没有 params 字样。
+    // 漏掉这一支,审计就又会在"换了个名字"那天开始撒谎。
+    {
+        const QString body =
+            QStringLiteral("int a = knobInt(\"min_area\", 10);");
+        const auto r = findUnresolvedReads(body, keyLists, none, {"min_area"});
+        check(r.contains("min_area"),
+              "自定义封装 knobInt(\"min_area\", ...)(不带 params)—— "
+              "也得认出读取状态是**未知**");
+    }
+
+    // ---- ③ 经**键名清单**带进来:清单里的每个 key 都得认出来 ----
+    {
+        const QString body = QStringLiteral(
+            "readInts(params, kCoordKeys, defaults, &out, &err);");
+        const auto r = findUnresolvedReads(body, keyLists, none,
+                                           {"x1", "y1", "x2", "y2"});
+        check(r.size() == 4,
+              QString("自定义封装一次带进 4 个坐标旋钮 —— 4 个都得认出来"
+                      "(实际认出 %1 个)").arg(r.size()));
+        bool all = true;
+        for (const char* k : {"x1", "y1", "x2", "y2"})
+            if (!r.contains(QString::fromLatin1(k))) all = false;
+        check(all, "x1/y1/x2/y2 一个都不落 —— 少认一个,那个就会漏成死旋钮");
+    }
+
+    // ---- ④ 正常读法:审计已经认出来了,不许再报"未知" ----
+    {
+        const QString body = QStringLiteral(
+            "int a = params.value(\"min_area\").toInt(10);");
+        const QSet<QString> recognized = {"min_area"};
+        const auto r = findUnresolvedReads(body, keyLists, recognized, {"min_area"});
+        check(r.isEmpty(),
+              QString("正常读法 params.value(\"min_area\") —— 不该报\"读取状态未知\""
+                      "(实际报了 %1 条)").arg(r.size()));
+    }
+
+    // ---- ⑤ 只是日志里提了一嘴:那不是读 ----
+    //
+    // 这一支是"不该红的没红"的正主:
+    //   键名出现在语句里 ≠ 键名被读。
+    //   把它算成"读法认不出",等于把"日志"当成"读" ——
+    //   守卫会变得很吵,下一个人就会把它关掉。
+    {
+        const QString body = QStringLiteral(
+            "qInfo() << \"min_area\" << \"should be positive\";");
+        const auto r = findUnresolvedReads(body, keyLists, none, {"min_area"});
+        check(r.isEmpty(),
+              QString("日志里提到键名 —— 那不是读,不该报\"读取状态未知\""
+                      "(实际报了 %1 条)").arg(r.size()));
+    }
+
+    // ---- ⑥ 不在名单里的键:不归我管 ----
+    {
+        const QString body =
+            QStringLiteral("int a = fetchInt(params, \"other_key\", 10);");
+        const auto r = findUnresolvedReads(body, keyLists, none, {"min_area"});
+        check(r.isEmpty(),
+              QString("名单外的键不归这条管(实际报了 %1 条)").arg(r.size()));
+    }
+
+    // ---- ⑦ 同一个键出现多次:只留一条证据 ----
+    {
+        const QString body = QStringLiteral(
+            "int a = fetchInt(params, \"min_area\", 1);"
+            "int b = fetchInt(params, \"min_area\", 2);");
+        const auto r = findUnresolvedReads(body, keyLists, none, {"min_area"});
+        check(r.size() == 1,
+              QString("同一个键别刷屏,一条证据就够(实际 %1 条)").arg(r.size()));
+    }
+
+    // ---- ⑧ 空壳:什么都读不出来时,不能凭空说"未知" ----
+    {
+        const auto r = findUnresolvedReads(QString(), keyLists, none, {"min_area"});
+        check(r.isEmpty(), "空的 run() 体 —— 不该报\"读取状态未知\"");
+    }
+
+    // ---- ⑨ 括号不配对:不当证据(宁可漏认,不能瞎猜) ----
+    {
+        const QString body = QStringLiteral("int a = fetchInt(params, \"min_area\";");
+        const auto r = findUnresolvedReads(body, keyLists, none, {"min_area"});
+        check(r.isEmpty(),
+              QString("括号不配对的调用 —— 不当证据(实际报了 %1 条)").arg(r.size()));
+    }
+}
+
 static void makeProbeImages(QString& maskPath, QString& imgPath) {
     QDir().mkpath("images");
 
@@ -3335,6 +3678,7 @@ int main(int argc, char* argv[]) {
     test_knob_type_mismatch_is_reported(maskPath, imgPath, boardPath);
     test_panel_greys_dead_knobs();
     test_unregistered_knob_is_reported();
+    test_unresolved_read_detection();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;
