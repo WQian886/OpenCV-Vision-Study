@@ -553,6 +553,113 @@ static QStringList parseCollectKeys(const QString& body,
 }
 
 // ============================================================
+// 面板初值:buildUI() 里"界面上初值那份"的表达式
+// ============================================================
+//
+// 三个形状(别的形状不是旋钮的**值**,不管):
+//   ① setValue(EXPR)        —— 数值型旋钮的初值
+//   ② new QLineEdit(EXPR)   —— 文本型旋钮的初值
+//   ③ addItem(标签, EXPR)   —— 下拉框的**值**(第 2 个参数)
+//
+// ⚠ ③ 为什么不收第 1 个参数:那是给人看的标签("YOLOv8 (1, 4+类别数, N)"),
+//   写错了顶多难看,不会让算子跑错 —— 而第 2 个参数(userData)是**值**,
+//   写错了就是"面板上摆的和算子跑的不是一回事"。
+// ⚠ 为什么不收 setText(EXPR):那是在**读回**已存的参数(setParams 里),
+//   归 3g 管;buildUI 里的 setText 只有提示文字,不是旋钮的值。
+// ⚠ 为什么不收 setRange / setSingleStep / setDecimals:那些是**量程**,不是值。
+// ⚠ 为什么不收 setPlaceholderText:那是**例子**,不是初值
+//   (dl_infer 的 model_path 初值是空的,placeholder 只是提示)。
+// ============================================================
+struct PanelInitial {
+    QString where;   // 这个初值在面板上的位置(给人看的)
+    QString expr;    // 表达式原文
+};
+
+// 顶层逗号切分(括号/引号里的逗号不算)
+static QStringList splitTopLevelArgs(const QString& args) {
+    QStringList out;
+    int depth = 0;
+    bool inStr = false;
+    QChar quote;
+    int start = 0;
+    for (int i = 0; i < args.size(); ++i) {
+        const QChar c = args.at(i);
+        if (inStr) {
+            if (c == quote) inStr = false;
+            continue;
+        }
+        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) { inStr = true; quote = c; continue; }
+        if (c == QLatin1Char('(') || c == QLatin1Char('[') || c == QLatin1Char('{')) { ++depth; continue; }
+        if (c == QLatin1Char(')') || c == QLatin1Char(']') || c == QLatin1Char('}')) { --depth; continue; }
+        if (c == QLatin1Char(',') && depth == 0) {
+            out << args.mid(start, i - start).trimmed();
+            start = i + 1;
+        }
+    }
+    const QString tail = args.mid(start).trimmed();
+    if (!tail.isEmpty() || !out.isEmpty()) out << tail;
+    return out;
+}
+
+static QVector<PanelInitial> parsePanelInitials(const QString& body) {
+    QVector<PanelInitial> out;
+
+    // ① setValue(EXPR)
+    {
+        const QRegularExpression re(QStringLiteral("\\bsetValue\\s*\\("));
+        auto it = re.globalMatch(body);
+        while (it.hasNext()) {
+            const auto m = it.next();
+            const int open = m.capturedEnd() - 1;
+            const int close = matchBracket(body, open, QLatin1Char('('), QLatin1Char(')'));
+            if (close < 0) continue;
+            PanelInitial pi;
+            pi.where = QStringLiteral("面板初值 setValue");
+            pi.expr = body.mid(open + 1, close - open - 1).trimmed();
+            if (!pi.expr.isEmpty()) out.append(pi);
+        }
+    }
+
+    // ② new QLineEdit(EXPR)
+    {
+        const QRegularExpression re(QStringLiteral("\\bnew\\s+QLineEdit\\s*\\("));
+        auto it = re.globalMatch(body);
+        while (it.hasNext()) {
+            const auto m = it.next();
+            const int open = m.capturedEnd() - 1;
+            const int close = matchBracket(body, open, QLatin1Char('('), QLatin1Char(')'));
+            if (close < 0) continue;
+            const QStringList args = splitTopLevelArgs(body.mid(open + 1, close - open - 1));
+            if (args.isEmpty()) continue;      // new QLineEdit() —— 没有初值
+            PanelInitial pi;
+            pi.where = QStringLiteral("面板初值 new QLineEdit");
+            pi.expr = args.first();
+            if (!pi.expr.isEmpty()) out.append(pi);
+        }
+    }
+
+    // ③ addItem(标签, 值) —— 只取第 2 个参数
+    {
+        const QRegularExpression re(QStringLiteral("\\baddItem\\s*\\("));
+        auto it = re.globalMatch(body);
+        while (it.hasNext()) {
+            const auto m = it.next();
+            const int open = m.capturedEnd() - 1;
+            const int close = matchBracket(body, open, QLatin1Char('('), QLatin1Char(')'));
+            if (close < 0) continue;
+            const QStringList args = splitTopLevelArgs(body.mid(open + 1, close - open - 1));
+            if (args.size() < 2) continue;
+            PanelInitial pi;
+            pi.where = QStringLiteral("面板初值 addItem 的值");
+            pi.expr = args.at(1);
+            if (!pi.expr.isEmpty()) out.append(pi);
+        }
+    }
+
+    return out;
+}
+
+// ============================================================
 // 算子文件里自己定义的常量
 // ============================================================
 //
@@ -679,6 +786,7 @@ struct OperatorSource {
     QVector<FallbackRead> helperFallbacks;  // 新读法(readXxxKnob)里的兜底
     QString buildUi;              // buildUI() 的函数体(没有面板就空)
     QStringList setValueArgs;     // buildUI() 里每个 setValue(...) 的参数
+    QVector<PanelInitial> panelInitials;   // buildUI() 里的"面板初值"表达式(第四处位置)
     QStringList helperIssues;     // 审计**认不出来**的地方(见 parseHelperReads)
     QStringList helperFallbackIssues;  // 新读法的兜底**抄了第二份**(不是认不出)
     QString setParamsBody;        // setParams() 的函数体(没有面板就空)
@@ -1117,6 +1225,8 @@ static bool parseOperator(const QString& path, bool hasOnnx, bool hasMvs,
     if (!uiBodies.isEmpty()) {
         op.buildUi = uiBodies.first();
         op.setValueArgs = parseSetValueArgs(op.buildUi);
+        // 面板初值的**全部**形状(3j 的第四处位置要用)
+        op.panelInitials = parsePanelInitials(op.buildUi);
     }
     // 面板把存盘里的值读回控件时用的那一档兜底(setParams)
     const QStringList spBodies = functionBodies(liveSrc, QStringLiteral("setParams"));
@@ -1817,9 +1927,24 @@ static void test_fallbacks_not_copied_from_library(const QVector<OperatorSource>
 //   只盯前两处的话,`params.value("x").toString(kLocalConst)`
 //   会同时躲过 3d(只查裸字面量)和 3h(只查 `cv::` 前缀) ——
 //   两条规则都看不见一个**标识符**。
+//
+// ⚠ **第七轮补上第四处:面板初值**(欠账 14)。
+//   同一个默认值在代码里有**四个**位置能出现:
+//     ① 声明      defaultParams() 的右值
+//     ② 面板读回  setParams() 里把存盘的值读回控件时的兜底
+//     ③ run 兜底  run() 里参数缺失时的兜底
+//     ④ 面板初值  buildUI() 里控件开箱时的值
+//   前三处盯了,第四处当时是空的 ——
+//   于是 `constexpr int kMinArea = 20;` + `m_minArea->setValue(kMinArea);`
+//   这种写法,3e(只查 setValue 的**裸数字**)看不见、3j(当时没看第四处)也看不见。
+//
+//   第四处比前三处更容易漏,因为它有两种形状:
+//     数值型:setValue(EXPR)
+//     文本型:new QLineEdit(EXPR) ← **压根不是 setValue**
+//   3e 连看都不看后者。
 // ============================================================
 static void test_defaults_not_from_local_consts(const QVector<OperatorSource>& ops) {
-    beginCase("3j. 旋钮默认值不许来自算子文件自己定义的常量");
+    beginCase("3j. 旋钮默认值不许来自算子文件自己定义的常量(含第四处:面板初值)");
 
     if (ops.isEmpty()) {
         check(false, "没扫到任何算子 —— 这条审计等于没跑(恒真的空断言)");
@@ -1827,11 +1952,17 @@ static void test_defaults_not_from_local_consts(const QVector<OperatorSource>& o
     }
 
     int scanned = 0;   // 扫到本地常量的算子数
-    int used    = 0;   // 本地常量被当成旋钮默认值用的处数
+    int used    = 0;   // 本地常量被当成旋钮默认值用的处数(前三处)
+    int panelChecked = 0;  // 第四处:一共核过多少个面板初值
+    int panelUsed = 0;     // 第四处:本地常量被当成面板初值用的处数
 
     for (const auto& op : ops) {
         if (op.localConsts.isEmpty()) continue;
         ++scanned;
+        // 第四处"核过"的计数:只有**有本地常量**的算子才需要查
+        //   (没本地常量就不可能用到本地常量)——
+        //   所以计数放在这个 continue 之后,数字才诚实。
+        panelChecked += op.panelInitials.size();
 
         const QString own = ownDefaultsStructName(QFileInfo(op.file).completeBaseName());
 
@@ -1872,8 +2003,18 @@ static void test_defaults_not_from_local_consts(const QVector<OperatorSource>& o
                 keys  << fb.key;
                 where << QStringLiteral("run()");
             }
-            if (keys.isEmpty()) continue;   // 它压根不是旋钮默认值 → 放行
+            // ④ 面板初值 —— 欠账 14 补上的第四处。
+            //   这一处没有"旋钮 key"可写(面板初值和旋钮 key 不是语法上的对应),
+            //   所以单独记一份"位置 + 表达式"。
+            QVector<PanelInitial> panelUses;
+            for (const auto& pi : op.panelInitials) {
+                if (pi.expr.isEmpty()) continue;
+                if (!useRe.match(pi.expr).hasMatch()) continue;
+                panelUses.append(pi);
+            }
+            if (keys.isEmpty() && panelUses.isEmpty()) continue;  // 它压根不是旋钮默认值 → 放行
             used += keys.size();
+            panelUsed += panelUses.size();
 
             // 这个常量的值是哪来的?
             //   ① 值是字面量              → 手抄的默认值      → 红
@@ -1911,6 +2052,24 @@ static void test_defaults_not_from_local_consts(const QVector<OperatorSource>& o
                               .arg(op.opName, keys.at(i), where.at(i), lc.name, lc.init));
                 }
             }
+            // ④ 面板初值那一处 —— 措辞跟前三处分开:
+            //   面板初值没有"旋钮 key"可写,说成"面板初值 setValue(kXxx)"更准。
+            for (const auto& pu : panelUses) {
+                if (!foreign.isEmpty()) {
+                    check(false,
+                          QString("%1 的%2(%3)用的是算子文件里自己定义的常量 %4,"
+                                  "而它指向的是**别的算子**的 %5 —— "
+                                  "旋钮的默认值只能来自**本算子**的 Defaults")
+                              .arg(op.opName, pu.where, pu.expr, lc.name, foreign));
+                } else {
+                    check(false,
+                          QString("%1 的%2(%3)用的是算子文件里自己定义的常量 %4"
+                                  "(它的值是字面量 %5)—— "
+                                  "旋钮的默认值只能来自 operator_defaults.h,"
+                                  "这里就是**第二份**")
+                              .arg(op.opName, pu.where, pu.expr, lc.name, lc.init));
+                }
+            }
         }
     }
     check(scanned > 0,
@@ -1920,6 +2079,17 @@ static void test_defaults_not_from_local_consts(const QVector<OperatorSource>& o
           QString("本地常量在 %1 处被当成了旋钮默认值(要是 0,说明这条规则盯着的地方"
                   "已经搬家了 —— 按第四轮的教训,得把它**搬家**,不是删掉)")
               .arg(used));
+    // 第四处自己的护栏(欠账 14):
+    //   这一侧现在**一个违规都没有**(实测:所有面板初值都指向
+    //   operator_defaults.h 或共享核心),所以这条规则天然是"零实例"的 ——
+    //   那就更要说清楚它**确实在看**东西,否则它和一条空断言没区别。
+    check(panelChecked > 0,
+          QString("第四处(面板初值)一共核过了 %1 个初值表达式(要是 0,说明解析器"
+                  "没认出 buildUI 的初值形状,这条就成了恒真的空断言)")
+              .arg(panelChecked));
+    check(panelUsed >= 0,
+          QString("第四处(面板初值)发现 %1 处本地常量当默认值(现在预期是 0 —— "
+                  "所有面板初值都指向唯一来源)").arg(panelUsed));
 }
 
 // ============================================================
