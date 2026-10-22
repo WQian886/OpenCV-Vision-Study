@@ -66,14 +66,23 @@
 // ============================================================
 
 #include <QCoreApplication>
+#include <QApplication>
+#include <QComboBox>
 #include <QDebug>
 #include <QDir>
+#include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileInfo>
+#include <QFormLayout>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMap>
+#include <QPushButton>
 #include <QRegularExpression>
 #include <QSet>
+#include <QSpinBox>
 #include <QStringList>
 #include <QVector>
 
@@ -82,6 +91,7 @@
 #include "dl_infer.h"
 #include "image_source_camera.h"
 #include "param_read.h"   // KnobKind —— 用例 9 要按旋钮类型分别取"坏值"
+#include "param_form.h"   // 用例 10 要用真面板(ParamForm 是 QWidget 子类)
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -954,6 +964,16 @@ static bool runtimeAvailableFor(const QString& opName) {
     return true;   // 其它算子没有外部运行时
 }
 
+// 运行时缺失时给用户看的原因(和面板上写的是同一句话)
+// 找不到这个算子 → 返回空串(表示"没有缺失原因"这件事)
+static QString runtimeReasonFor(const QString& opName) {
+    if (opName == QLatin1String("dl_infer"))
+        return DlInfer::runtimeUnavailableReason();
+    if (opName == QLatin1String("image_source_camera"))
+        return ImageSourceCamera::runtimeUnavailableReason();
+    return {};
+}
+
 static const Exemption* findExemption(const QString& opName, const QString& key) {
     for (const auto& e : kExemptions) {
         if (opName != QLatin1String(e.opName)) continue;
@@ -967,6 +987,54 @@ static const Exemption* findExemptionForOp(const QString& opName) {
         if (opName == QLatin1String(e.opName)) return &e;
     return nullptr;
 }
+
+// ============================================================
+// 面板置灰登记表
+// ============================================================
+//
+// 语义:某个算子的外部运行时缺失时,面板上
+//   · 哪些输入控件必须被置灰(setEnabled(false))
+//   · 哪些必须保持可编辑
+//
+// 为什么单独一张表,不并进豁免清单:
+//   两个清单的**判据不同**,并在一起会看错。
+//
+//   豁免清单 kExemptions = "当前构建里**读不到**这个旋钮"
+//     (读它的那段代码在没编进来的分支里)
+//   本表              = "当前构建里**调了不生效**"
+//
+// 两者有交集,但不完全一样:
+//   dl_infer 的 6 个旋钮:读不到 → 也要置灰 → 两边都涉及
+//   image_source_camera 的 3 个旋钮:**读到了**(在 #ifdef 之前读),
+//     读出来是为了区分"参数配坏了"和"SDK 没装"两种病因,
+//     但读到的值确实没被用到 → 要置灰,却不该进豁免清单
+//     (进了豁免清单,用例 1 就不会再查它们到底读没读 —— 白白放松一道守卫)
+//
+// 所以本表只登记"豁免清单管不着的那部分",避免同一份定义写两遍:
+//   期望置灰集合 = 豁免清单里该算子的 key ∪ 本表的 deadExtraKeys
+//
+// ⚠ 本表是**测试这边的登记**,不是代码里的声明。
+//   代码那边的表现是 buildUI() 里的 setEnabled(false);
+//   审计靠"真面板的实际状态 vs 这张表"来验(用例 10)。
+// ============================================================
+struct GreyRule {
+    const char* opName;
+    // 读了也没用的旋钮(豁免清单管不着的那部分)
+    QStringList deadExtraKeys;
+    // 运行时缺失时**仍然保持可编辑**的旋钮
+    QStringList keptKeys;
+};
+
+static const GreyRule kGreyRules[] = {
+    // dl_infer:model_path **不置灰** ——
+    //   空实现里它真的被读(用来区分"路径写错了"和"SDK 没装"两种病因),
+    //   用户改它是有用的:改了之后报错信息就变。置灰它等于
+    //   "连诊断都不让用户参与"。
+    {"dl_infer", {}, {"model_path"}},
+    // image_source_camera:三个旋钮全置灰 ——
+    //   没装 MVS SDK 时整个算子是空实现,曝光/触发模式一个都不生效。
+    {"image_source_camera", {"camera_ip", "exposure", "trigger_mode"}, {}},
+};
 
 // ============================================================
 // 找源码目录
@@ -2537,8 +2605,339 @@ static void test_knob_type_mismatch_is_reported(const QString& maskPath,
 }
 
 // ============================================================
-// 造测试素材
+// 用例 10:面板置灰 —— 运行时缺失时,"调了不生效"的旋钮必须置灰
 // ============================================================
+//
+// 前面 9 个用例查的都是"代码里有没有把旋钮接上"。
+// 这条查的是**界面上那个控件的状态** —— 用户到底能不能点它。
+//
+// 为什么值得单独查:
+//   "旋钮在代码里读到了" ≠ "用户在面板上能调它"。
+//   运行时缺失时,有些旋钮摆在那儿还能改,改完存进流水线,
+//   跑起来一点用没有 —— 用户以为配好了,其实配的是空气。
+//   这正是本项目最忌讳的那种"骗人旋钮"。
+//
+// 怎么测才不作弊:
+//   · 期望值来自**测试这边的登记表**(kGreyRules + 豁免清单),
+//     不来自被测代码;
+//   · 观测值来自**真造出来的面板**(QWidget 的 isEnabled()),
+//     不是从源码里 grep "setEnabled(false)" ——
+//     grep 只能证明代码里写了那句话,证明不了那句话落在哪个控件上;
+//   · 控件和旋钮 key 的对应关系靠**行为**定:改控件的值,
+//     看 collect() 里哪个 key 跟着变。靠名字猜是另一种作弊。
+//
+// ------------------------------------------------------------
+// ⚠ 为什么这条以前写着"没法自动测"
+// ------------------------------------------------------------
+// 笔记里原来记的是"面板置灰要真窗口,只能靠人看"。
+// 那是**误判**:Qt 的 offscreen 平台插件可以在没有屏幕的机器上
+// 造出真的 QWidget —— 本仓库另外 5 个套件早就在这么干了
+// (undo_redo / step_result / run_policy / image_sources / pcb_operators)。
+//
+// 写"没法测"之前该先问一遍:这条证据真的只有在有屏幕时才拿得到吗?
+// 多数时候答案是否定的。**"没法测"和"没测"是两回事 ——
+// 前者是个结论,后者是还没干活。
+// ============================================================
+
+// 抓 collect() 的结果:点"应用参数"按钮,valueChanged 会把
+// collect() 的内容发出来 —— 于是不用碰 protected 的 collect(),
+// 也能拿到"面板现在认为这些旋钮是什么值"。
+//
+// ⚠ 继承 QObject 是有原因的,不是多余的:
+//   connect(发信人, &ParamForm::valueChanged, 上下文, lambda)
+//   这个重载要求"上下文"是个 QObject —— 探针不是 QObject 的话,
+//   编译期就挑不出这个重载(会掉进 const char* 那个,然后报
+//   "无法把信号指针转成 const char*")。
+//   顺带好处:探针一析构,连接自动断开,不会碰到野指针。
+class PanelProbe : public QObject {
+public:
+    PanelProbe(ParamForm* form, QPushButton* apply)
+        : m_form(form), m_apply(apply) {
+        QObject::connect(form, &ParamForm::valueChanged, this,
+                         [this](const QJsonObject& o) { m_last = o; m_got = true; });
+    }
+    bool collectNow(QJsonObject* out) {
+        m_got = false;
+        if (!m_apply) return false;
+        m_apply->click();
+        if (!m_got) return false;
+        *out = m_last;
+        return true;
+    }
+private:
+    ParamForm*     m_form = nullptr;
+    QPushButton*   m_apply = nullptr;
+    QJsonObject    m_last;
+    bool           m_got = false;
+};
+
+// 改一个控件的值,改成**别的**值 —— 目的是让 collect() 看得出变化。
+// 返回 false = 这个控件改不动(认不出的类型,或者只有一个候选值)。
+static bool perturbKnob(QWidget* w, int token) {
+    if (auto* le = qobject_cast<QLineEdit*>(w)) {
+        le->setText(QStringLiteral("W7_PROBE_%1").arg(token));
+        return true;
+    }
+    if (auto* sb = qobject_cast<QSpinBox*>(w)) {
+        const int v = sb->value();
+        sb->setValue(v != sb->minimum() ? sb->minimum() : sb->maximum());
+        return sb->value() != v;
+    }
+    if (auto* dsb = qobject_cast<QDoubleSpinBox*>(w)) {
+        const double v = dsb->value();
+        dsb->setValue(v != dsb->minimum() ? dsb->minimum() : dsb->maximum());
+        return dsb->value() != v;
+    }
+    if (auto* cb = qobject_cast<QComboBox*>(w)) {
+        if (cb->count() < 2) return false;
+        cb->setCurrentIndex((cb->currentIndex() + 1) % cb->count());
+        return true;
+    }
+    return false;
+}
+
+// 两个 JSON 对象之间,哪些 key 的值不一样
+static QStringList changedKeys(const QJsonObject& a, const QJsonObject& b) {
+    QStringList out;
+    for (auto it = a.begin(); it != a.end(); ++it) {
+        if (!b.contains(it.key()) || a.value(it.key()) != b.value(it.key()))
+            out << it.key();
+    }
+    for (auto it = b.begin(); it != b.end(); ++it)
+        if (!a.contains(it.key())) out << it.key();
+    return out;
+}
+
+static void test_panel_greys_dead_knobs() {
+    beginCase("10. 面板置灰:运行时缺失时,调了不生效的旋钮必须置灰 + 写明原因");
+
+    // ---- 护栏 0:这张表不能是空的(否则整条用例恒真) ----
+    check(int(sizeof(kGreyRules) / sizeof(kGreyRules[0])) > 0,
+          "面板置灰登记表非空(这条用例不是空转)");
+
+    // ---- 两份清单互相核对 ----
+    // 豁免清单里出现的算子,必须在置灰登记表里 ——
+    // 否则那些"当前构建读不到"的旋钮就会留在"能调"的状态:骗人。
+    for (const auto& e : kExemptions) {
+        const QString opName = QString::fromUtf8(e.opName);
+        bool found = false;
+        for (const auto& r : kGreyRules)
+            if (opName == QLatin1String(r.opName)) { found = true; break; }
+        check(found,
+              QString("%1 在豁免清单里(有读不到的旋钮) → 也必须在面板置灰登记表里,"
+                      "否则那些旋钮摆在那儿还能调").arg(opName));
+    }
+
+    int panelsBuilt  = 0;   // 造出来的真面板数
+    int controlsFound = 0;  // 认出来的输入控件数
+    int keysMapped   = 0;   // 成功对上 key 的控件数
+
+    for (const auto& rule : kGreyRules) {
+        const QString opName = QString::fromUtf8(rule.opName);
+
+        // ---- 期望集合(来自登记表,不来自被测代码) ----
+        QStringList deadKeys;                       // 运行时缺失时必须置灰
+        QStringList keptKeys = rule.keptKeys;       // 必须保持可编辑
+        if (const Exemption* e = findExemptionForOp(opName))
+            deadKeys = e->keys;                     // 读不到的那部分:引用豁免清单,不抄副本
+        deadKeys += rule.deadExtraKeys;             // 读了也没用的那部分
+
+        // 护栏:两份清单不许打架
+        for (const QString& k : keptKeys)
+            check(!deadKeys.contains(k),
+                  QString("%1 的 %2 不许同时出现在\"该置灰\"和\"该可编辑\"两份清单里")
+                      .arg(opName, k));
+
+        OperatorBase* op = createOperatorByName(opName);
+        if (!op) {
+            check(false, QString("%1 造不出来(createOperatorByName 返回空)").arg(opName));
+            continue;
+        }
+        const bool runtimeOk = runtimeAvailableFor(opName);
+
+        // ---- 造一个真面板 ----
+        QWidget host;
+        QWidget* rawForm = op->createParamWidget(&host, op->defaultParams());
+        check(rawForm != nullptr, QString("%1 造得出参数面板").arg(opName));
+        if (!rawForm) { delete op; continue; }
+        auto* form = qobject_cast<ParamForm*>(rawForm);
+        check(form != nullptr,
+              QString("%1 的面板是 ParamForm(审计认不出这处读法)").arg(opName));
+        if (!form) { delete op; continue; }
+        ++panelsBuilt;
+
+        // ---- 找表单布局:面板上的输入控件按"表单的行"来数 ----
+        QFormLayout* fl = form->findChild<QFormLayout*>();
+        check(fl != nullptr, QString("%1 的面板里有表单布局").arg(opName));
+        if (!fl) { delete op; continue; }
+
+        // ---- 找"应用参数"按钮:它是 collect() 的唯一出口 ----
+        const auto btns = form->findChildren<QPushButton*>();
+        check(btns.size() == 1,
+              QString("%1 的面板上只有 1 个按钮(应用参数),实际 %2 个")
+                  .arg(opName).arg(btns.size()));
+        QPushButton* apply = btns.isEmpty() ? nullptr : btns.first();
+        if (!apply) { delete op; continue; }
+
+        // ---- 枚举输入控件 ----
+        //
+        // ⚠ QFormLayout 没有 fieldWidget()/labelWidget() 这两个方法
+        //   (查过 Qt 6.8 的 qformlayout.h:只有 itemAt(row, role)),
+        //   所以按角色取:FieldRole = 输入列,SpanningRole = 横跨两列。
+        //   提示文字(addRow(QLabel*))落在哪个角色里两种 Qt 行为都见过,
+        //   两个都看一遍最稳。
+        QVector<QWidget*> inputs;
+        int unknownTypes = 0;
+        for (int i = 0; i < fl->rowCount(); ++i) {
+            QWidget* rowWidgets[2] = {nullptr, nullptr};
+            if (QLayoutItem* it = fl->itemAt(i, QFormLayout::FieldRole))
+                rowWidgets[0] = it->widget();
+            if (QLayoutItem* it = fl->itemAt(i, QFormLayout::SpanningRole))
+                rowWidgets[1] = it->widget();
+            for (QWidget* f : rowWidgets) {
+                if (!f) continue;
+                if (qobject_cast<QLabel*>(f)) continue;   // 提示文字,不是输入控件
+                // 上下限一样的 spin box 是"只读显示",不是可调旋钮
+                if (auto* sb = qobject_cast<QSpinBox*>(f)) {
+                    if (sb->minimum() == sb->maximum()) continue;
+                }
+                if (auto* dsb = qobject_cast<QDoubleSpinBox*>(f)) {
+                    if (dsb->minimum() == dsb->maximum()) continue;
+                }
+                if (qobject_cast<QLineEdit*>(f) || qobject_cast<QSpinBox*>(f) ||
+                    qobject_cast<QDoubleSpinBox*>(f) || qobject_cast<QComboBox*>(f)) {
+                    inputs.append(f);
+                } else {
+                    ++unknownTypes;
+                }
+            }
+        }
+        check(unknownTypes == 0,
+              QString("%1 的面板上没有审计认不出的控件类型(实际 %2 个认不出)")
+                  .arg(opName).arg(unknownTypes));
+        controlsFound += inputs.size();
+
+        // ---- 控件 ↔ key 的映射:靠行为,不靠名字 ----
+        PanelProbe probe(form, apply);
+        QJsonObject base;
+        const bool gotBase = probe.collectNow(&base);
+        check(gotBase,
+              QString("%1 的面板点\"应用参数\"能拿到 collect() 的结果").arg(opName));
+        if (!gotBase || base.isEmpty()) {
+            check(false, QString("%1 的 collect() 返回空 —— 审计认不出这处读法,"
+                                 "不是旋钮死了").arg(opName));
+            delete op; continue;
+        }
+
+        QMap<QString, QWidget*> keyToWidget;
+        int token = 0;
+        for (QWidget* w : inputs) {
+            QJsonObject before;
+            if (!probe.collectNow(&before)) {
+                check(false, QString("%1 的面板中途取不到 collect() 的结果").arg(opName));
+                break;
+            }
+            ++token;
+            const bool changed = perturbKnob(w, token);
+            check(changed,
+                  QString("%1 的面板上每个输入控件都必须改得动(改不动 = 审计认不出"
+                          "它是什么旋钮,不是旋钮死了)").arg(opName));
+            if (!changed) continue;
+            QJsonObject after;
+            if (!probe.collectNow(&after)) {
+                check(false, QString("%1 的面板中途取不到 collect() 的结果").arg(opName));
+                break;
+            }
+            const QStringList diff = changedKeys(before, after);
+            if (diff.size() != 1) {
+                check(false,
+                      QString("%1 的某个控件改动后 collect() 变了 %2 个 key(期望恰好 1 个) —— "
+                              "要么这个控件不写参数(白摆的旋钮),要么两个控件写同一个 key")
+                          .arg(opName).arg(diff.size()));
+                continue;
+            }
+            const QString key = diff.first();
+            if (keyToWidget.contains(key)) {
+                check(false,
+                      QString("%1 的两个控件都写 %2 —— 面板上摆了个重复旋钮")
+                          .arg(opName, key));
+                continue;
+            }
+            keyToWidget.insert(key, w);
+            ++keysMapped;
+        }
+
+        // ---- 面板上的旋钮集合 == 登记表登记的集合 ----
+        const QStringList allExpected = deadKeys + keptKeys;
+        for (auto it = keyToWidget.constBegin(); it != keyToWidget.constEnd(); ++it) {
+            if (!allExpected.contains(it.key()))
+                check(false,
+                      QString("%1 的面板上有个没登记的旋钮 %2 —— 登记表里没有它,"
+                              "请补登记(它该置灰还是该可编辑?现在没人管它)")
+                          .arg(opName, it.key()));
+        }
+        for (const QString& k : allExpected) {
+            if (!keyToWidget.contains(k))
+                check(false,
+                      QString("%1 的登记表里有 %2,但面板上找不到对应的控件 —— "
+                              "要么控件被删了,要么登记写错了").arg(opName, k));
+        }
+
+        // ---- 置灰状态:期望 vs 实际 ----
+        for (const QString& k : deadKeys) {
+            QWidget* w = keyToWidget.value(k);
+            if (!w) continue;   // 上面已经报过"面板上找不到"
+            if (runtimeOk) {
+                check(w->isEnabled(),
+                      QString("%1 的 %2:运行时可用 → 必须能编辑").arg(opName, k));
+            } else {
+                check(!w->isEnabled(),
+                      QString("%1 的 %2:运行时缺失 → 这个旋钮调了不生效,必须置灰"
+                              "(实际:%3)").arg(opName, k,
+                                              w->isEnabled() ? "还能编辑" : "已置灰"));
+            }
+        }
+        for (const QString& k : keptKeys) {
+            QWidget* w = keyToWidget.value(k);
+            if (!w) continue;
+            check(w->isEnabled(),
+                  QString("%1 的 %2:运行时缺失也必须能编辑(它真的被读,改了有用)")
+                      .arg(opName, k));
+        }
+
+        // ---- 置灰了要说清为什么 ----
+        const QString reason = runtimeReasonFor(opName);
+        bool hintFound = false;
+        bool warnFound = false;
+        for (QLabel* l : form->findChildren<QLabel*>()) {
+            const QString t = l->text();
+            if (t.contains(QStringLiteral("⚠"))) warnFound = true;
+            if (!reason.isEmpty() && t.contains(reason)) hintFound = true;
+        }
+        if (!runtimeOk) {
+            check(hintFound,
+                  QString("%1 的面板上写明了为什么置灰(有一条文字包含 runtimeUnavailableReason())")
+                      .arg(opName));
+            check(warnFound,
+                  QString("%1 的面板上有 ⚠ 提示标记").arg(opName));
+        } else {
+            check(!warnFound,
+                  QString("%1 的运行时可用 → 面板上不许出现 ⚠ 警告(功能可用却吓人)").arg(opName));
+        }
+
+        delete op;
+    }
+
+    // ---- 护栏:这条用例不许空转 ----
+    check(panelsBuilt >= 2,
+          QString("至少造出了 2 个真面板(实际 %1 个)").arg(panelsBuilt));
+    check(controlsFound >= 10,
+          QString("至少认出了 10 个输入控件(实际 %1 个)").arg(controlsFound));
+    check(keysMapped == controlsFound,
+          QString("每个输入控件都认出了它写的 key(认出 %1 / 共 %2 个)")
+              .arg(keysMapped).arg(controlsFound));
+}
+
 static void makeProbeImages(QString& maskPath, QString& imgPath) {
     QDir().mkpath("images");
 
@@ -2560,8 +2959,14 @@ static void makeProbeImages(QString& maskPath, QString& imgPath) {
 }
 
 int main(int argc, char* argv[]) {
+    // ⚠ 必须在 QApplication 构造**之前**设好 ——
+    //   用例 10 要造真的 QWidget(参数面板),没有平台插件就起不来。
+    //   offscreen = 没有屏幕也能造 QWidget(本仓库另外 5 个套件同款)。
+    qputenv("QT_QPA_PLATFORM", "offscreen");
     SetConsoleOutputCP(CP_UTF8);
-    QCoreApplication app(argc, argv);
+    // 用例 10 要 QApplication(不是 QCoreApplication)——
+    // QCoreApplication 不带 GUI,造 QWidget 会直接崩。
+    QApplication app(argc, argv);
 
     qInfo().noquote() << "W7 旋钮审计 回归测试";
 
@@ -2612,6 +3017,7 @@ int main(int argc, char* argv[]) {
     test_audited_sources_are_the_compiled_ones();
     test_runtime_missing_is_explained();
     test_knob_type_mismatch_is_reported(maskPath, imgPath, boardPath);
+    test_panel_greys_dead_knobs();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;
