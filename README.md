@@ -19,7 +19,7 @@
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 477 条断言**
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），17 个无头回归测试共 1889 条断言
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），19 个无头回归测试共 1943 条断言
 
 ## 🔗 两个共享核心（common/）
 
@@ -59,6 +59,7 @@ tesseract 没装时必须**明说**原因，不能悄悄返回空串。
 | 帧循环 | 源输出 `frame_count`，引擎按 `frame_index` 逐轮跑整条链 + 批量 PASS/FAIL 汇总 |
 | W6 深度联动 | `pcb_inspect` + `pcb_defect_judge` 把 PCB 算法挂进画布，7 类缺陷 7 个阈值可调（极性反那条不再是阈值判据 —— 期望侧由配方给）|
 | DL 算子 | `dl_postprocess`（letterbox/NMS/YOLOv5-v8 解析）+ `dl_infer`（ONNX Runtime，条件编译） |
+| 没装 SDK 的 DL 分支也能测 | `dl_infer` 的 `#ifdef` / `#else` **两半各有测试**（44 / 10 条断言）—— 前半用一套 header-only 的**假 ONNX Runtime**（只在测试目标里，绝不进发货二进制）。第一次真把它编起来就抓到 3 个 bug（NCHW 张量喂了 HWC 数据 / 名字指针悬空 / 输出维度不检查）|
 | 测量类 | `line_fit`（长度+角度）/ `circle_fit`（圆心+半径+圆度）/ `caliper_dist`（点到线距离），补齐 VM 四大模块最后一块 |
 | 每步结果查看 | 节点状态点 + 右键回看任意一步的图和全部字段（数字**全帧留**，图只留最近 N 帧；图没了明说，绝不拿别的帧顶替）+ 标题条上的**帧选择器** `[◀][spin][▶]` |
 | pin 类型检查 | 算子声明吃/吐什么，连错时立刻说明原因 |
@@ -71,7 +72,7 @@ cd W7_VisionMasterLite
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
-17 个套件 / 1889 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+19 个套件 / 1943 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试，
 `pcb_core` 则是共享判定核心自己的测试（**W6 和 W7 链的是同一份源码**）。
 
@@ -91,7 +92,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 >
 > 看着像代码全坏了，其实一个测试都没跑。
 
-> 测试失败时想看是哪条断言挂了，CMakeLists 里已经给 17 个套件都设了
+> 测试失败时想看是哪条断言挂了，CMakeLists 里已经给 19 个套件都设了
 > `QT_FORCE_STDERR_LOGGING=1`。不加的话 Qt 6 在 Windows 上会把 `qInfo`
 > 送到调试通道而不是 stderr，`--output-on-failure` 只能看到一个非零退出码。
 
@@ -101,7 +102,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 ```
 
-一条命令跑完：**7 个工程全部编译（Release）→ W6 3 套件 + W7 17 套件
+一条命令跑完：**7 个工程全部编译（Release）→ W6 3 套件 + W7 19 套件
 全部跑通 → W5 的 exe 冒烟 → W7 真跑一条完整流水线（headless）
 → 检查源码树没被写脏**。
 
@@ -127,7 +128,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 19 份 + 51 张 atomic 卡，~585 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 19 份 + 54 张 atomic 卡，~611 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -146,9 +147,9 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_CI_2026-10.md` (19 KB) — 上 CI：路径不能写死，以及 CI 第一次跑就逮到的两个真 bug
 - `notes_PCB_Short_2026-10.md` (19 KB) — 短路判据重做：从「量标记圈」到「量两个端子之间」（附：陈旧数据副本）
 - `notes_PCB_Insufficient_2026-10.md` (16 KB) — 焊少判据重做：从「量 ROI 里的金」到「量这个焊盘自己的铜」
-- `notes_W7_RunEngine_2026-10.md` (39 KB) — 执行引擎抽离（第十轮）+ headless runner（片 3）
+- `notes_W7_RunEngine_2026-10.md` (47 KB) — 执行引擎抽离（第十轮）+ headless runner（片 3）+ 假 ONNX Runtime（片 4）
 
-`notes/atomic/` 里是**单条教训卡片**（51 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（54 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -197,7 +198,7 @@ OpenCV/
 ├── common/cmake/          # 三方依赖路径(本机默认值 + CI 覆盖)
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 检查源码树没被写脏
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（19 份 + 51 张 atomic 卡）
+├── notes/                 # 变更日志（19 份 + 54 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -207,9 +208,9 @@ OpenCV/
 ## 📊 统计
 
 - 7 个 C++ 项目 + 2 个共享核心
-- 115 个 C++ 文件 / **27,542 行**（含注释与空行；口径：`git ls-files '*.cpp' '*.h'` 逐个计数，2026-10-24 实测。
+- 118 个 C++ 文件 / **31,734 行**（含注释与空行；口径：`git ls-files '*.cpp' '*.h'` 逐个计数，2026-10-24 实测。
   旧数字「~29310 行」这次**复现不出来** —— 当初没记口径，于是换成一个能复现的数）
-- 19 份变更日志 + 51 张 atomic 卡 / ~585 KB
-- **20 个无头回归测试 / 2366 条断言**（W7 17 个 / 1889，W6 3 个 / 477；
+- 19 份变更日志 + 54 张 atomic 卡 / ~611 KB
+- **22 个无头回归测试 / 2420 条断言**（W7 19 个 / 1943，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

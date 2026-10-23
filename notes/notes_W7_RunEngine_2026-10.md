@@ -804,4 +804,277 @@ M70 尤其有意思：它把
 
 欠账 4 / 8 / 10 / 11 写清楚就结项。
 
+---
+
+# 片 4 —— 假 ONNX Runtime：让 `dl_infer` 的两条分支第一次变得可测
+
+## 二十五、起点：两条分支，一行没测过
+
+`operators/dl_infer.cpp` 这个算子有两半：
+
+```cpp
+#ifdef  HAS_ONNXRUNTIME
+    ... 真推理（约 150 行）...
+#else
+    ... "SDK 没装" 的空实现 ...
+#endif
+```
+
+本机没装 ONNX Runtime，所以 CMake 走的是 `#else` 那半。
+于是 `#ifdef` 那半 —— **约 150 行** —— 从头到尾**一次都没被编译过**。
+
+这两句话的分量不一样：
+
+| | 「没测过」 | 「没编译过」 |
+|---|---|---|
+| 语法错 / 类型错 | 不可能 | **可能** |
+| 链接错 | 不可能 | **可能** |
+| API 用法错 | 可能 | **很可能**（没人对着真头文件编过） |
+
+那段代码是照着 ONNX Runtime 的**文档**写的，从来没和**真头文件**对过账。
+所以它可能**装上 SDK 都编不过** —— 而本机装不上，这件事就永远不会被发现。
+
+> 一段永远不参与编译的代码，等于一段不存在的代码。
+> 它不报错、不崩溃，只是「这个功能好像没实现」。
+
+而且 `#else` 那半 —— **实际发货的那一半**（绝大多数机器和所有 CI runner 都没装 SDK）
+也一样一行没测过。
+
+**所以欠账 4 的一半，不是「环境限制，测不了」，是「没人给它造个环境」。**
+
+## 二十六、造一个假 ONNX Runtime
+
+新建 `third_party/fake_onnxruntime/include/onnxruntime_cxx_api.h`：
+
+- **纯 C++17**，零 OpenCV、零 Qt、零 ONNX Runtime 依赖
+- header-only，只实现 `dl_infer` 实际用到的 **8 个 API 点**：
+  `Ort::Env` / `Ort::SessionOptions` / `LoggingLevel` / `GraphOptimizationLevel` /
+  `Ort::Session` / `Ort::Value::CreateTensor<float>` / `Ort::TensorTypeAndShapeInfo` /
+  `Ort::AllocatedStringPtr`（加 `Ort::Exception`）
+- **假件自己不知道自己在被测** —— `dl_infer.cpp` 一个字不改就能编过
+
+### 假件的三件能力
+
+1. **脚本化输出**：测试说「模型这次返回什么」，假件就返回什么
+   （`fakeOrt::setOutputTensor(shape, data)`）
+2. **记录输入**：假件把收到的张量**记下来**
+   （`fakeOrt::lastInputShape()` / `lastInputData()`），
+   于是测试能断言「送进去的东西长什么样」
+3. **比真的严三处**：
+   - 模型文件不存在 → **抛异常**（不是静默返回 nullptr）
+   - 输入/输出**名字必须对**，不对就报错
+   - **释放即清零** —— 假件析构时把那块内存 `memset` 成 0
+
+第三条是关键，见「二十七」。
+
+### 两个独立目标，不是「一个 exe 里两个分支」
+
+| 目标 | 测哪半 | 断言数 |
+|---|---|---|
+| `w7_dl_infer_test` | `#ifdef`（真推理） | **44** |
+| `w7_dl_infer_nosdk_test` | `#else`（没装 SDK） | **10** |
+
+> ⚠ 为什么必须是**两个可执行文件**？
+> 同一个 exe 里不能有两个 `DlInfer::run` —— 那是 **ODR 违规**，
+> 链接器会挑一个（挑哪个还不一定）。
+>
+> 这是本项目栽过五遍的「抄副本」的另一个马甲：
+> **同一份定义只能有一处，但两个分支必须是两处。**
+
+### 两个编译期守卫
+
+```cpp
+// test_dl_infer.cpp
+#ifndef W7_ONNXRUNTIME_FAKE
+#error "这个套件必须在 HAS_ONNXRUNTIME + 假 SDK 下编译"
+#endif
+
+// test_dl_infer_nosdk.cpp
+#ifdef HAS_ONNXRUNTIME
+#error "这个套件必须在没有 HAS_ONNXRUNTIME 的配置下编译"
+#endif
+```
+
+为什么要有：哪天 CMake 改坏了（忘了定义 `HAS_ONNXRUNTIME`），
+推理套件会去测**空实现** —— 而空实现里根本没有推理，
+断言会「莫名其妙地全红」，或者更糟：**某些断言恒真**。
+
+> 宁可编译不过，也不要测错东西。
+
+### 一条不能碰的红线
+
+**绝不能把 `HAS_ONNXRUNTIME` 加到 `w7_vm_lite` 上。**
+
+那等于把**假 SDK 塞进发货的二进制** —— 装没装真 SDK 的机器跑出来的东西一样。
+假 SDK 只活在测试目标里。
+
+## 二十七、它抓到了什么：三个 bug
+
+三个都在**从没跑过**的那半边。
+
+### 1. 张量形状是 NCHW，喂进去的却是 HWC 数据
+
+```cpp
+std::vector<int64_t> shape{1, 3, netInput.height, netInput.width};  // NCHW
+auto inputTensor = Ort::Value::CreateTensor<float>(
+    sc.env->GetAllocatorInfo(), f32.data, f32.total(), ...);          // HWC 的数据
+```
+
+字节数 `H*W*3` 两边都一样 → **不报错、不崩溃**。
+但模型收到的是三张**红红红绿绿绿蓝蓝蓝**的图 → **一个框都出不来**。
+
+怎么发现的：**输出那半边是对的**。
+输出的 NCHW 张量被解包成 `(通道, 框)` 二维视图 —— 一个用 NCHW、一个被当成 HWC，
+**两边一对照就露馅了**。
+
+> 同一个约定在两个地方出现时，一对一错最容易发现；
+> 两个都错，反而没人看得出来。
+
+修法是数据也按 NCHW 排（`chw[0*hw+i] = row[x][0]` 等），
+⚠ 注意通道顺序：上面已经 `cvtColor(BGR2RGB)` 过，
+所以 `f32` 的通道 0 = R、1 = G、2 = B，**这里照搬，别再换一次**。
+
+### 2. 输入名 / 输出名指向已释放的内存（UAF）
+
+```cpp
+const char* inNames[] = {session.GetInputNameAllocated(0, ...).get()};  // ← 悬空
+```
+
+`GetInputNameAllocated()` 返回的 `Ort::AllocatedStringPtr` 是**临时对象**，
+语句一结束就析构 → 那块内存被释放 → `inNames[0]` 悬空。
+
+真 SDK 上是「偶尔对偶尔错」；**假件释放即清零** → 变成**确定**的空串 → 一定报错。
+
+修法是让拥有内存的对象活得久一点（`auto inNameAlloc = ...;` 再 `.get()`）。
+
+### 3. 模型输出的维度没检查
+
+```cpp
+cv::Mat om((int)oshape[1], (int)oshape[2], ...);   // oshape 只有 2 维就越界
+```
+
+输出不是 3 维时直接读 `oshape[1]`/`oshape[2]` → **越界访问，整个程序崩**。
+现在改成先检查、再报「模型输出维度不对」，元素数对不上也报。
+
+> **类型/形状不对 → 报错，不补默认值。**
+> 模型不是我们以为的那个模型是很现实的事（导出版本对不上），
+> 这种时候要**报错**，不是硬着头皮往下读。
+
+## 二十八、变异 M85~M97：十三条，九杀四活
+
+| 编号 | 变异 | 预期 | 实测 | 红条数 |
+|---|---|---|---|---|
+| M85 | 张量又喂 HWC（通道交错） | KILL | KILLED | 1 |
+| M86 | 名字又指向已释放内存（UAF） | KILL | KILLED | **19** |
+| M87 | 输出维度检查没了 | KILL | KILLED | 1 |
+| M88 | 颜色转换没了（`rgb = lb`） | KILL | KILLED | 4 |
+| M89 | `/255` 归一化没了 | KILL | KILLED | 8 |
+| M90 | NMS 不抑制（IoU 阈值 1.0） | KILL | KILLED | 1 |
+| M91 | 类别名永远退化 | KILL | KILLED | 1 |
+| M92 | 维度检查等价改写（加 `static_cast`） | SURVIVE | SURVIVED | 0 |
+| M93 | NCHW 下标等价改写 | SURVIVE | SURVIVED | 0 |
+| M94 | 报错少了「模型文件本身是存在的」 | KILL | KILLED | 1 |
+| M95 | 「模型文件不存在」检查没了 | KILL | KILLED | 2 |
+| M96 | 空判断等价改写（`size() == 0`） | SURVIVE | SURVIVED | 0 |
+| M97 | `COLOR_BGR2RGB` 改叫 `COLOR_RGB2BGR` | SURVIVE | SURVIVED | 0 |
+
+`unexpected results = 0`；还原后两个套件仍全绿
+（脚本还原后用 **SHA-256 逐字节**校验源文件）。
+
+### M86 是最值钱的一条
+
+它红 **19 条** —— 因为「名字不对」会让**整条推理链路的每一步都失败**，
+不是只红一条。
+
+这也说明：**一条断言能红几条，取决于它守的是「一处细节」还是「一整条链路」。**
+
+### M97 的故事：变异活了，先问「这个操作真的变了吗」
+
+`cv::COLOR_BGR2RGB` 和 `cv::COLOR_RGB2BGR` —— 在 OpenCV 里**是同一个操作**：
+两个常量都只交换通道 0 和通道 2。
+
+所以 M97 **本来就应该活**。如果它被杀了，那说明测试里有一条断言在钉「写法」而不是钉「语义」
+—— 那条断言才是噪音发生器。
+
+> 这是本项目的老规矩的又一次应用：
+> **变异活下来时，先问「这个操作真的变了吗」，再问「测试是不是不够狠」。**
+> 顺序反了，就会去加一堆盯写法的新断言，把套件养胖。
+
+### 假件本身没被变异
+
+本轮只变异**生产代码**（`dl_infer.cpp`）。
+假件是**测试基础设施**，变异它没有意义 ——
+有意义的是：**三个生产改动（NCHW / UAF / 维度守卫）都被一条能红的断言钉住了**，
+这正是 M85 / M86 / M87 干的。
+
+### 一个要记下来的依赖
+
+M86 能杀，靠的是假件**释放即清零**这条**比真 SDK 严格**的规则。
+哪天把清零去掉，M86 就会「活」（变回「偶尔错」）。
+
+> 假的东西要在**该严的地方**严 ——
+> 严的方向是「把不确定的错变成确定的错」。
+> 这条依赖写在这里，别让下一个人以为它可有可无。
+
+## 二十九、这一轮的数字（实测，不是推算）
+
+| | 片 3 之后 | 片 4 之后 |
+|---|---|---|
+| `dl_infer` 套件断言 | ——（套件不存在） | **44** |
+| `dl_infer_nosdk` 套件断言 | ——（套件不存在） | **10** |
+| W7 套件 / 断言 | 17 / 1889 | 19 / **1943** |
+| W6 套件 / 断言 | 3 / 477 | 3 / **477** |
+| 全仓套件 / 断言 | 20 / 2366 | 22 / **2420** |
+| 累计变异 | 85 | **98**（本轮 +13：9 杀 4 活） |
+| atomic 卡 | 51 | **54** |
+| C++ 文件 / 行数 | 115 / 27,542 | 118 / **31,734** |
+
+> 断言数是**实测**的：逐个套件跑一遍、把 `pass=` 加总
+> （三个套件结尾**没有** `SUMMARY:` 前缀，只按 `SUMMARY:` 匹配会少算 232 条 —— 这坑上一轮踩过）。
+>
+> 全仓总数 = W7 1943 + W6 477 = **2420**。
+
+门禁：`tools/ci.ps1` → **ALL CHECKS PASSED**（22 套件 / 2420 断言）
+
+## 三十、下一步
+
+### 片 5：假 MVS SDK
+
+`operators/image_source_camera.cpp` 的 `#else` 那半（**实际发货的那一半**）
+也一行没测过 —— 和 `dl_infer` 一模一样的欠账形状。
+
+要造的 API 面大约 12 个：
+`MV_CC_EnumDevices` / `MV_CC_CreateHandle` / `MV_CC_OpenDevice` / `MV_CC_SetEnumValue` /
+`MV_CC_SetCommandValue` / `MV_CC_SetFloatValue` / `MV_CC_StartGrabbing` /
+`MV_CC_GetImageBuffer` / `MV_CC_FreeImageBuffer` / `MV_CC_StopGrabbing` /
+`MV_CC_CloseDevice` / `MV_CC_DestroyHandle`
+加 `MV_CC_DEVICE_INFO_LIST` / `MV_CC_DEVICE_INFO` / `MV_FRAME_OUT` /
+`MV_FRAME_FRAME_INFO` / `MV_OK` / `MV_GIGE_DEVICE` / `MV_TRIGGER_MODE_*`。
+
+### 假 SDK 换不来的那条债
+
+**造一套假 ONNX Runtime，只能保证「`dl_infer` 的逻辑对」，
+保证不了「`dl_infer` 和真 ONNX Runtime 对得上」。**
+
+真 SDK 里 `Env::GetAllocatorInfo()` 的**返回类型在版本间变过**
+（有的版本返回**值**，有的返回**指针**）——
+假件只能照一个版本写。装上真 SDK 时，那两行**可能要加 `&`**。
+
+> 这条必须写进欠账，**不能假装收口**。
+> 假件的价值是「让逻辑可测」，不是「让集成免验」。
+
+（同类的还有：`Ort::AllocatedStringPtr` 的真实生命周期、
+`CreateTensor` 对输入缓冲区的所有权约定 —— 真 SDK 上仍需再对一次账。）
+
+### 剩下的欠账
+
+| 欠账 | 状态 |
+|---|---|
+| 4 · 两个 SDK 缺失分支 | `dl_infer` 两半 ✅ 收；`image_source_camera` 两半 ⬜（片 5） |
+| 8 · `std::max(1, ...)` 那层安全下限查不到 | 有意不查，已登记 |
+| 10 · `auto_contour` 保持字面量 | 存档格式的一部分，有意为之 |
+| 11 · 审计要跟着代码升级 | 流程债 |
+| 9 · CI 上真实 runner | 剩两条纯环境性的（本机消不掉） |
+
+
 
