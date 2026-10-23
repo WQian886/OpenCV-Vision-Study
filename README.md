@@ -19,7 +19,7 @@
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 477 条断言**
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，15 个无头回归测试共 1661 条断言
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，16 个无头回归测试共 1695 条断言
 
 ## 🔗 两个共享核心（common/）
 
@@ -71,7 +71,7 @@ cd W7_VisionMasterLite
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
-15 个套件 / 1661 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+16 个套件 / 1695 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试，
 `pcb_core` 则是共享判定核心自己的测试（**W6 和 W7 链的是同一份源码**）。
 
@@ -126,7 +126,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 18 份 + 45 张 atomic 卡，~525 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 19 份 + 46 张 atomic 卡，~537 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -146,7 +146,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_PCB_Short_2026-10.md` (19 KB) — 短路判据重做：从「量标记圈」到「量两个端子之间」（附：陈旧数据副本）
 - `notes_PCB_Insufficient_2026-10.md` (16 KB) — 焊少判据重做：从「量 ROI 里的金」到「量这个焊盘自己的铜」
 
-`notes/atomic/` 里是**单条教训卡片**（45 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（46 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -193,7 +193,7 @@ OpenCV/
 ├── common/cmake/          # 三方依赖路径(本机默认值 + CI 覆盖)
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 检查源码树没被写脏
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（18 份 + 45 张 atomic 卡）
+├── notes/                 # 变更日志（19 份 + 46 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -205,7 +205,7 @@ OpenCV/
 - 7 个 C++ 项目 + 2 个共享核心
 - 106 个 C++ 文件 / **27,100 行**（含注释与空行；口径：`git ls-files '*.cpp' '*.h'` 逐个计数，2026-10-22 实测。
   旧数字「~29310 行」这次**复现不出来** —— 当初没记口径，于是换成一个能复现的数）
-- 18 份变更日志 + 45 张 atomic 卡 / ~525 KB
-- **18 个无头回归测试 / 2138 条断言**（W7 15 个 / 1661，W6 3 个 / 477；
+- 19 份变更日志 + 46 张 atomic 卡 / ~537 KB
+- **19 个无头回归测试 / 2172 条断言**（W7 16 个 / 1695，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
