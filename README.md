@@ -19,7 +19,7 @@
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 477 条断言**
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），21 个无头回归测试共 2048 条断言
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。17 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），21 个无头回归测试共 2048 条断言。**已结项**（2026-10-24），欠账 17 条已收 9 条，剩下 8 条都写清了边界和重开条件 → [结项报告](./notes/notes_W7_Close_2026-10.md)
 
 ## 🔗 两个共享核心（common/）
 
@@ -55,10 +55,10 @@ tesseract 没装时必须**明说**原因，不能悄悄返回空串。
 
 | 能力 | 说明 |
 |---|---|
-| 4 种图像源 | 本地 / 文件夹 / 视频 / 工业相机（对标 VM 四种） |
+| 3 种图像源算子 + 1 条兜底路径 | 文件夹 / 视频 / 工业相机（VM 是四种，W7 少一种）。**「本地单张图像」不是一个算子** —— 喂单张图走的是引擎的兜底输入 `image_path`（headless 的 `--image` 就是它），算子库里没有这一项 |
 | 帧循环 | 源输出 `frame_count`，引擎按 `frame_index` 逐轮跑整条链 + 批量 PASS/FAIL 汇总 |
 | W6 深度联动 | `pcb_inspect` + `pcb_defect_judge` 把 PCB 算法挂进画布，7 类缺陷 7 个阈值可调（极性反那条不再是阈值判据 —— 期望侧由配方给）|
-| DL 算子 | `dl_postprocess`（letterbox/NMS/YOLOv5-v8 解析）+ `dl_infer`（ONNX Runtime，条件编译） |
+| DL 算子 | `dl_infer`（ONNX Runtime，条件编译）；配套的 `dl_postprocess`（letterbox/NMS/YOLOv5-v8 解析）是它的**辅助库**，不是独立算子 |
 | 没装 SDK 的 DL 分支也能测 | `dl_infer` 的 `#ifdef` / `#else` **两半各有测试**（44 / 10 条断言）—— 前半用一套 header-only 的**假 ONNX Runtime**（只在测试目标里，绝不进发货二进制）。第一次真把它编起来就抓到 3 个 bug（NCHW 张量喂了 HWC 数据 / 名字指针悬空 / 输出维度不检查）|
 | 没装 SDK 的相机分支也能测 | `image_source_camera` 的 `#ifdef` / `#else` **两半各有测试**（90 / 15 条断言）—— 前半用一套 header-only 的**假 MVS SDK**。第一次真把它编起来就发现：那半边引用了一个**真 SDK 里根本不存在的常量**（`MV_TRIGGER_MODE_SOFT`）——也就是说**装上 SDK 的机器上它编不过**，而没人知道。另有 6 个静默失效（IP 对不上也照样连 / Bayer 一律按 BG 解 / 改了 IP 不重连 / 句柄只开不关 / SDK 返回值全不看 / 缓冲区多大都不看）|
 | 测量类 | `line_fit`（长度+角度）/ `circle_fit`（圆心+半径+圆度）/ `caliper_dist`（点到线距离），补齐 VM 四大模块最后一块 |
@@ -129,7 +129,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 19 份 + 57 张 atomic 卡，~636 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 20 份 + 59 张 atomic 卡，~678 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -149,8 +149,9 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_PCB_Short_2026-10.md` (19 KB) — 短路判据重做：从「量标记圈」到「量两个端子之间」（附：陈旧数据副本）
 - `notes_PCB_Insufficient_2026-10.md` (16 KB) — 焊少判据重做：从「量 ROI 里的金」到「量这个焊盘自己的铜」
 - `notes_W7_RunEngine_2026-10.md` (60 KB) — 执行引擎抽离（第十轮）+ headless runner（片 3）+ 假 ONNX Runtime（片 4）+ 假 MVS SDK（片 5）
+- `notes_W7_Close_2026-10.md` (18 KB) — **W7 结项报告**：欠账总账、17 条债的边界与重开条件、明确不覆盖的范围、怎么复现这份结项
 
-`notes/atomic/` 里是**单条教训卡片**（57 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（59 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -170,6 +171,8 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `at-no-runner-is-not-a-reason.md` — 「没在真环境上验过」是结论，不是理由
 - `at-a-fixture-must-look-like-the-product.md` — 测试夹具的形状必须和产品写出来的一样
 - `at-one-code-cannot-say-what-broke.md` — 一个退出码说不出「哪里坏了」
+- `at-a-limit-you-keep-needs-a-boundary.md` — 有意留下的限制，必须写清边界和重开条件
+- `at-the-decoder-eats-the-newline.md` — 默认编码的解码器会吃掉换行符，于是你数出来的行数偏少
 
 W7 收官期的改动（PCB/DL 算子、视频源、帧循环、每步结果查看、pin 检查、最近工程）
 逐条记在 git 提交信息里，每条都写清了"为什么"和"测试抓到了什么"。
@@ -199,7 +202,7 @@ OpenCV/
 ├── common/cmake/          # 三方依赖路径(本机默认值 + CI 覆盖)
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 检查源码树没被写脏
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（19 份 + 57 张 atomic 卡）
+├── notes/                 # 变更日志（20 份 + 59 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -209,9 +212,22 @@ OpenCV/
 ## 📊 统计
 
 - 7 个 C++ 项目 + 2 个共享核心
-- 121 个 C++ 文件 / **33,088 行**（含注释与空行；口径：`git ls-files '*.cpp' '*.h'` 逐个计数，2026-10-24 实测。
-  旧数字「~29310 行」这次**复现不出来** —— 当初没记口径，于是换成一个能复现的数）
-- 19 份变更日志 + 57 张 atomic 卡 / ~636 KB
+- 121 个 C++ 文件 / **36,636 行**（含注释与空行）。口径是**一条能跑的完整命令**，2026-10-24 实测：
+
+  ```powershell
+  $files = git ls-files '*.cpp' '*.h'
+  $total = 0
+  $files | ForEach-Object { $total += (Get-Content -Encoding UTF8 -LiteralPath $_).Count }
+  ```
+
+  > ⚠ **`-Encoding UTF8` 不能省。** 少了它，PowerShell 5.1 会按 GBK 读 UTF-8 源码，
+  > **把中文后面的行尾当尾字节吃掉** —— 121 个文件里 102 个对不上，
+  > 总共少算 **3,268 行**，而且**少算最多的恰恰是中文注释最多的文件**
+  > （这个指标会奖励写得少的人，方向是反的）。
+  > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
+  > 连最接近的 ANSI 口径（33,368）也对不上。
+  > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
+- 20 份变更日志 + 59 张 atomic 卡 / ~678 KB
 - **24 个无头回归测试 / 2525 条断言**（W7 21 个 / 2048，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

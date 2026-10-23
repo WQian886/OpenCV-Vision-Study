@@ -2,6 +2,17 @@
 
 > 📅 2026-09-29 收官。W7 是最终版,原先规划给 W8 的活(PCB 算法上流水线、
 > DL 算子、第 4 种图像源、每步结果查看、pin 类型检查、最近工程)全部并入本阶段。
+>
+> ⚠ 有一项要说清楚:**「第 4 种图像源」没有变成一个算子**。
+> VM 的四种图像源是 本地/文件夹/视频/相机,W7 只注册了**三个**图像源算子
+> (文件夹/视频/相机);「本地单张图像」是引擎的**兜底输入 `image_path`**
+> (headless 的 `--image` 就是它),不是算子库里的一个条目。
+> 详见下面「📚 算子清单」。
+>
+> 📋 **2026-10-24 结项**：欠账清单 17 条已收 9 条,剩下 8 条(2/8/9/10/11/15/16/17)
+> 每条都带**边界**和**重开条件** → [结项报告](../notes/notes_W7_Close_2026-10.md)
+> （总账、怎么复现、怎么继续,都在那儿）
+> 欠账的**完整定义只有一处**:`notes/notes_W7_Knob_Audit_2026-10.md` 第十节。
 
 ## 🎯 学习目标
 1. 理解**工业视觉平台的 3 层架构**:算子 + 流水线 + GUI
@@ -26,7 +37,9 @@ W7_VisionMasterLite/
 │   ├── command.h / .cpp        #   抽象基类
 │   ├── node_commands.h / .cpp  #   增/删/移节点
 │   └── edge_commands.h / .cpp  #   增/删连线
-├── operators/                  # 算子库(14 个)
+├── operators/                  # 算子库(17 个:3 采集 / 5 检测 / 1 定位 / 1 识别 / 1 DL / 6 测量)
+│                               #   注:dl_postprocess 是 dl_infer 用的辅助库(letterbox/NMS/
+│                               #   YOLOv5-v8 解析),**不是**一个独立算子,没注册进工厂
 │   ├── operator_base.h         #   抽象基类
 │   ├── pin_types.h / .cpp      #   pin 类型系统 + 连线检查
 │   ├── operator_factory.h/.cpp #   名字 → 算子
@@ -145,7 +158,7 @@ powershell -ExecutionPolicy Bypass -File tools/w7-run.ps1 `
 ### 🖼️ 开窗口
 
 启动后界面分 4 个区域:
-- **左侧**:算子库(按模块分组,14 个算子)
+- **左侧**:算子库(按模块分组,17 个算子)
 - **中央**:流程图画布(默认已有 4 个节点 + 连线)
 - **右侧**:参数面板(选中节点查看/编辑)
 - **底部**:结果图 + **该步输出字段** + 运行日志
@@ -219,7 +232,7 @@ powershell -ExecutionPolicy Bypass -File tools/w7-run.ps1 `
 工具栏 **最近** 下拉,记最近 5 个 `.sol.json`(存 QSettings,跨会话)。
 菜单显示文件名、tooltip 给完整路径;弹出时自动剔掉已被删/挪走的条目。
 
-## 📚 算子清单(14 个)
+## 📚 算子清单(17 个)
 
 | 算子 | VM 对标 | OpenCV API | 吃 → 吐 | 用途 |
 |---|---|---|---|---|
@@ -236,7 +249,17 @@ powershell -ExecutionPolicy Bypass -File tools/w7-run.ps1 `
 | `line_fit` | 直线测量 | 无(纯几何) | 图像 → 数据 | 给两点,量长度 + 角度(0~180°) |
 | `circle_fit` | 圆查找 | `findContours`/`minEnclosingCircle` | 图像 → 数据 | 二值图里找圆,量圆心/半径/圆度 |
 | `caliper_dist` | 卡尺 | 无(纯几何) | 图像 → 数据 | AB 定基准,量 C 到 AB 的垂直距离 |
+| `point_point_dist` | 两点距离 | 无(纯几何) | 图像 → 数据 | 给两点,量欧氏距离(像素) |
+| `point_line_dist` | 点到线距离 | 无(纯几何) | 图像 → 数据 | 三点:AB 定基准,量 C 到 AB 的垂直距离 |
+| `angle` | 两线夹角 | 无(纯几何) | 图像 → 数据 | 四点(AB/CD 各一条线),量夹角(0~90°) |
 | `dl_infer` | — | ONNX Runtime | 图像 → 数据 | YOLOv5/v8 目标检测 |
+
+> `dl_postprocess`(letterbox / NMS / YOLOv5-v8 解析)**不是一个算子** ——
+> 它没注册进 `operator_factory.cpp`,是 `dl_infer` 用的辅助库。
+>
+> VM 的四种图像源里,W7 实现了**三种**算子(文件夹 / 视频 / 相机);
+> 「本地单张图像」走的是引擎的**兜底输入 `image_path`**(headless 的 `--image`),
+> 算子库里没有这一项。
 
 ### VM 四大模块的覆盖情况
 
@@ -247,16 +270,21 @@ powershell -ExecutionPolicy Bypass -File tools/w7-run.ps1 `
 | 识别 Identification | `qr_decode` / `dl_infer` | ✅ |
 | 检测 Detection | `color_segment` / `blob_count` / `count_check` / `pcb_defect_judge` | ✅ |
 
-> 三个测量算子做了一个刻意的分工:
+> 六个测量算子做了一个刻意的分工:
 >
 > | 算子 | 要不要图 | 为什么 |
 > |---|---|---|
 > | `line_fit` | 不要 | 两点定一线,纯几何 |
 > | `caliper_dist` | 不要 | 三点算距离,纯几何 |
+> | `point_point_dist` | 不要 | 两点算距离,纯几何 |
+> | `point_line_dist` | 不要 | 三点算到线的距离,纯几何 |
+> | `angle` | 不要 | 四点算夹角,纯几何 |
 > | `circle_fit` | **要** | 得先"找到"圆在哪,所以得看图 |
 >
 > **"没有图也能算"是刻意保留的**(给空 `image_path` 不报错,只不出标注图),
 > 好处是这些算子能被纯数学单测,不用准备素材。
+> ⚠ 注意是"**没有图也能算**",不是"**有图就一定画得出来**" ——
+> 给了路径却读不出来(路径写错/文件被删)照样报 error。
 >
 > `caliper_dist` 做的是卡尺的**几何核心**,不是 VM 那个交互式卡尺工具 ——
 > 真卡尺还要处理选边、亚像素拟合、"用户点歪了怎么办"。
@@ -1036,6 +1064,19 @@ $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
 
 - **MVS SDK / ONNX Runtime 未装**:两个算子在当前机器上编译成空实现,
   点 Run 会给出明确提示。装好 SDK + 设环境变量后重新 configure 即自动启用。
+  ⚠ 就算装了也得**先编一遍**:片 5 已经证明过,`image_source_camera` 那半边
+  引用了一个**真 SDK 里根本不存在的常量**(`MV_TRIGGER_MODE_SOFT`)——
+  **也就是说装上 SDK 的机器上它编不过**,而那半边从未编译过所以没人知道。
+  假 SDK 保证的是「算子的**逻辑**对」,不保证「和真 SDK **对得上**」——
+  后者是欠账 15 / 16,边界和重开条件见结项报告。
+- **主窗口(`mainwindow.cpp`)的行为零测试覆盖**:它不在任何测试目标里。
+  引擎侧的那部分已经搬出去了(拓扑序 / 多前驱合并 / 逐节点执行 → `run_engine.h`,
+  有 99 条断言钉着),剩下的是**纯 UI 接线** ——
+  「点 Run 有没有反应」只能靠人眼。这是欠账 17,边界和重开条件见结项报告。
+- **完整的欠账总账**(17 条 / 已收 9 / 未收 8)在
+  [notes/notes_W7_Close_2026-10.md](../notes/notes_W7_Close_2026-10.md),
+  欠账的**完整定义只有一处**:
+  [notes/notes_W7_Knob_Audit_2026-10.md](../notes/notes_W7_Knob_Audit_2026-10.md) 第十节。
 - ~~**PCB 判定沿用 W6 的样本数据**:`short.png` 会同时报出 `short` 和 `wrong`~~
   —— **2026-10-20 已修**:短路图重画成"两脚被铜条连通"之后,铜条是金色不是青色,
   `short.png` 现在只报 `short`(点名 R2),不再串扰 `wrong`。
@@ -1127,7 +1168,7 @@ PCB 判定的实现(配方解析 + 定位 + 六条判据 + 短路)搬到了 `com
    **也就是说装上 SDK 的机器上它编不过**,而没人知道;
    另有 6 个静默失效(IP 对不上也照样连 / Bayer 一律按 BG 解 /
    改了 IP 不重连 / 句柄只开不关 / SDK 返回值全不看 / 缓冲区多大都不看)。
-   变异 M98~M115 **杀 13 活 3**,外加一条**编译期守卫**
+   变异 M98~M115 **杀 14 活 3**,外加一条**编译期守卫**
    (`MV_TRIGGER_MODE_SOFT` 改回去就**编不过** —— 那是 BUILD-FAIL,不是"变异存活")。
 5. **子图 / 分支复用**:同一个子流水线被两条支路引用(需要拓扑排序支持)
 
