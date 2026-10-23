@@ -203,11 +203,44 @@ QJsonObject DlInfer::run(const QJsonObject& params, const QJsonObject& inputs) {
     cv::cvtColor(lb, rgb, cv::COLOR_BGR2RGB);
     rgb.convertTo(f32, CV_32FC3, 1.0 / 255.0);
 
+    // ⚠⚠ 张量的形状是 NCHW(1,3,H,W),所以数据也必须是**通道在前**的。
+    //
+    //   cv::Mat 是行优先的 HWC(一个像素挨一个像素,每个像素三个通道),
+    //   把 f32.data 直接塞进一个 NCHW 的张量 = **通道被打散** ——
+    //   模型看到的是"红红红绿绿绿蓝蓝蓝"三张图,不是三张单通道图。
+    //
+    //   后果:不报错、不崩溃,只是**全检测不出来**。
+    //   而且极难查:预处理"看起来"做了,张量也建出来了,推理也跑了,
+    //   日志里一切正常 —— 就是一个框都出不来。
+    //
+    //   (输出那半边解包成 (通道, 框) 是**对的** —— 两边一对照就露馅。)
+    //
+    //   ⚠ 通道顺序:上面已经 cvtColor(BGR2RGB) 过,所以 f32 的
+    //     通道 0 = R、1 = G、2 = B。这里照搬,别再换一次。
+    const size_t hw = static_cast<size_t>(netInput.height) * netInput.width;
+    std::vector<float> chw(3 * hw);
+    for (int y = 0; y < netInput.height; ++y) {
+        const cv::Vec3f* row = f32.ptr<cv::Vec3f>(y);
+        for (int x = 0; x < netInput.width; ++x) {
+            const size_t i = static_cast<size_t>(y) * netInput.width + x;
+            chw[0 * hw + i] = row[x][0];   // R 平面
+            chw[1 * hw + i] = row[x][1];   // G 平面
+            chw[2 * hw + i] = row[x][2];   // B 平面
+        }
+    }
     std::vector<int64_t> shape{1, 3, netInput.height, netInput.width};
     auto inputTensor = Ort::Value::CreateTensor<float>(
-        sc.env->GetAllocatorInfo(), f32.data, f32.total(), shape.data(), shape.size());
-    const char* inNames[]  = {session.GetInputNameAllocated(0, sc.env->GetAllocatorInfo()).get()};
-    const char* outNames[] = {session.GetOutputNameAllocated(0, sc.env->GetAllocatorInfo()).get()};
+        sc.env->GetAllocatorInfo(), chw.data(), chw.size(), shape.data(), shape.size());
+
+    // ⚠ 名字的内存归 AllocatedStringPtr 管 —— 它是个**临时对象**,
+    //   整条语句结束就死, .get() 拿到的指针会悬空。
+    //   以前写在一行里(临时对象当场就死),真 SDK 上是 use-after-free:
+    //   不崩,只是名字可能变成乱码 -> 推理报一句莫名其妙的话。
+    //   假 SDK 把释放掉的内存清零, 于是它变成一个**确定**的错。
+    auto inNameAlloc  = session.GetInputNameAllocated(0, sc.env->GetAllocatorInfo());
+    auto outNameAlloc = session.GetOutputNameAllocated(0, sc.env->GetAllocatorInfo());
+    const char* inNames[]  = { inNameAlloc.get() };
+    const char* outNames[] = { outNameAlloc.get() };
 
     // ---------- 推理 ----------
     QElapsedTimer timer;
@@ -221,6 +254,23 @@ QJsonObject DlInfer::run(const QJsonObject& params, const QJsonObject& inputs) {
     std::vector<int64_t> oshape = info.GetShape();
     size_t total = info.GetElementCount();
     const float* odata = outputTensor[0].GetTensorData<float>();
+
+    // ⚠ 输出维度不对就**报错**,不许往下走。
+    //   下面按 oshape[1]/oshape[2] 取形状 —— 维度不够就是**越界访问**,
+    //   崩的是整个程序,而不是"这一条流水线失败"。
+    //   模型不是我们以为的那个模型,是很现实的事(导出版本对不上)。
+    if (oshape.size() != 3 || oshape[0] != 1) {
+        out["error"] = QString("模型输出维度不对(期望 [1, 通道, 框数], 实际 %1 维)")
+                          .arg(oshape.size());
+        return out;
+    }
+    // 元素数必须和形状对得上 —— 对不上说明这压根不是我们以为的那个张量。
+    const size_t need = static_cast<size_t>(oshape[1]) * static_cast<size_t>(oshape[2]);
+    if (total != need) {
+        out["error"] = QString("模型输出元素数对不上(形状算出来 %1 个,实际 %2 个)")
+                          .arg(need).arg(total);
+        return out;
+    }
 
     // ORT 给的是一维连续内存。OpenCV 的 Mat 没有三维,
     // 所以把 batch 维(恒为 1)去掉,包成二维视图:

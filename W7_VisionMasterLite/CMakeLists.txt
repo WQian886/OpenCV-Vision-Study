@@ -551,6 +551,108 @@ add_custom_command(TARGET w7_dl_test POST_BUILD
 w7_add_test(dl_postprocess w7_dl_test)
 
 # ============================================================
+# === dl_infer 推理路径 回归测试 (假 ONNX Runtime)
+#
+# dl_infer 的推理那半边(#ifdef HAS_ONNXRUNTIME,约 150 行)在本机
+# **一次都没编译过** —— 没装 ONNX Runtime,CMake 走空实现,
+# 那半边根本不参与编译。于是"推理跑不通"是代码错了还是环境缺了,
+# 谁也分不清。
+#
+# 这里用**假 ONNX Runtime**(third_party/fake_onnxruntime/)顶上:
+# 推理路径真的被编译、真的被跑,模型吐出来的张量是**脚本**给的。
+#
+# ⚠ 这个目标**单独编一遍** dl_infer.cpp,而且是**带着** HAS_ONNXRUNTIME 编的 ——
+#   和 w7_vm_lite 里那一份是两个不同的目标、两个不同的目标文件。
+#   (同一个可执行文件里不能有两个 DlInfer::run。)
+#
+# ⚠ 绝不能顺手把 HAS_ONNXRUNTIME 加到 w7_vm_lite 上 ——
+#   那等于把**假 SDK**塞进发货的二进制里。
+#   假 SDK 只活在这个测试目标里。
+# ============================================================
+qt_add_executable(w7_dl_infer_test
+    tests/test_dl_infer.cpp
+    operators/dl_infer.cpp
+    operators/dl_postprocess.cpp
+    operators/param_form.cpp
+    operators/pin_types.cpp
+)
+
+target_include_directories(w7_dl_infer_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/operators
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/fake_onnxruntime/include
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_compile_definitions(w7_dl_infer_test PRIVATE
+    HAS_ONNXRUNTIME=1
+    W7_ONNXRUNTIME_FAKE=1
+)
+
+target_link_libraries(w7_dl_infer_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+    ${OpenCV_LIBS}
+)
+
+if(MSVC)
+    target_compile_options(w7_dl_infer_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_dl_infer_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${OpenCV_BIN_DIR}
+        $<TARGET_FILE_DIR:w7_dl_infer_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+w7_add_test(dl_infer w7_dl_infer_test)
+
+# ============================================================
+# === dl_infer「没装 ONNX Runtime」那条分支 回归测试
+#
+# ⚠ 这一条分支才是**实际发货**的那一半 ——
+#   本仓库绝大多数人(和所有 CI runner)都没装 ONNX Runtime。
+#   它以前一行都没测过,于是「模型路径写错了」和「SDK 没装」
+#   两种病因在日志里长得一样,用户只能靠猜。
+#
+# ⚠ 它必须是**独立的目标**,不能和上面那个合到一个可执行文件里 ——
+#   一个带 HAS_ONNXRUNTIME、一个不带,同一个二进制里会有两个
+#   DlInfer::run,那是 ODR 违规,链接器会挑一个(而且挑哪个还不一定)。
+# ============================================================
+qt_add_executable(w7_dl_infer_nosdk_test
+    tests/test_dl_infer_nosdk.cpp
+    operators/dl_infer.cpp
+    operators/dl_postprocess.cpp
+    operators/param_form.cpp
+    operators/pin_types.cpp
+)
+
+target_include_directories(w7_dl_infer_nosdk_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/operators
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+# ⚠ 这里**故意不定义** HAS_ONNXRUNTIME —— 那正是这个套件要测的那半边。
+target_link_libraries(w7_dl_infer_nosdk_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+    ${OpenCV_LIBS}
+)
+
+if(MSVC)
+    target_compile_options(w7_dl_infer_nosdk_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_dl_infer_nosdk_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${OpenCV_BIN_DIR}
+        $<TARGET_FILE_DIR:w7_dl_infer_nosdk_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+w7_add_test(dl_infer_nosdk w7_dl_infer_nosdk_test)
+
+# ============================================================
 # === 流水线执行引擎 回归测试 (拓扑序 + 前驱输出合并)
 #
 # 这两件事以前住在 mainwindow.cpp 里,而 mainwindow.cpp
