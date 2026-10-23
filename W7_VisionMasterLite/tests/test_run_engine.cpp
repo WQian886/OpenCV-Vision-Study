@@ -767,6 +767,88 @@ static void test_step_info_fields() {
 }
 
 // ============================================================
+// 用例 10:reindexEdges —— 按执行序重编号边
+// ============================================================
+//
+// 为什么要有这个函数:
+//   主程序和 headless runner 都要把「画布上的节点」翻译成
+//   「引擎的下标」,而引擎要的是**执行序**的下标。
+//   两边各写一遍就是抄副本 —— 所以抽成这一份。
+//
+// ⚠ 这条用例最要紧的一条是「顺序不能动」:
+//   多前驱合并时谁赢,取决于上游列表的顺序。
+//   这里如果偷偷重排了边,主程序和 headless 就会给出**不同的**答案,
+//   而两边都是绿的。
+// ============================================================
+static void test_reindex_edges() {
+    beginCase("10. reindexEdges:按执行序重编号,但**顺序不能动**");
+
+    // ---- 执行序为空(有环)-> 一条边都不给 ----
+    {
+        const QVector<EngineEdge> out = reindexEdges({}, {EngineEdge{0, 1}});
+        check(out.isEmpty(), "执行序为空(有环)-> 一条边都不给");
+    }
+
+    // ---- 顺序没变:下标也不变 ----
+    {
+        const QVector<int> order = {0, 1, 2};
+        const QVector<EngineEdge> out =
+            reindexEdges(order, {EngineEdge{0, 1}, EngineEdge{1, 2}});
+        check(out.size() == 2, "两条边都在");
+        check(out.at(0).from == 0 && out.at(0).to == 1, "第一条边下标没变");
+        check(out.at(1).from == 1 && out.at(1).to == 2, "第二条边下标没变");
+    }
+
+    // ---- 执行序和画布顺序不一样 ----
+    {
+        // 画布上是 0->1->2,但执行序是 [2,0,1]
+        const QVector<int> order = {2, 0, 1};
+        const QVector<EngineEdge> out =
+            reindexEdges(order, {EngineEdge{0, 1}, EngineEdge{1, 2}});
+        check(out.size() == 2, "两条边都在");
+        // 原始 0 -> 执行序 1;原始 1 -> 执行序 2;原始 2 -> 执行序 0
+        check(out.at(0).from == 1 && out.at(0).to == 2,
+              QString("边 0->1 变成 1->2(实际 %1->%2)")
+                  .arg(out.at(0).from).arg(out.at(0).to));
+        check(out.at(1).from == 2 && out.at(1).to == 0,
+              QString("边 1->2 变成 2->0(实际 %1->%2)")
+                  .arg(out.at(1).from).arg(out.at(1).to));
+    }
+
+    // ---- ⚠ 边的先后顺序必须原样保留 ----
+    {
+        const QVector<int> order = {0, 1, 2};
+        const QVector<EngineEdge> out =
+            reindexEdges(order, {EngineEdge{0, 2}, EngineEdge{0, 1}});
+        check(out.size() == 2, "两条边都在");
+        check(out.at(0).to == 2 && out.at(1).to == 1,
+              QString("边的**先后顺序**没被动过(实际 %1,%2)—— "
+                      "多前驱合并时谁赢靠的就是这个顺序")
+                  .arg(out.at(0).to).arg(out.at(1).to));
+    }
+
+    // ---- 越界的边 -> 跳过 ----
+    {
+        const QVector<int> order = {0, 1};
+        const QVector<EngineEdge> out =
+            reindexEdges(order, {EngineEdge{0, 1}, EngineEdge{0, 9}, EngineEdge{5, 1}});
+        check(out.size() == 1,
+              QString("越界的边被跳过(实际剩 %1 条)").arg(out.size()));
+        check(out.at(0).from == 0 && out.at(0).to == 1, "剩下的那条没被动过");
+    }
+
+    // ---- 端点不在执行序里 -> 跳过 ----
+    {
+        // order 里没有原始下标 1(理论上不会发生:
+        // topoOrder 给的永远是 0..n-1 的一个排列)
+        const QVector<int> order = {0, 2};
+        const QVector<EngineEdge> out = reindexEdges(order, {EngineEdge{0, 1}});
+        check(out.isEmpty(), "端点不在执行序里的边被跳过(宁可少一条边,"
+                             "也不要一条指向不存在位置的边)");
+    }
+}
+
+// ============================================================
 // 用例 8:源码守卫 —— mainwindow 必须走引擎
 // ============================================================
 //
@@ -813,6 +895,7 @@ int main(int argc, char* argv[]) {
     test_not_vacuous();
     test_run_frame();
     test_step_info_fields();
+    test_reindex_edges();
     test_mainwindow_uses_engine();
 
     qInfo().noquote() << "\n================================";

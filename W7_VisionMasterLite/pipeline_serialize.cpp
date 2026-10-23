@@ -2,11 +2,12 @@
 
 #include "pipeline_view.h"
 #include "connection_line.h"
-// 刻意**不** include operator_base.h —— 理由见头文件里 OpDefaults 那段。
+// 刻意**不** include operator_base.h —— 理由见 pipeline_graph.h 里 OpDefaults 那段。
 
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QHash>
+#include <QUuid>
 
 namespace w7 {
 
@@ -17,7 +18,6 @@ namespace w7 {
 //   0=Left  1=Right  2=Top  3=Bottom
 // 用整数而不是字符串:文件小一点,而且手改的时候不容易写出"top "带空格这种
 // 静默失配(字符串比较不匹配 → 退回默认 → 你还以为方向存对了)。
-// ============================================================
 static inline int sideToInt(OperatorNode::PortSide s) {
     switch (s) {
         case OperatorNode::PortSide::Left:   return 0;
@@ -79,90 +79,50 @@ QJsonDocument pipelineToJson(PipelineView* canvas, const QString& imagePath) {
 // ============================================================
 // 读盘
 // ============================================================
+//
+// ⚠ 这一层只做「图 -> 画布」。
+//   **解析规则不在这里** —— 在 pipeline_graph.h 的 graphFromJson 里。
+//   headless runner 用的是同一份规则,所以两边不会漂。
+//
+//   为什么解析要拆出去:
+//     · 解析是纯数据(QtCore),测它不用拖 QGraphicsScene;
+//     · headless runner 根本不想要画布;
+//     · 规则只有一处 —— 抄第二份就是抄副本。
 bool pipelineFromJson(PipelineView* canvas, const QJsonDocument& doc,
                       std::function<void(const QString&)> logFn,
                       std::function<OpDefaults(const QString&)> factoryFn,
-                      QString& errOut) {
-    if (!doc.isObject()) { errOut = "JSON 根不是对象"; return false; }
-    QJsonObject root = doc.object();
-    if (!root.contains("nodes") || !root["nodes"].isArray()) {
-        errOut = "缺少 nodes 数组";
-        return false;
-    }
+                      QString& errOut,
+                      PipelineGraph* outGraph) {
+    PipelineGraph g;
+    if (!graphFromJson(doc, logFn, factoryFn, &g, errOut)) return false;
+    if (outGraph) *outGraph = g;
 
     canvas->clearPipeline();
 
-    // === M6: 两种索引 ===
-    // uuidIndex: 新版文件按 UUID 精确指认(同名节点也不歧义)
-    // opIndex:   旧版文件(无 uuid 字段)按 op 名 FIFO 兜底
-    QHash<QUuid, OperatorNode*> uuidIndex;
-    QHash<QString, QList<OperatorNode*>> opIndex;
-
-    // 1. 按数组顺序重建节点
-    QJsonArray nodesJson = root["nodes"].toArray();
-    int created = 0, skipped = 0;
-    for (const auto& v : nodesJson) {
-        QJsonObject nj = v.toObject();
-        QString opName = nj["op"].toString();
-        const OpDefaults def = factoryFn(opName);
-        if (!def.known) {
-            logFn(QString("[Load] 跳过未知算子: %1").arg(opName));
-            ++skipped;
-            continue;
-        }
-        // 用 JSON 里的 display/category（没有则用算子默认）
-        QString display  = nj.value("display").toString(def.display);
-        QString category = nj.value("category").toString(def.category);
-        double x = nj.value("x").toDouble(100);
-        double y = nj.value("y").toDouble(200);
-        OperatorNode* node = canvas->addNode(opName, display, category, {x, y});
-        // 恢复参数
-        QJsonObject params = nj.value("params").toObject();
-        if (!params.isEmpty()) node->setParams(params);
-        // 恢复 UUID(旧文件没有则保留自动生成的)
-        const QString uuidStr = nj["uuid"].toString();
-        if (!uuidStr.isEmpty()) {
-            const QUuid id = QUuid::fromString(uuidStr);
-            if (!id.isNull()) {
-                node->setUuid(id);
-                uuidIndex.insert(id, node);
-            }
-        }
-        opIndex[opName].append(node);
-        ++created;
+    // === 图 -> 画布 ===
+    //
+    // uuidIndex: 按 UUID 找回节点(同名的两个节点也不歧义)
+    //
+    // byIndex: 图里的下标 -> 画布上的节点。
+    // ⚠ 图里下标是**解析层**定的(它按 uuid 或 op 名 FIFO 对过两端),
+    //   这一层只负责把下标翻译成节点指针 ——
+    //   对端这件事**只做一次**,别在这儿再做一遍。
+    QVector<OperatorNode*> byIndex;
+    byIndex.reserve(g.nodes.size());
+    for (const GraphNode& gn : g.nodes) {
+        OperatorNode* n = canvas->addNode(gn.op, gn.display, gn.category, {gn.x, gn.y});
+        if (!gn.params.isEmpty()) n->setParams(gn.params);
+        const QUuid id = QUuid::fromString(gn.uuid);
+        if (!id.isNull()) n->setUuid(id);   // 文件里没有 uuid 就保留自动生成的
+        byIndex.append(n);
     }
 
-    // 2. 重建连线:有 UUID 用 UUID,没有则退回 op 名 FIFO
-    QJsonArray edgesJson = root.value("edges").toArray();
-    int linked = 0, edgeSkip = 0, sideDefaulted = 0;
-    for (const auto& v : edgesJson) {
-        QJsonObject ej = v.toObject();
-        QString fromKey = ej["from"].toString();
-        QString toKey   = ej["to"].toString();
-
-        const QUuid fromId = QUuid::fromString(fromKey);
-        const QUuid toId   = QUuid::fromString(toKey);
-        const bool useUuid = !fromId.isNull() && !toId.isNull();
-
-        OperatorNode* fromN = nullptr;
-        OperatorNode* toN   = nullptr;
-
-        if (useUuid) {
-            fromN = uuidIndex.value(fromId, nullptr);
-            toN   = uuidIndex.value(toId, nullptr);
-        } else {
-            // 旧格式:from/to 存的是 op 名
-            if (opIndex.contains(fromKey) && !opIndex[fromKey].isEmpty())
-                fromN = opIndex[fromKey].takeFirst();
-            if (opIndex.contains(toKey) && !opIndex[toKey].isEmpty())
-                toN = opIndex[toKey].takeFirst();
-        }
-
-        if (!fromN || !toN) {
-            logFn(QString("[Load] 边的端点缺失: %1 → %2").arg(fromKey, toKey));
-            ++edgeSkip;
-            continue;
-        }
+    for (const GraphEdge& ge : g.edges) {
+        if (ge.fromIndex < 0 || ge.toIndex < 0) continue;   // 端点缺失(解析层已报过)
+        if (ge.fromIndex >= byIndex.size() || ge.toIndex >= byIndex.size()) continue;
+        OperatorNode* fromN = byIndex.at(ge.fromIndex);
+        OperatorNode* toN   = byIndex.at(ge.toIndex);
+        if (!fromN || !toN) continue;   // 端点缺失 —— 解析层已经报过了
 
         // === v1.1: 读回方向 ===
         // 老文件(没有这两个字段)走 fallback,行为和 v1.0 完全一致 ——
@@ -170,25 +130,13 @@ bool pipelineFromJson(PipelineView* canvas, const QJsonDocument& doc,
         // 越界值(手改坏的文件)也走 fallback:一条线的方向画错了还能改,
         // 整条线加载失败没法用。
         const OperatorNode::PortSide fromSide =
-            parseSide(ej.value("from_side"), OperatorNode::PortSide::Right);
+            parseSide(ge.fromSide, OperatorNode::PortSide::Right);
         const OperatorNode::PortSide toSide =
-            parseSide(ej.value("to_side"),   OperatorNode::PortSide::Left);
-
-        if (!ej.contains("from_side") || !ej.contains("to_side"))
-            ++sideDefaulted;
+            parseSide(ge.toSide,   OperatorNode::PortSide::Left);
 
         canvas->addConnection(fromN, toN, fromSide, toSide);
-        ++linked;
     }
 
-    // 老文件一个字段都没有才值得说一句;正常的新文件不该刷这个日志。
-    if (sideDefaulted > 0) {
-        logFn(QString("[Load] %1 条连线没有方向字段(旧版文件),已按 右出→左进 重画")
-              .arg(sideDefaulted));
-    }
-
-    logFn(QString("[Load] 完成: 创建 %1 个节点(跳过 %2),连线 %3 条(跳过 %4)")
-        .arg(created).arg(skipped).arg(linked).arg(edgeSkip));
     return true;
 }
 

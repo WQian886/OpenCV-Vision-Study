@@ -1,0 +1,32 @@
+{
+    "version": "1.1",
+    "name": "smoke",
+    "nodes": [
+        {
+            "op": "pcb_inspect",
+            "display": "PCB 检查",
+            "category": "detection",
+            "x": 0,
+            "y": 0,
+            "params": {},
+            "uuid": "11111111-1111-1111-1111-111111111111"
+        },
+        {
+            "op": "pcb_defect_judge",
+            "display": "PCB 缺陷判定",
+            "category": "detection",
+            "x": 220,
+            "y": 0,
+            "params": {},
+            "uuid": "22222222-2222-2222-2222-222222222222"
+        }
+    ],
+    "edges": [
+        {
+            "from": "11111111-1111-1111-1111-111111111111",
+            "to": "22222222-2222-2222-2222-222222222222",
+            "from_side": 1,
+            "to_side": 0
+        }
+    ]
+}

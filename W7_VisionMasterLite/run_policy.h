@@ -31,34 +31,22 @@
 #include <QtGlobal>
 #include <QPlainTextEdit>
 
+// 帧数封顶那条规则是**纯算术**,拆到纯头文件里去了 ——
+// headless runner(纯 QtCore)也要用它,而这个头文件拖 QtWidgets。
+// 定义只有一份,这里只是把它引进来。
+#include "run_limits.h"
+
 namespace w7 {
 
 // ============================================================
 // 规则 1:帧数封顶
-//
-// 以前 totalFrames 是直接拿源的 frame_count 当循环上界的,而
-// 文件夹源给的就是目录里的文件数(entryList.size())。
-// 指向一个大目录 = 几万轮同步跑,没有进度、没有取消、没有上限。
-// 循环上界是数据给的,而数据不受控 —— 这是个设计错误,不是参数没调好。
-//
-// 2000 帧是个刻意选的数:8 节点跑 2000 帧已经要跑很久,再往上
-// 用户基本不可能是想一次跑完,更可能是选错了目录。
-// 关键是**超了要说清楚**,静默截断会让人以为全跑完了。
 // ============================================================
-inline constexpr int kMaxRunFrames = 2000;
-
-// 源可能报 0(目录空)、负数(参数填错),一律当 1 帧,
-// 否则循环一次都不进,用户看到"Run 没反应"。
-// 超过 kMaxRunFrames 就截断,并由 truncated=true 告诉调用方去日志里说明。
-inline int clampFrameCount(int reported, bool* truncated = nullptr) {
-    if (truncated) *truncated = false;
-    if (reported < 1) return 1;              // 0 / 负数 -> 至少跑第 0 帧
-    if (reported > kMaxRunFrames) {
-        if (truncated) *truncated = true;
-        return kMaxRunFrames;
-    }
-    return reported;
-}
+//
+// ⚠ 定义在 run_limits.h 里(纯 QtCore)—— 那边有完整的理由说明。
+//   这里只留个指路,免得下一个人把数字抄一份到别处。
+//
+//   kMaxRunFrames / clampFrameCount —— 见 run_limits.h。
+// ============================================================
 
 // ============================================================
 // 规则 2:重绘限频

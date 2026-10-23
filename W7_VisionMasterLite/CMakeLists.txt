@@ -273,6 +273,13 @@ set(SOURCES
     connection_line.cpp
     pipeline_serialize.cpp # 存盘/读盘:边要记两端方向,否则竖线存一次就躺了
     pipeline_serialize.h
+    pipeline_graph.h       # 读盘的**纯解析层**(JSON -> 图):headless 和 GUI 共用一份
+    run_limits.h           # 帧数封顶(纯算术):headless 那层是纯 QtCore,拖不了 QtWidgets
+    run_engine.h           # 流水线执行引擎(拓扑序/合并/逐节点执行):headless 和 GUI 共用一份
+    headless_runner.cpp    # 无头跑一条流水线:JSON -> 图 -> 引擎 -> 结果 JSON
+    headless_runner.h
+    headless_cli.cpp       # 命令行这一层(--run / --out / --image / --frames)
+    headless_cli.h
     connection_payload.h   # 头文件,列出来是为了 IDE 里能跳转 + 改完能触发重编
     select_delete_plan.h   # 批量删除的"计划"层:所有裸指针读取只发生在这一个函数里
     operator_library_groups.h  # 算子库分组:不变式是"没有算子会消失"
@@ -580,6 +587,38 @@ if(MSVC)
 endif()
 
 w7_add_test(run_engine w7_engine_test)
+
+# ============================================================
+# headless runner 的测试套件
+# ============================================================
+# 依赖面:headless_runner.h + pipeline_graph.h + run_engine.h
+#   **全是纯 QtCore** —— 零 OpenCV、零 QtWidgets、零画布。
+#
+# 为什么能这么轻:
+#   算子怎么跑、算子认不认识,是**传进来**的三个回调
+#   (factoryFn / defaultsFn / runner)——
+#   测试塞假算子就行,不用拖整套算子进来。
+#
+# 于是这个套件建得快(几秒)、不需要显示器、CI 里跑得稳。
+# 而它守的是"一条流水线从头到尾能不能跑通"——
+# 以前这件事**根本没有测试**,CI 跑的全是单元测试。
+# ============================================================
+qt_add_executable(w7_headless_test
+    tests/test_headless_runner.cpp
+    headless_runner.cpp
+)
+
+target_include_directories(w7_headless_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(w7_headless_test PRIVATE Qt6::Core)
+
+if(MSVC)
+    target_compile_options(w7_headless_test PRIVATE /utf-8)
+endif()
+
+w7_add_test(headless_runner w7_headless_test)
 
 # ============================================================
 # === 图像源 回归测试 (headless, 自造临时视频)

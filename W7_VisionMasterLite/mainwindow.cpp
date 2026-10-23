@@ -702,6 +702,7 @@ void MainWindow::loadProjectFrom(const QString& path) {
     }
 
     QString loadErr;
+    w7::PipelineGraph loadedGraph;
     bool ok = pipelineFromJson(m_canvas, doc,
         [this](const QString& s){ appendLog(s); },
         [](const QString& name) -> w7::OpDefaults {
@@ -711,18 +712,17 @@ void MainWindow::loadProjectFrom(const QString& path) {
             if (!op) return {};
             return {true, op->displayName(), op->category()};
         },
-        loadErr);
+        loadErr, &loadedGraph);
     if (!ok) {
         appendLog(tr("[Load] ❌ 失败: %1").arg(loadErr));
         return;
     }
 
     // 恢复工具栏图路径（如果 JSON 有）
-    QJsonObject root = doc.object();
-    if (root.contains("image_path")) {
-        QString imgPath = root["image_path"].toString();
-        if (!imgPath.isEmpty()) m_imagePathEdit->setText(imgPath);
-    }
+    //
+    // ⚠ 图是从解析层拿的,不是自己再读一遍根对象 ——
+    //   字段名只该有一个地方知道。
+    if (!loadedGraph.imagePath.isEmpty()) m_imagePathEdit->setText(loadedGraph.imagePath);
 
     // 调整 sceneRect 适配新节点
     m_canvas->scene()->setSceneRect(

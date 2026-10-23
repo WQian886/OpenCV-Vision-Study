@@ -115,6 +115,58 @@ inline QVector<int> topoOrder(int nodeCount,
 }
 
 // ============================================================
+// 按执行序重编号边
+// ============================================================
+//
+// order 是**执行序**:order[k] = 第 k 个要跑的节点在**原始下标**里的位置。
+// (由 topoOrder 给)
+//
+// 输入的边按**原始下标**引用两端,输出按**执行序下标**引用。
+//
+// ⚠ 为什么需要这一步:
+//   主程序和 headless runner 都要把「画布上的节点」翻译成
+//   「引擎的下标」。而引擎要的是**执行序**的下标 ——
+//   同一个节点,在画布上是第 3 个,在执行序里可能是第 1 个。
+//   两边各写一遍就是抄副本(本项目栽过五遍的坑),所以抽成这一份。
+//
+// ⚠ 输出的边**顺序必须和输入的一模一样**:
+//   多前驱合并时谁赢,取决于上游列表的顺序 ——
+//   而那个顺序来自 connections() 的遍历顺序,不是"谁先连线的"。
+//   这里**只换下标,不重排**。
+//
+// ⚠ 两端里有原始下标越界的边:直接跳过(和建边那一层一致)。
+//   节点不在执行序里(理论上不会发生):也跳过 ——
+//   宁可少一条边,也不要一条指向"不存在的位置"的边。
+inline QVector<EngineEdge> reindexEdges(const QVector<int>& order,
+                                         const QVector<EngineEdge>& edges) {
+    QVector<EngineEdge> out;
+    if (order.isEmpty()) return out;   // 有环 -> 什么都没排出来
+
+    // 反查表:原始下标 -> 执行序下标
+    //
+    // ⚠ 按**最大的原始下标**开表,不是按 order.size():
+    //   order 正常是 0..n-1 的一个排列(两者相等),
+    //   但万一不是,按 order.size() 开表会把"原始下标 9"写到表外去。
+    int maxOrig = -1;
+    for (int k = 0; k < order.size(); ++k) maxOrig = qMax(maxOrig, order.at(k));
+    QVector<int> toExec(maxOrig + 1, -1);
+    for (int k = 0; k < order.size(); ++k) {
+        const int orig = order.at(k);
+        if (orig >= 0 && orig <= maxOrig) toExec[orig] = k;
+    }
+
+    for (const EngineEdge& e : edges) {
+        if (e.from < 0 || e.to < 0) continue;
+        if (e.from >= toExec.size() || e.to >= toExec.size()) continue;
+        const int f = toExec.at(e.from);
+        const int t = toExec.at(e.to);
+        if (f < 0 || t < 0) continue;   // 这个节点不在执行序里
+        out.append(EngineEdge{f, t});
+    }
+    return out;
+}
+
+// ============================================================
 // 合并多个前驱的输出 —— **后写覆盖**
 // ============================================================
 //
