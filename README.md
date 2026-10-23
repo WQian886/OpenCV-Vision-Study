@@ -19,7 +19,7 @@
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 477 条断言**
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做，16 个无头回归测试共 1760 条断言
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。14 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），17 个无头回归测试共 1889 条断言
 
 ## 🔗 两个共享核心（common/）
 
@@ -71,7 +71,7 @@ cd W7_VisionMasterLite
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
-16 个套件 / 1760 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+17 个套件 / 1889 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试，
 `pcb_core` 则是共享判定核心自己的测试（**W6 和 W7 链的是同一份源码**）。
 
@@ -91,7 +91,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 >
 > 看着像代码全坏了，其实一个测试都没跑。
 
-> 测试失败时想看是哪条断言挂了，CMakeLists 里已经给 16 个套件都设了
+> 测试失败时想看是哪条断言挂了，CMakeLists 里已经给 17 个套件都设了
 > `QT_FORCE_STDERR_LOGGING=1`。不加的话 Qt 6 在 Windows 上会把 `qInfo`
 > 送到调试通道而不是 stderr，`--output-on-failure` 只能看到一个非零退出码。
 
@@ -101,8 +101,9 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 ```
 
-一条命令跑完：**7 个工程全部编译（Release）→ W6 3 套件 + W7 16 套件
-全部跑通 → W5 的 exe 冒烟 → 检查源码树没被写脏**。
+一条命令跑完：**7 个工程全部编译（Release）→ W6 3 套件 + W7 17 套件
+全部跑通 → W5 的 exe 冒烟 → W7 真跑一条完整流水线（headless）
+→ 检查源码树没被写脏**。
 
 最后一条是重点：测试产物必须落进 `build/`，源码树必须一个字节都不变。
 这条以前靠 `.gitignore` 藏，现在是**断言**——CI 会在产物写进源码树时直接红。
@@ -126,7 +127,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 19 份 + 48 张 atomic 卡，~558 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 19 份 + 51 张 atomic 卡，~585 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -145,8 +146,9 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_CI_2026-10.md` (19 KB) — 上 CI：路径不能写死，以及 CI 第一次跑就逮到的两个真 bug
 - `notes_PCB_Short_2026-10.md` (19 KB) — 短路判据重做：从「量标记圈」到「量两个端子之间」（附：陈旧数据副本）
 - `notes_PCB_Insufficient_2026-10.md` (16 KB) — 焊少判据重做：从「量 ROI 里的金」到「量这个焊盘自己的铜」
+- `notes_W7_RunEngine_2026-10.md` (39 KB) — 执行引擎抽离（第十轮）+ headless runner（片 3）
 
-`notes/atomic/` 里是**单条教训卡片**（48 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（51 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -164,6 +166,8 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `at-even-samples-hide-the-median.md` — 只在多脚样本上验「中位数」，等于没验
 - `at-a-blind-reading-cannot-watch.md` — 读数对什么不敏感，就别指望它管别的事
 - `at-no-runner-is-not-a-reason.md` — 「没在真环境上验过」是结论，不是理由
+- `at-a-fixture-must-look-like-the-product.md` — 测试夹具的形状必须和产品写出来的一样
+- `at-one-code-cannot-say-what-broke.md` — 一个退出码说不出「哪里坏了」
 
 W7 收官期的改动（PCB/DL 算子、视频源、帧循环、每步结果查看、pin 检查、最近工程）
 逐条记在 git 提交信息里，每条都写清了"为什么"和"测试抓到了什么"。
@@ -193,7 +197,7 @@ OpenCV/
 ├── common/cmake/          # 三方依赖路径(本机默认值 + CI 覆盖)
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 检查源码树没被写脏
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（19 份 + 48 张 atomic 卡）
+├── notes/                 # 变更日志（19 份 + 51 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -203,9 +207,9 @@ OpenCV/
 ## 📊 统计
 
 - 7 个 C++ 项目 + 2 个共享核心
-- 106 个 C++ 文件 / **27,100 行**（含注释与空行；口径：`git ls-files '*.cpp' '*.h'` 逐个计数，2026-10-22 实测。
+- 115 个 C++ 文件 / **27,542 行**（含注释与空行；口径：`git ls-files '*.cpp' '*.h'` 逐个计数，2026-10-24 实测。
   旧数字「~29310 行」这次**复现不出来** —— 当初没记口径，于是换成一个能复现的数）
-- 19 份变更日志 + 48 张 atomic 卡 / ~558 KB
-- **19 个无头回归测试 / 2237 条断言**（W7 16 个 / 1760，W6 3 个 / 477；
+- 19 份变更日志 + 51 张 atomic 卡 / ~585 KB
+- **20 个无头回归测试 / 2366 条断言**（W7 17 个 / 1889，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

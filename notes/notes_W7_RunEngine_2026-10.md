@@ -507,3 +507,301 @@ using EngineRunner = std::function<bool(...)>;   // ← 按值存
 > ⚠ 写 headless 的测试时会再遇到 `std::function` 按值存那个坑
 > （假算子要记状态）—— 见第十六节。
 
+---
+
+# 片 3：headless runner —— 给 W7 一个不开窗口的口子
+
+> 📅 **日期**：2026-10-24
+> 🎯 **目标**：让 `w7_vm_lite.exe --run pipeline.json` 真的能跑一条完整流水线，
+> 并且让 CI **第一次**真跑一条流水线（而不是只跑单元测试）。
+> 🔗 **相关**：第十八节（片 2 留下的两件事）、
+> `notes/atomic/at-a-fixture-must-look-like-the-product.md`、
+> `notes/atomic/at-a-format-test-is-not-a-membership-test.md`、
+> `notes/atomic/at-one-code-cannot-say-what-broke.md`
+
+## 十九、这一片做了什么
+
+上一节留下两件事：**读 JSON → 建图**、**CLI 入口**。
+这一片把两件都做掉，顺手做了一件之前没人想过要做的事：
+**把「读盘」从「画图」里拆出来**。
+
+| 新文件 | 依赖面 | 干什么 |
+|---|---|---|
+| `pipeline_graph.h` | 纯 QtCore，零 OpenCV 零 QtWidgets | JSON → 图（纯数据） |
+| `headless_runner.h/.cpp` | 纯 QtCore | 图 → 引擎 → 结果 JSON |
+| `headless_cli.h` | 纯 QtCore（解析部分 inline） | 命令行参数 |
+| `headless_cli.cpp` | 要真算子（OpenCV） | 无头跑一条流水线，定退出码 |
+| `run_limits.h` | 纯算术 | 帧数封顶（从拖 QtWidgets 的 `run_policy.h` 里抽出来） |
+
+新套件 `headless_runner`：**117 条断言**，零 OpenCV 零 QtWidgets。
+
+### 为什么必须先抽解析层
+
+`pipelineFromJson()` 的签名是 `pipelineFromJson(PipelineView*, ...)` ——
+**它要一个画布**（`QGraphicsScene`）。
+
+于是「想跑一条流水线但不要窗口」只有两条路：
+
+- (a) 造一个离屏画布，喂给它，再从画布上把节点抠出来
+- (b) 自己再写一份解析
+
+(a) 把整个 `QGraphicsScene` 拖进 headless 路径；
+(b) 就是**抄副本** —— 本项目栽过五遍的坑，而且这次抄的是**逻辑**。
+
+所以把**解析**从**画图**里拆出来：
+
+```
+这一层：JSON → 图（纯数据，QtCore）
+pipeline_serialize.cpp：图 → 画布上的节点和连线（QtWidgets）
+```
+
+两边共用**同一份**解析 —— 规则只有一处：
+未知算子跳过、边端点缺失跳过、旧格式按 op 名 FIFO 兜底、方向字段缺失时按默认重画。
+
+> 这就是「抽成一份」和「复制一份去测」的区别 ——
+> 见 `notes/atomic/at-extract-it-or-it-is-just-a-second-copy.md`。
+>
+> 而且这次是**真的共用**：GUI 那条路也改成了调 `graphFromJson()`，
+> 不是「headless 用新的一份、GUI 还用老的」。
+> CI 全绿证明了行为没变。
+
+### headless 套件为什么能是纯的
+
+三个回调注入 —— 算子认不认识、默认参数是什么、怎么跑，**全是外面给的**：
+
+```cpp
+bool runPipelineJson(const QJsonDocument&, const HeadlessOptions&,
+                     const std::function<OpDefaults(const QString&)>& factoryFn,
+                     const w7::EngineDefaultsFn& defaultsFn,
+                     const w7::EngineRunner& runner,
+                     HeadlessResult* out, QString& errOut);
+```
+
+于是测试塞**假算子**就行：建得快（几秒）、不需要显示器、CI 里跑得稳。
+
+> ⚠ 这**不是**「少测了 GUI」—— 这一层本来就不该有 GUI。
+> 引擎那一层已经证明了「执行逻辑不需要 GUI」，
+> 这一层继续证明「**连读盘都不需要**」。
+
+## 二十、CLI 与四种退出码
+
+`main.cpp` 改成双模式：`w7_vm_lite.exe` 开窗口，
+`w7_vm_lite.exe --run pipeline.json` 无头。
+
+退出码约定：
+
+| 码 | 意思 | 该修谁 |
+|---|---|---|
+| 0 | 跑完了，没有步骤报错，判定 PASS（或本来就不做判定） | —— |
+| 1 | 跑完了，没有步骤报错，但判定 **FAIL** | 流水线 |
+| 2 | 用法错 / 文件读不了 / JSON 坏 / 有环 | **工具** |
+| 3 | 跑完了，但**有步骤报错** | 流水线（工具是好的） |
+
+**3 优先于 1**：步骤报错时那个 FAIL 往往只是它的**后果**。
+
+四种必须分开，因为合成一个码之后 CI 就**分不清该修工具还是修流水线**，
+而「分不清」在实践中就等于「没人修」。
+
+> ⚠ 还有一个更贵的点：**退出码 0 只说明「跑完了」，不说明「判定了」**。
+> 一条什么都不判定的流水线也能跑得很漂亮、退出码 0。
+> 所以 CI 断言的必须是**结果 JSON 里的 `final_result`**。
+>
+> 这和 W5 冒烟栽过的坑一模一样（见 `notes/notes_CI_2026-10.md`）。
+
+### `QCoreApplication::arguments()` 不能用来解析启动参数
+
+它要 app 实例才准 —— 而**实例化之前**我们还不知道要不要开窗口
+（开不开窗口决定 `QT_QPA_PLATFORM` 怎么设，而那个必须在
+`QApplication` 构造**之前**定下来）。
+
+于是顺序成了死结：**先要参数才知道模式，先要模式才能构造 app**。
+
+改法：从 `argv` 直接造一份，解析器**完全不依赖 app 实例**，
+顺带能直接进单元测试（`parseCliArgs()` 纯 QtCore，inline 在头文件里）。
+
+> 另一个坑：`QCommandLineParser::process()` 遇到 `--help` 会直接 `exit`，
+> 没法测。用 `parse()`（只解析，副作用交给调用方）。
+
+## 二十一、CI 里第一次真跑了一条完整流水线
+
+`tools/ci.ps1` 新增 **Step 5/6**（原 Step 5/5 变 6/6）：
+用**真二进制 + 真算子 + 真图**跑 `pipelines/smoke.json`
+（`pcb_inspect` → `pcb_defect_judge`），断言**退出码和结果 JSON 的内容**：
+
+```
+final_result == PASS
+errors == 0
+component_count == 6
+```
+
+> 为什么断言**内容**而不只是退出码：退出码 0 不够 ——
+> 流水线可以「成功」地什么都没判（`final_result = UNKNOWN`）。
+> 这是 W5 冒烟已经栽过的坑，这次不重复栽。
+
+### 它当场抓到了两个 bug
+
+**第一个：`pipelines/smoke.json` 自己就是坏的。**
+
+```
+[Load] 边的端点缺失: smoke-inspect → smoke-judge
+[Load] 完成: 创建 2 个节点(跳过 0),连线 0 条(跳过 1)
+[Run] 跑完: 1 帧,PASS 0,FAIL 0,判定 ERROR(有 1 步报错)
+```
+
+退出码 3。而这个文件里的 uuid 写的是 `"smoke-inspect"` / `"smoke-judge"` ——
+**不是 UUID**。
+
+解析层靠 `QUuid::fromString()` 分「新版/旧版格式」，
+不是 UUID → 判成旧格式（两端存算子名）→ 去算子名表查 `"smoke-inspect"`
+→ 查不到 → 边被丢掉。
+
+> 症状极具误导性：报出来的是「流水线判定 ERROR」，
+> 真相是「文件里的键写错了」。查的方向完全不同。
+
+**第二个：这个错在测试夹具里也存在，而且没人发现。**
+
+第一版测试夹具用的也是随手编的键（`"u-src"` / `"u-judge"`）——
+**测试全绿**，因为它护的是一个**磁盘上根本不存在的格式**。
+
+而且更糟：抽层的时候我把「新版格式」的判据从
+「两个端点都能解析成 UUID」改成了「两个端点都在节点表里」
+（键用原始字符串）—— 这是**改行为**，不是重构。
+而夹具用的假 UUID 在新旧两种判据下**表现一样**，
+所以**两边同时漂移，中间那道缝没人看得见**。
+
+原代码（`pipeline_serialize.cpp`）判的正是「能不能解析成 UUID」。
+抽回来的时候手滑改了判据 —— 现在改回去了，
+并且加了一条断言把它钉住（用例 14），还有一条变异（M69）盯着它。
+
+> 详见 `notes/atomic/at-a-format-test-is-not-a-membership-test.md`。
+
+### 顺带修掉的第三个：`ci.ps1` 读结果 JSON 的编码
+
+```powershell
+$w7json = Get-Content $w7result -Raw | ConvertFrom-Json     # ← 少了 -Encoding UTF8
+```
+
+PowerShell 5.1 不带 `-Encoding` 读文件时按 **ANSI（本机 GBK）** 读。
+结果 JSON 是 UTF-8、里面有中文 → 读成乱码 →
+**乱码会把 JSON 本身弄坏**（一个错位的字节对可能产生一个野引号）→
+`ConvertFrom-Json` 报「传入的对象无效」。
+
+症状看起来像「流水线写了个坏文件」，其实文件是好的，**读的人是错的**。
+
+### 第四个：退出码 1/2/3 之前**一条都没验过**
+
+CI 原来只断言了**退出码 0** 那条路。
+也就是说，**把「判定 FAIL」的退出码从 1 改成 0，CI 当时是全绿的**。
+
+门禁是有，但门只有一扇。现在 Step 5/6 会跑四次真实二进制，
+四个码全断言。
+
+> 这是「测了不等于测全」的又一个实例。
+> 详见 `notes/atomic/at-one-code-cannot-say-what-broke.md`。
+
+### 还有两个工程上的坑
+
+- **`w7_vm_lite.exe` 是 `WIN32`（GUI 子系统）** —— PowerShell 的 `&` **不等** GUI 程序
+  （实测 4 ms 就返回，文件 3 秒后才出现）。cmd.exe 会等。
+  CI 和包装器都用 `Start-Process -Wait`。
+- **配方路径是相对路径** —— `pcb_inspect` 按 `recipes/demo.json` 读，
+  所以必须在 exe 目录（或有 `recipes/` 的目录）跑。
+  CI 明确把工作目录设成 exe 目录；`tools/w7-run.ps1` 也这么做。
+
+## 二十二、变异 M66~M84：十九条，十五杀四活
+
+这一轮多了一种判定方式：**真二进制**。
+
+`headless_cli.cpp` 里的退出码约定，单元测试够不到（它要真算子），
+所以那三条变异（M82/M83/M84）只能靠**跑真实 exe** 判：
+
+| 编号 | 注入 | 判定方式 | 结果 | 红在哪 |
+|---|---|---|---|---|
+| M66 | 未知算子不再跳过 | 套件 | **KILLED** | 2（用例 2） |
+| M67 | 端点缺失不再跳过/报出 | 套件 | **KILLED** | 3（用例 2 / 13 / 14） |
+| M68 | 旧格式 FIFO 兜底没了 | 套件 | **KILLED** | 1（用例 13） |
+| **M69** | **判据改成「在不在表里」（真发生过的漂移）** | 套件 | **KILLED** | **5（用例 14）** |
+| M70 | 判据换个写法（**合法等价**） | 套件 | **SURVIVED** | —— |
+| M71 | 命令行的图路径不优先了 | 套件 | **KILLED** | 1（用例 6） |
+| M72 | 报错的步骤不计数了 | 套件 | **KILLED** | 4（用例 11） |
+| M73 | 有报错也说 PASS | 套件 | **KILLED** | 1（用例 11） |
+| M74 | 有环不再拒绝 | 套件 | **KILLED** | 1（用例 3） |
+| M75 | 没有 uuid 时不再用 `#<下标>` 兜底 | 套件 | **KILLED** | 2（用例 14） |
+| M76 | 截断了不再报出来 | 套件 | **KILLED** | 1（用例 8） |
+| M77 | 图路径的三元换个写法（**合法等价**） | 套件 | **SURVIVED** | —— |
+| M78 | PASS 计数的判据换个写法（**合法等价**） | 套件 | **SURVIVED** | —— |
+| M79 | `--frames 0`/负数被接受 | 套件 | **KILLED** | 2（用例 12） |
+| M80 | `--out` 不带 `--run` 被接受 | 套件 | **KILLED** | 2（用例 12） |
+| M81 | `--frames` 的判据换个写法（**合法等价**） | 套件 | **SURVIVED** | —— |
+| **M82** | **判定 FAIL 却退出 0** | 真二进制 | **KILLED** | bad board: 1 → 0 |
+| **M83** | **有步骤报错却退出 0** | 真二进制 | **KILLED** | image missing: 3 → 0 |
+| **M84** | **文件读不了却退出 0** | 真二进制 | **KILLED** | pipe missing: 2 → 0 |
+
+`unexpected results = 0`。
+
+### M69 是这一轮最值钱的一条
+
+它是**真的发生过的漂移**，不是编出来的：
+把「新版格式」的判据从「能不能解析成 UUID」改成「在不在节点表里」。
+M69 红了 **5 条**（全在用例 14）。
+
+> 也就是说：**用例 14 是在事故之后补的，但它补对了位置** ——
+> 它守的正是那条当时悄悄改掉的判据。
+
+### 四个 SURVIVE 是必须的
+
+M70 / M77 / M78 / M81 是四个**合法等价改写** —— 它们必须活，
+证明测试判的是**语义**，不是某一种写法。
+
+M70 尤其有意思：它把
+`!fromId.isNull() && !toId.isNull()` 写成
+`!(fromId.isNull() || toId.isNull())` —— 必须活。
+
+> ⚠ 顺带一个反例：`QUuid::isValid()` **不等于** `!isNull()`。
+> `isValid()` 还查 RFC 的 variant 位，
+> `{A1B2C3D4-...}` 这种首字节最高位是 1 的 UUID 会判成**不合法**。
+> 要判「是不是能解析成 UUID」，用 `!isNull()`。
+
+### 变异脚本的两处新约定
+
+- **正则锚点**（`Regex = $true`）：锚点要跨过一句中文报错时，
+  用正则 + `$1` 反向引用把中间那段保住 ——
+  否则 `.ps1` 里就得写中文，而 `.ps1` 必须**纯 ASCII**
+  （无 BOM 的 `.ps1` 按 ANSI/GBK 读，中文会把下一行代码吞进注释）。
+- ⚠ 正则替换里**不能**把 `$` 转义成 `$$`：
+  那样 `$1` 就成了字面量，编译会失败 ——
+  而且失败原因和变异毫无关系（第一轮就踩了这个，M84 判成 BUILD-FAIL）。
+  > 这正是 `at-build-failure-looks-like-mutation-survived.md` 说的那件事。
+
+## 二十三、这一轮的数字（实测，不是推算）
+
+| | 片 2 之后 | 片 3 之后 |
+|---|---|---|
+| `headless_runner` 套件断言 | ——（套件不存在） | **117** |
+| `run_engine` 套件断言 | 99 | **111**（片 3 加了 `reindexEdges` 用例） |
+| W7 套件 / 断言 | 16 / 1760 | 17 / **1889** |
+| W6 套件 / 断言 | 3 / 477 | 3 / **477** |
+| 全仓套件 / 断言 | 19 / 2237 | 20 / **2366** |
+| 累计变异 | 66 | **85**（本轮 +19：15 杀 4 活） |
+| atomic 卡 | 48 | **51** |
+
+> 断言数是**实测**的：逐个套件跑一遍、把 `pass=` 加总。
+> 这一轮踩了一个新的坑：三个套件（`run_policy` / `detection_operators` /
+> `template_match`）的结尾**不是** `SUMMARY: pass=…`，而是 `pass=… fail=…` ——
+> 只按 `SUMMARY:` 匹配的话，这三个套件会被当成「读不到」而**少算 232 条**。
+>
+> 全仓总数 = W7 1889 + W6 477 = **2366**。
+
+门禁：`tools/ci.ps1` → **ALL CHECKS PASSED**
+（7 项目 / 20 套件 / W5 冒烟 / **W7 整条流水线** / 源码树零污染）
+
+## 二十四、下一步
+
+| 还缺什么 | 难在哪 |
+|---|---|
+| **假 ONNX SDK** | `dl_infer` 只用了 6~8 个 ONNX API 点 —— 可以造一套假的头和库，把那条分支测起来（欠账 4 的一半） |
+| **两个 SDK 缺失分支** | `dl_infer` 的 `#else` 和 `image_source_camera` 的 `#else` 真实代码一行没测过（本机没装 SDK） |
+
+欠账 4 / 8 / 10 / 11 写清楚就结项。
+
+
