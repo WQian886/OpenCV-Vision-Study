@@ -653,6 +653,111 @@ add_custom_command(TARGET w7_dl_infer_nosdk_test POST_BUILD
 w7_add_test(dl_infer_nosdk w7_dl_infer_nosdk_test)
 
 # ============================================================
+# === image_source_camera 相机路径 回归测试 (假 MVS SDK)
+#
+# image_source_camera 的相机那半边(#ifdef HAS_MVS_SDK,约 85 行)
+# 在本机**一次都没编译过** —— 没装 MVS SDK,CMake 走空实现,
+# 那半边根本不参与编译。于是"相机连不上"是代码错了还是环境缺了,
+# 谁也分不清。
+#
+# 更糟的是:那半边引用了一个真 SDK 里**根本不存在的常量**
+# (MV_TRIGGER_MODE_SOFT)—— 也就是说**装上 SDK 的机器上它编不过**,
+# 而这件事永远不会有人发现。
+#
+# 这里用**假 MVS SDK**(third_party/fake_mvs/)顶上:相机路径真的被编译、
+# 真的被跑,枚举到的相机、返回的帧、每一调用的返回值都是脚本给的。
+#
+# ⚠ 这个目标**单独编一遍** image_source_camera.cpp,而且是**带着**
+#   HAS_MVS_SDK 编的 —— 和 w7_vm_lite 里那一份是两个不同的目标、
+#   两个不同的目标文件。(同一个可执行文件里不能有两个
+#   ImageSourceCamera::run,那是 ODR 违规。)
+#
+# ⚠ 绝不能顺手把 HAS_MVS_SDK 加到 w7_vm_lite 上 ——
+#   那等于把**假 SDK**塞进发货的二进制里。
+#   假 SDK 只活在这个测试目标里。
+# ============================================================
+qt_add_executable(w7_camera_test
+    tests/test_camera.cpp
+    operators/image_source_camera.cpp
+    operators/param_form.cpp
+    operators/pin_types.cpp
+)
+
+target_include_directories(w7_camera_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/operators
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/fake_mvs/include
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_compile_definitions(w7_camera_test PRIVATE
+    HAS_MVS_SDK=1
+    W7_MVS_FAKE=1
+)
+
+target_link_libraries(w7_camera_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+    ${OpenCV_LIBS}
+)
+
+if(MSVC)
+    target_compile_options(w7_camera_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_camera_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${OpenCV_BIN_DIR}
+        $<TARGET_FILE_DIR:w7_camera_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+w7_add_test(camera w7_camera_test)
+
+# ============================================================
+# === image_source_camera「没装 MVS SDK」那条分支 回归测试
+#
+# ⚠ 这一条分支才是**实际发货**的那一半 ——
+#   本仓库绝大多数人(和所有 CI runner)都没装 MVS SDK。
+#   它以前一行都没测过,于是「相机 IP 填错了」和「SDK 没装」
+#   两种病因在日志里长得一样,用户只能靠猜。
+#
+# ⚠ 它必须是**独立的目标** —— 一个带 HAS_MVS_SDK、一个不带,
+#   同一个二进制里会有两个 ImageSourceCamera::run,那是 ODR 违规,
+#   链接器会挑一个(而且挑哪个还不一定)。
+# ============================================================
+qt_add_executable(w7_camera_nosdk_test
+    tests/test_camera_nosdk.cpp
+    operators/image_source_camera.cpp
+    operators/param_form.cpp
+    operators/pin_types.cpp
+)
+
+target_include_directories(w7_camera_nosdk_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/operators
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+# ⚠ 这里**故意不定义** HAS_MVS_SDK —— 那正是这个套件要测的那半边。
+target_link_libraries(w7_camera_nosdk_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+    ${OpenCV_LIBS}
+)
+
+if(MSVC)
+    target_compile_options(w7_camera_nosdk_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_camera_nosdk_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${OpenCV_BIN_DIR}
+        $<TARGET_FILE_DIR:w7_camera_nosdk_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+w7_add_test(camera_nosdk w7_camera_nosdk_test)
+
+# ============================================================
 # === 流水线执行引擎 回归测试 (拓扑序 + 前驱输出合并)
 #
 # 这两件事以前住在 mainwindow.cpp 里,而 mainwindow.cpp
