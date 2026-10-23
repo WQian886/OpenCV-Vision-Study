@@ -570,6 +570,11 @@ target_include_directories(w7_engine_test PRIVATE
 
 target_link_libraries(w7_engine_test PRIVATE Qt6::Core)
 
+# 源码守卫要读 mainwindow.cpp(mainwindow 不在任何测试目标里,
+# "主程序有没有接上引擎"只能用 lint 验 —— 判据是"要求某个可测入口")
+target_compile_definitions(w7_engine_test PRIVATE
+    W7_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
 if(MSVC)
     target_compile_options(w7_engine_test PRIVATE /utf-8)
 endif()

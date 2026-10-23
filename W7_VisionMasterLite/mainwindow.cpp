@@ -994,8 +994,8 @@ void MainWindow::runPipeline(OperatorNode* target) {
     // 先跑第 0 帧拿到 frame_count,再决定要不要继续 ——
     // 所以循环上界是动态的,不是先算好再跑。
     // 引擎通过 inputs["frame_index"] 告诉源"这轮要第几帧"。
-    QHash<OperatorNode*, QJsonObject> nodeOutputs;   // 每个节点的输出缓存(本帧内传递用)
-    QPointer<OperatorNode> finalNode;               // 同样不用裸指针,理由见上面 order 那段
+    QVector<QJsonObject> frameOutputs;                    // 本帧各节点的输出(下标与 order 平行)
+    int finalIndex = -1;                                  // 最后一个跑完的节点(下标)
     QJsonObject finalResult;                        // 保留最后一帧的结果供显示
     int totalFrames = 1;
     int passCount = 0, failCount = 0, frameDone = 0;
@@ -1037,154 +1037,236 @@ void MainWindow::runPipeline(OperatorNode* target) {
             break;
         }
 
-        nodeOutputs.clear();
-        finalNode = nullptr;
+        frameOutputs.clear();
+        finalIndex = -1;
         QJsonObject frameResult;
         appendLog(tr("──────── 第 %1/%2 帧 ────────")
                   .arg(frame + 1).arg(qMax(totalFrames, frame + 1)));
 
-        for (int step = 0; step < order.size(); ++step) {
-        // === 单步执行:超出范围就停 ===
-        // 放在这里而不是 for 的条件里,是为了让"停在哪"能进日志 ——
-        // 用户看到"单步跑到第 3 步停下"才确认范围对不对。
-        if (singleStepTargetIndex >= 0 && step > singleStepTargetIndex) {
-            appendLog(tr("  ⏹ 单步执行到「%1」为止,后面的节点本次不跑")
-                .arg(order[step] ? order[step]->displayName() : QString("?")));
-            break;
-        }
-        // 节点可能已经不在了(跑批期间右键删了/拖了/Load 了)。
-        // QPointer 在这里自动变 null,跳过就行 —— 换成裸指针就是
-        // 往已释放内存上写,堆一坏,表现是随机的卡死或闪退。
-        if (!order[step]) {
-            appendLog(tr("  ⚠️ 第 %1 步的节点在运行中被删除,跳过").arg(step + 1));
-            continue;
-        }
-        OperatorNode* n = order[step].data();
-        m_canvas->highlightNode(n->opName(), true);
-
-        // === UI 抽帧限频 ===
-        // 按时间限频,不是每节点都刷。再快也最多 10 次/秒。
-        // 副作用是好的:一帧之内的多次日志写入会合并成一次重绘,
-        // 而不是每个节点重画一遍整个日志。
-        const qint64 nowMs = uiPumpTimer.elapsed();
-        if (w7::shouldPumpUi(nowMs - lastPumpMs)) {
-            lastPumpMs = nowMs;
-            // 让用户看得见在动 —— "看不出在动"和"卡死了"在体感上是一回事。
-            statusBar()->showMessage(tr("运行中… 第 %1/%2 帧")
-                .arg(frame + 1).arg(qMax(totalFrames, frame + 1)));
-            QApplication::processEvents();
-        }
-
-        // === 构造 inputs:优先合并所有前驱节点 outputs(后写覆盖) ===
-        // === B 方案:不再硬塞 image_path;若上游没产 image_path 才 fallback 工具栏 ===
+        // === 跑这一帧 ===
         //
-        // 合并规则在 run_engine.h 里(w7_engine_test 直接测它)。
+        // 执行的逻辑在 run_engine.h 里(w7_engine_test 直接测它):
+        // 组装 inputs / 组装 params / 跑算子 / 存输出 / 顺序校验。
+        // 这里只留 UI 的活儿(状态点、日志、每步缓存)和帧循环。
         //
-        // ⚠ **顺序不能重排**:胜负取决于**上游列表的顺序**,
-        //   而那个顺序来自 connections() 的遍历顺序 —— 不是"谁先连线的"。
-        //   实测过(2026-10-15):两个上游状态点都是绿的、都不报错,
-        //   只有下游那个数悄悄变了。所以这里必须**原样**把遍历顺序传进去。
-        QVector<QJsonObject> upstream;
-        for (const auto* c : m_canvas->connections()) {
-            if (c->toNode() != n) continue;
-            if (!nodeOutputs.contains(c->fromNode())) continue;
-            upstream.append(nodeOutputs[c->fromNode()]);
-        }
-        QJsonObject inputs = w7::mergeUpstreamOutputs(upstream);
-        // 兜底:若上游没产出 image_path,fallback 到工具栏
-        if (!inputs.contains("image_path")) {
-            inputs["image_path"] = fallbackPath;
-        }
-        // 帧索引:源算子据此取第几帧/第几张图,下游算子忽略这个键
-        inputs["frame_index"] = frame;
-        // 节点身份:算子据此生成**实例唯一**的中间文件名。
-        // Run 引擎只传字符串路径,所以算子之间靠"写文件 → 下游 imread"
-        // 传数据;文件名写死的话,一条流水线里两个同类型算子会互相覆盖,
-        // 下游读到的是别人的结果 —— 不崩不报错,数就是错的。
-        // (color_segment 的 mask 就是这么错的。)
-        inputs["node_uuid"] = n->uuid().toString(QUuid::WithoutBraces);
-
-        OperatorBase* op = w7::createOperatorByName(n->opName());
-        if (!op) {
-            appendLog(tr("  ❌ 算子 %1 未注册,跳过").arg(n->opName()));
-            m_canvas->highlightNode(n->opName(), false);
-            n->setStepStatus(OperatorNode::StepStatus::Error);
-            continue;
-        }
-
-        // 用节点的参数(优先 node 自己存的,fallback 到默认)
-        QJsonObject params = n->params();
-        if (params.isEmpty()) params = op->defaultParams();
-
-        QJsonObject out = op->run(params, inputs);
-        nodeOutputs[n] = out;
-        finalNode = n;
-        if (out.contains("result")) frameResult = out;
-
-        // ============================================================
-        // === 每步结果查看:把这一步**这一帧**的输出留下 ===
-        //
-        // 以前这里有个 `if (frame == totalFrames - 1 || totalFrames == 1)`,
-        // 只写最后一帧。理由写的是"中间帧的结果没有保留价值"——
-        // 而真实理由是"没想过要怎么处理",因为当时根本没有多帧回看这回事。
-        //
-        // 代价很具体:30 帧里第 7 帧判 FAIL,右键回看只能看到末帧。
-        // 末帧 PASS 时用户看到一张绿图,**回看这个动作反而掩盖了
-        // 要查的那一帧** —— 一个专门用来查错的入口,成了掩盖错误的入口。
-        //
-        // 现在每帧都存(数字很便宜,见 step_frame_cache.h 开头实测)。
-        // setHasCachedResult 每帧都置位是刻意的:哪怕单步执行只跑到
-        // 前 3 步,那 3 步在**每一帧**上都有缓存,右键都能回看。
-        // ============================================================
+        // ⚠ 为什么主程序只留 UI:
+        //   引擎碰了 QWidget 就等于把整个 GUI 拖进测试目标 ——
+        //   而 mainwindow.cpp 本来就不在任何测试目标里,
+        //   那正是这几件事一直没有测试的原因。
         {
-            const QString id = n->uuid().toString(QUuid::WithoutBraces);
-            // "这一帧要不要记"这个决定在 frame_record.h 里
-            // (可行为测试,以前只能靠 lint 读源码,变异 M4 实测 12/12 全绿)。
+            // ---- 1) 节点快照(每帧重建:跑批期间节点可能被删)----
             //
-            // ⚠ 这里**不能**写成 `if (!shouldCacheFrame(...)) continue;` ——
-            //   continue 会跳过下面状态点/日志那几行,等于"不缓存"顺手
-            //   把这个节点的其它 bookkeeping 也跳了。两个后果捆在一起,
-            //   将来真要加"只缓存关键帧"策略时,会很难查。
-            if (w7::shouldCacheFrame(frame, totalFrames)) {
-                const int dropped = w7::recordFrameResult(
-                    &m_stepCache, id, frame, out,
-                    tr("第 %1 步 · %2").arg(step + 1).arg(n->displayName()));
-                // 撞上限必须报出来 —— 静默丢帧的话,界面一切正常,
-                // 只是用户要查的那一帧的数字**不在了**,而他不知道。
-                if (dropped > 0) {
-                    appendLog(tr("  ⚠️ 每步结果缓存已满(%1 帧/节点),丢弃了最早的 %2 帧"
-                                 "的数字 —— 这些帧还能看日志,但回看不到了")
-                        .arg(w7::kStepCacheMaxFrames).arg(m_stepCache.evictedCount()));
+            // ⚠ 快照的**下标和 order 一一对应**(已经被删掉的节点也占一个位置,
+            //   只是内容是空的)—— 因为单步执行的范围是 order 的前缀,
+            //   下标错位的话范围就切错了。
+            QVector<w7::EngineNode> enodes;
+            enodes.reserve(order.size());
+            for (const auto& p : order) {
+                w7::EngineNode en;
+                if (p) {
+                    en.opName = p->opName();
+                    en.uuid = p->uuid().toString(QUuid::WithoutBraces);
+                    en.params = p->params();
+                }
+                enodes.append(en);
+            }
+
+            // ---- 2) 连线 -> 边(下标与快照平行)----
+            //
+            // ⚠ **顺序不能重排**:多前驱合并时谁赢,取决于边的遍历顺序
+            //   (来自 connections() 的遍历顺序,不是"谁先连线的")。
+            //   实测过(2026-10-15):两个上游状态点都是绿的、都不报错,
+            //   只有下游那个数悄悄变了。
+            QVector<w7::EngineEdge> edges;
+            {
+                QHash<OperatorNode*, int> indexOf;
+                for (int i = 0; i < order.size(); ++i) {
+                    if (order.at(i)) indexOf.insert(order.at(i).data(), i);
+                }
+                for (const auto* c : m_canvas->connections()) {
+                    const int from = indexOf.value(c->fromNode(), -1);
+                    const int to   = indexOf.value(c->toNode(), -1);
+                    if (from < 0 || to < 0) continue;   // 指向已删节点的线
+                    edges.append(w7::EngineEdge{from, to});
                 }
             }
-        }
-        n->setHasCachedResult(true);
 
-        // 画布状态点:有 error 是橙,result 是 FAIL/OK 是红/绿,
-        // 中间算子(分割/计数)没有 result 字段,只要没 error 就是绿的
-        // —— 它们确实跑成功了,只是这一级不做判定。
-        n->setStepStatus(OperatorNode::statusFromOutput(out));
+            // ---- 3) 三个回调:声明默认值 / 跑算子 / 节点还在不在 ----
+            //
+            // 声明默认值按算子名缓存一份:一帧里同一个算子可能被多个节点用,
+            // 不缓存就是每个节点都 new 一个算子出来只为读一次默认值。
+            QHash<QString, QJsonObject> defaultsCache;
+            auto defaultsOf = [&](const QString& opName) -> QJsonObject {
+                auto cached = defaultsCache.constFind(opName);
+                if (cached != defaultsCache.constEnd()) return cached.value();
+                QJsonObject d;
+                OperatorBase* op = w7::createOperatorByName(opName);
+                if (op) { d = op->defaultParams(); delete op; }
+                defaultsCache.insert(opName, d);
+                return d;
+            };
+            auto runner = [&](const QString& opName, const QJsonObject& params,
+                              const QJsonObject& inputs, QJsonObject* out,
+                              QString* err) -> bool {
+                OperatorBase* op = w7::createOperatorByName(opName);
+                if (!op) {
+                    *err = tr("算子 %1 未注册,跳过").arg(opName);
+                    return false;
+                }
+                *out = op->run(params, inputs);
+                delete op;
+                return true;
+            };
+            // 节点可能已经不在了(跑批期间右键删了/拖了/Load 了)。
+            // QPointer 在这里自动变 null,跳过就行 —— 换成裸指针就是
+            // 往已释放内存上写,堆一坏,表现是随机的卡死或闪退。
+            auto alive = [&order](int idx) -> bool {
+                return idx >= 0 && idx < order.size() && !order.at(idx).isNull();
+            };
 
-        // 日志输出关键字段(沿用旧格式)
-        QString summary;
-        for (auto it = out.begin(); it != out.end(); ++it) {
-            if (it.key() == "error") {
-                appendLog(tr("  ❌ %1: %2").arg(n->opName(), it.value().toString()));
-            } else {
-                summary += QString("%1=%2 ").arg(it.key()).arg(it.value().toVariant().toString());
+            // ---- 4) 每步的前后通知(UI 的活儿都在这儿)----
+            auto hook = [&](w7::EnginePhase phase, const w7::EngineStepInfo& info) {
+                const int idx = info.nodeIndex;
+                switch (phase) {
+                case w7::EnginePhase::Skipped:
+                    appendLog(tr("  ⚠️ 第 %1 步的节点在运行中被删除,跳过").arg(info.step + 1));
+                    return;
+                case w7::EnginePhase::Before: {
+                    m_canvas->highlightNode(info.opName, true);
+
+                    // === UI 抽帧限频 ===
+                    // 按时间限频,不是每节点都刷。再快也最多 10 次/秒。
+                    // 副作用是好的:一帧之内的多次日志写入会合并成一次重绘,
+                    // 而不是每个节点重画一遍整个日志。
+                    const qint64 nowMs = uiPumpTimer.elapsed();
+                    if (w7::shouldPumpUi(nowMs - lastPumpMs)) {
+                        lastPumpMs = nowMs;
+                        // 让用户看得见在动 —— "看不出在动"和"卡死了"在体感上是一回事。
+                        statusBar()->showMessage(tr("运行中… 第 %1/%2 帧")
+                            .arg(frame + 1).arg(qMax(totalFrames, frame + 1)));
+                        QApplication::processEvents();
+                    }
+                    return;
+                }
+                case w7::EnginePhase::After: {
+                    m_canvas->highlightNode(info.opName, false);
+                    // ⚠ 节点可能在这一步**之前**就被删了 ——
+                    //   Before 里的 processEvents() 会把用户的右键删节点派发进来。
+                    //   这时候再碰它就是 use-after-free(实测:随机的卡死或闪退)。
+                    //   所以这里必须**重新问一次**还在不在。
+                    if (!alive(idx)) return;
+                    OperatorNode* n = order.at(idx).data();
+
+                    if (info.failed) {
+                        // 算子没注册 —— 这一步**没有产出**,整条链继续往下跑。
+                        appendLog(tr("  ❌ %1").arg(info.error));
+                        n->setStepStatus(OperatorNode::StepStatus::Error);
+                        return;
+                    }
+
+                    const QJsonObject& out = info.output;
+
+                    // ============================================================
+                    // === 每步结果查看:把这一步**这一帧**的输出留下 ===
+                    //
+                    // 以前这里有个 `if (frame == totalFrames - 1 || totalFrames == 1)`,
+                    // 只写最后一帧。理由写的是"中间帧的结果没有保留价值"——
+                    // 而真实理由是"没想过要怎么处理",因为当时根本没有多帧回看这回事。
+                    //
+                    // 代价很具体:30 帧里第 7 帧判 FAIL,右键回看只能看到末帧。
+                    // 末帧 PASS 时用户看到一张绿图,**回看这个动作反而掩盖了
+                    // 要查的那一帧** —— 一个专门用来查错的入口,成了掩盖错误的入口。
+                    //
+                    // 现在每帧都存(数字很便宜,见 step_frame_cache.h 开头实测)。
+                    // setHasCachedResult 每帧都置位是刻意的:哪怕单步执行只跑到
+                    // 前 3 步,那 3 步在**每一帧**上都有缓存,右键都能回看。
+                    // ============================================================
+                    //
+                    // "这一帧要不要记"这个决定在 frame_record.h 里
+                    // (可行为测试,以前只能靠 lint 读源码,变异 M4 实测 12/12 全绿)。
+                    //
+                    // ⚠ 这里**不能**写成 `if (!shouldCacheFrame(...)) return;` ——
+                    //   return 会跳过下面状态点/日志那几行,等于"不缓存"顺手
+                    //   把这个节点的其它 bookkeeping 也跳了。两个后果捆在一起,
+                    //   将来真要加"只缓存关键帧"策略时,会很难查。
+                    if (w7::shouldCacheFrame(frame, totalFrames)) {
+                        const int dropped = w7::recordFrameResult(
+                            &m_stepCache, info.uuid, frame, out,
+                            tr("第 %1 步 · %2").arg(info.step + 1).arg(n->displayName()));
+                        // 撞上限必须报出来 —— 静默丢帧的话,界面一切正常,
+                        // 只是用户要查的那一帧的数字**不在了**,而他不知道。
+                        if (dropped > 0) {
+                            appendLog(tr("  ⚠️ 每步结果缓存已满(%1 帧/节点),丢弃了最早的 %2 帧"
+                                         "的数字 —— 这些帧还能看日志,但回看不到了")
+                                .arg(w7::kStepCacheMaxFrames).arg(m_stepCache.evictedCount()));
+                        }
+                    }
+                    n->setHasCachedResult(true);
+
+                    // 画布状态点:有 error 是橙,result 是 FAIL/OK 是红/绿,
+                    // 中间算子(分割/计数)没有 result 字段,只要没 error 就是绿的
+                    // —— 它们确实跑成功了,只是这一级不做判定。
+                    n->setStepStatus(OperatorNode::statusFromOutput(out));
+
+                    // 日志输出关键字段(沿用旧格式)
+                    QString summary;
+                    for (auto it = out.begin(); it != out.end(); ++it) {
+                        if (it.key() == "error") {
+                            appendLog(tr("  ❌ %1: %2").arg(info.opName, it.value().toString()));
+                        } else {
+                            summary += QString("%1=%2 ").arg(it.key()).arg(it.value().toVariant().toString());
+                        }
+                    }
+                    if (!summary.isEmpty()) {
+                        appendLog(tr("  ✅ %1 → %2").arg(info.opName, summary.trimmed()));
+                    }
+                    return;
+                }
+                }
+            };
+
+            // ---- 5) 跑 ----
+            //
+            // 单步执行:范围是 order 的前缀,也就是**前 N 个节点**。
+            // 以前是在 for 循环里 break,现在交给引擎的 maxSteps ——
+            // 范围和执行顺序必须是**同一个**,两处各算一次迟早会不一致。
+            const int maxSteps = (singleStepTargetIndex >= 0)
+                               ? (singleStepTargetIndex + 1) : -1;
+            QJsonObject fallbackInputs;
+            fallbackInputs["image_path"] = fallbackPath;
+
+            const w7::EngineFrame ef = w7::runFrame(
+                enodes, edges, fallbackInputs, frame, maxSteps,
+                defaultsOf, runner, alive, hook);
+
+            if (!ef.ok) {
+                appendLog(tr("[Run] ❌ %1").arg(ef.error));
+                statusBar()->showMessage(tr("❌ 执行失败"), 5000);
+                return;
+            }
+
+            // 本帧的结果(原来是在节点循环里边跑边攒的)
+            frameOutputs = ef.outputs;
+            for (int idx : ef.executed) {
+                finalIndex = idx;
+                const QJsonObject& out = ef.outputs.at(idx);
+                if (out.contains("result")) frameResult = out;
             }
         }
-        if (!summary.isEmpty()) {
-            appendLog(tr("  ✅ %1 → %2").arg(n->opName(), summary.trimmed()));
+
+        // === 单步执行:超出范围的那一步,说明白停在哪 ===
+        //
+        // 以前是在 for 循环里 break 之前打的 —— 位置上是"这一帧的节点日志之后",
+        // 现在引擎跑完 maxSteps 个节点才返回,在这儿打是同一个位置。
+        if (singleStepTargetIndex >= 0 && singleStepTargetIndex + 1 < order.size()) {
+            appendLog(tr("  ⏹ 单步执行到「%1」为止,后面的节点本次不跑")
+                .arg(order[singleStepTargetIndex + 1]
+                         ? order[singleStepTargetIndex + 1]->displayName() : QString("?")));
         }
 
-        delete op;
-        m_canvas->highlightNode(n->opName(), false);
-        }   // ← 节点循环结束
-
         // ---------- 本帧收尾 ----------
-        if (!frameResult.contains("result") && finalNode) {
-            frameResult = nodeOutputs.value(finalNode);
+        if (!frameResult.contains("result") && finalIndex >= 0) {
+            frameResult = frameOutputs.at(finalIndex);
         }
         const QString r = frameResult.value("result").toString();
         if (r == "PASS")      ++passCount;
@@ -1203,9 +1285,9 @@ void MainWindow::runPipeline(OperatorNode* target) {
         //
         // 截断了必须在日志里说清楚,不然用户会以为全跑完了。
         if (frame == 0) {
-            for (auto it = nodeOutputs.constBegin(); it != nodeOutputs.constEnd(); ++it) {
-                if (it.value().contains("frame_count")) {
-                    const int reported = it.value().value("frame_count").toInt(1);
+            for (const QJsonObject& out : frameOutputs) {
+                if (out.contains("frame_count")) {
+                    const int reported = out.value("frame_count").toInt(1);
                     bool truncated = false;
                     totalFrames = w7::clampFrameCount(reported, &truncated);
                     if (truncated) {
@@ -1256,8 +1338,8 @@ void MainWindow::runPipeline(OperatorNode* target) {
     // === 最终结果判定(优先 finalResult,否则取最后节点的 output) ===
     // 多帧时上面已经报过批量汇总了,这里只补一句"末帧是什么",
     // 不再刷一遍 PASS/FAIL —— 两处都报会让人以为程序判了两次。
-    if (!finalResult.contains("result") && finalNode) {
-        finalResult = nodeOutputs.value(finalNode);
+    if (!finalResult.contains("result") && finalIndex >= 0) {
+        finalResult = frameOutputs.at(finalIndex);
     }
     QString result = finalResult.value("result").toString();
     if (result.isEmpty()) result = "UNKNOWN";
