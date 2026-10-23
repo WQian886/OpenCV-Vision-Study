@@ -544,6 +544,39 @@ add_custom_command(TARGET w7_dl_test POST_BUILD
 w7_add_test(dl_postprocess w7_dl_test)
 
 # ============================================================
+# === 流水线执行引擎 回归测试 (拓扑序 + 前驱输出合并)
+#
+# 这两件事以前住在 mainwindow.cpp 里,而 mainwindow.cpp
+# **不在任何测试目标里**(要真窗口 + 整套算子,建一次要好几分钟)。
+# 于是它们只有源码 lint 看着 —— 而 lint 看不见"顺序反了会怎样"。
+#
+# 2026-10-15 有一次一次性探针(手抄 mainwindow 的合并逻辑跑出来的)
+# 实测到:多个前驱时,下游拿到谁的输出**取决于遍历顺序**,
+# 连"先连线的赢"都不成立。两个上游状态点都是绿的、都不报错,
+# 只有下游那个数悄悄变了。那份探针是一次性的,逻辑一动就过期。
+#
+# 现在这段逻辑是**一份**(run_engine.h),这里直接测它。
+#
+# 依赖面:run_engine.h 只依赖 QtCore,**零 OpenCV、零 QtWidgets** ——
+# 所以这个套件建得快、也证明"引擎这一层不需要拖整个 GUI 进来"。
+# ============================================================
+qt_add_executable(w7_engine_test
+    tests/test_run_engine.cpp
+)
+
+target_include_directories(w7_engine_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(w7_engine_test PRIVATE Qt6::Core)
+
+if(MSVC)
+    target_compile_options(w7_engine_test PRIVATE /utf-8)
+endif()
+
+w7_add_test(run_engine w7_engine_test)
+
+# ============================================================
 # === 图像源 回归测试 (headless, 自造临时视频)
 #
 # 本次给 Run 引擎加了帧循环,契约是:

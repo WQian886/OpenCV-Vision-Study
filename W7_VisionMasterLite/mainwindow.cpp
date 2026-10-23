@@ -6,6 +6,7 @@
 #include "pipeline_serialize.h"   // 存盘/读盘(已搬出,无头测试直接用)
 #include "step_scope.h"   // 单步执行的"跑哪些节点"(纯逻辑,见头文件里的说明)
 #include "frame_record.h" // 帧循环"记一笔" + 序号→帧号换算(可行为测试)
+#include "run_engine.h"  // 拓扑序 + 前驱输出合并(纯逻辑,可行为测试)
 
 #include <QDockWidget>
 #include <QToolBar>
@@ -814,6 +815,18 @@ void MainWindow::onSaveProject() {
 // P0: Kahn 拓扑排序（替代硬编码顺序）
 // 返回拓扑序节点列表;若有环,hasCycle=true 且返回空
 // ============================================================
+//
+// 拓扑排序本身在 run_engine.h 里(w7_engine_test 直接测它)。
+//
+// 为什么搬出来:以前这段逻辑就住在这儿,而 mainwindow.cpp
+// **不在任何测试目标里**(要真窗口 + 整套算子,建一次要好几分钟)。
+// 于是"有环能不能检出""同一张图的拓扑序是不是确定的"这两件事,
+// 一直没有测试 —— 而 lint 看不见"顺序反了会怎样"。
+//
+// ⚠ 这里只做**翻译**:画布的对象指针 -> 引擎的下标。
+//   引擎那一层不持有节点指针 —— 跑批期间节点可能被删,
+//   拿着指针就是往已释放内存上写(实测过:随机的卡死或闪退)。
+// ============================================================
 static QList<OperatorNode*> topoSort(PipelineView* canvas, bool* hasCycle) {
     *hasCycle = false;
     QList<OperatorNode*> order;
@@ -821,43 +834,21 @@ static QList<OperatorNode*> topoSort(PipelineView* canvas, bool* hasCycle) {
     const auto& conns = canvas->connections();
     if (nodes.isEmpty()) return order;
 
-    // 1. 建图 + 入度统计
-    QHash<OperatorNode*, QList<OperatorNode*>> graph;
-    QHash<OperatorNode*, int> inDegree;
-    for (auto* n : nodes) {
-        graph[n] = QList<OperatorNode*>();
-        inDegree[n] = 0;
-    }
-    for (auto* c : conns) {
-        OperatorNode* from = c->fromNode();
-        OperatorNode* to   = c->toNode();
-        if (!graph.contains(from) || !inDegree.contains(to)) continue;
-        graph[from].append(to);
-        inDegree[to]++;
+    // 画布 -> 下标
+    QHash<OperatorNode*, int> indexOf;
+    for (int i = 0; i < nodes.size(); ++i) indexOf.insert(nodes.at(i), i);
+
+    QVector<w7::EngineEdge> edges;
+    for (const auto* c : conns) {
+        const int from = indexOf.value(c->fromNode(), -1);
+        const int to   = indexOf.value(c->toNode(), -1);
+        if (from < 0 || to < 0) continue;   // 指向已删节点的线,跳过
+        edges.append(w7::EngineEdge{from, to});
     }
 
-    // 2. 找所有入度 0 的节点入队
-    QQueue<OperatorNode*> q;
-    for (auto* n : nodes) {
-        if (inDegree.value(n, 0) == 0) q.enqueue(n);
-    }
-
-    // 3. BFS 出队
-    while (!q.isEmpty()) {
-        OperatorNode* n = q.dequeue();
-        order.append(n);
-        for (OperatorNode* m : graph.value(n)) {
-            int d = inDegree[m] - 1;
-            inDegree[m] = d;
-            if (d == 0) q.enqueue(m);
-        }
-    }
-
-    // 4. 环检测
-    if (order.size() != nodes.size()) {
-        *hasCycle = true;
-        return {};
-    }
+    const QVector<int> idx = w7::topoOrder(nodes.size(), edges, hasCycle);
+    if (*hasCycle) return {};
+    for (int i : idx) order.append(nodes.at(i));
     return order;
 }
 
@@ -1086,15 +1077,20 @@ void MainWindow::runPipeline(OperatorNode* target) {
 
         // === 构造 inputs:优先合并所有前驱节点 outputs(后写覆盖) ===
         // === B 方案:不再硬塞 image_path;若上游没产 image_path 才 fallback 工具栏 ===
-        QJsonObject inputs;
+        //
+        // 合并规则在 run_engine.h 里(w7_engine_test 直接测它)。
+        //
+        // ⚠ **顺序不能重排**:胜负取决于**上游列表的顺序**,
+        //   而那个顺序来自 connections() 的遍历顺序 —— 不是"谁先连线的"。
+        //   实测过(2026-10-15):两个上游状态点都是绿的、都不报错,
+        //   只有下游那个数悄悄变了。所以这里必须**原样**把遍历顺序传进去。
+        QVector<QJsonObject> upstream;
         for (const auto* c : m_canvas->connections()) {
-            if (c->toNode() == n && nodeOutputs.contains(c->fromNode())) {
-                const QJsonObject& upOut = nodeOutputs[c->fromNode()];
-                for (auto it = upOut.begin(); it != upOut.end(); ++it) {
-                    inputs[it.key()] = it.value();   // 简单合并:后写覆盖
-                }
-            }
+            if (c->toNode() != n) continue;
+            if (!nodeOutputs.contains(c->fromNode())) continue;
+            upstream.append(nodeOutputs[c->fromNode()]);
         }
+        QJsonObject inputs = w7::mergeUpstreamOutputs(upstream);
         // 兜底:若上游没产出 image_path,fallback 到工具栏
         if (!inputs.contains("image_path")) {
             inputs["image_path"] = fallbackPath;
