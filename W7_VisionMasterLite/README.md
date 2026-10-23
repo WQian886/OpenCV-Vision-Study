@@ -49,7 +49,10 @@ W7_VisionMasterLite/
 ├── third_party/fake_onnxruntime/ #   假 ONNX Runtime(header-only):
 │   └── include/                #   只让 dl_infer 的 #ifdef 那半能被编译和测试
 │                               #   **只在测试目标里用**,绝不加进 w7_vm_lite
-├── tests/                      # 19 个无头回归测试(1943 断言)
+├── third_party/fake_mvs/       #   假 MVS SDK(header-only):
+│   └── include/                #   只让 image_source_camera 的 #ifdef 那半能被编译和测试
+│                               #   ⚠ 故意**不**提供真 SDK 里没有的常量
+├── tests/                      # 21 个无头回归测试(2048 断言)
 ├── (无 images/)                # 测试图**只有一份**,在 W6_PCB_DefectProject/images/
 │                               #   (那边才是生成器所在地)。构建时暂存进
 │                               #   build/test_work/<套件名>/images/。
@@ -393,17 +396,17 @@ powershell -ExecutionPolicy Bypass -File tools/w7-run.ps1 `
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,1943 断言 / 19 个套件)
+## 🧪 回归测试(无头,2048 断言 / 21 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
-# 一次跑完全部 19 个套件
+# 一次跑完全部 21 个套件
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
 > ⚠️ **`-C Release` 不能省。** 生成器是 VS 多配置版，`CMAKE_CONFIGURATION_TYPES`
 > 里 Debug 和 Release 都在，而 ctest 不带 `-C` 时**默认按 Debug 找 exe**。
-> 只构建过 Release 的话，19 个套件会全部报 `Not Run`——
+> 只构建过 Release 的话，21 个套件会全部报 `Not Run`——
 > 报错长这样：
 >
 > ```
@@ -436,6 +439,8 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `headless_runner` | 117 | **无头跑整条流水线**(零 OpenCV 零 QtWidgets):**文件不是流水线必须拒绝而且说清为什么**、**跳过的节点和连线必须报出来**(静默失效比崩溃更难查)、**有环宁可什么都不跑**、**拓扑序 + 上游输出传递到下游**、**算子失败这一步没产出但链继续往下跑**、**兜底 image_path:上游给了就不用它**、**多帧:源报几帧就跑几帧**、**帧数封顶而且截断了必须报出来**、**结果 JSON 字段齐全别让下游猜**、**算子没崩但输出带 error 也得算成错误**(引擎看的是"有没有崩",用户关心的是"有没有算成")、**有步骤报错时判定不许说 PASS**、**命令行参数**:不认识的选项报错 / `--frames 0` 报错 / `--out` 必须配 `--run`、**旧格式的边(两端存算子名)按 FIFO 兜底**、**新版格式的判据是"像不像 UUID"而不是"在不在节点表里"**、**仓库里那条流水线文件必须真的接得上** | QtCore |
 | `dl_infer` | 44 | **ONNX 推理那条分支**(用一套 header-only 的**假 ONNX Runtime**顶掉真 SDK):**送进去的张量形状是 NCHW、数据也是 NCHW**(通道 0 里不许混进别的通道的值)、**通道顺序只换一次**(别换两次)、**归一化做了**(值都在 0..1)、**补边是灰的**、**模型输出维度不对要报错不许越界**、**输出元素数对不上要报错**、**NMS 会抑制同类重合框**(不同类的留着)、**类别名兜底是 `cls0` 而不是空**、**会话被复用**(不该每次重载模型)、**模型文件不存在要报错** | OpenCV |
 | `dl_infer_nosdk` | 10 | **没装 ONNX Runtime 那条分支**(实际发货的那一半):**这个构建里确实没有 ONNX Runtime**、**不可用的原因不是空的**、**原因里点名了环境变量**、**上游没给图要报错点名 `image_path`**、**模型文件不存在要报错**、**`model_path` 类型不对要点名这个旋钮**、**两种病因给出的是不同的报错**(不然这条用例是恒真的)、**都正常的时候才说 SDK 的事**、**顺便说清模型文件是在的** | OpenCV |
+| `camera` | 90 | **工业相机那条分支**(用一套 header-only 的**假 MVS SDK**顶掉真 SDK):**IP 对不上不许偷偷连第一台**、**报错里要列出实际找到的相机**(顺带钉住 IP 的字节序)、**Bayer 四种排布各用各的转换码**(同一份原始数据按 RG 解和按 BG 解差 128)、**相机给的缓冲区太小要报错不许越界读**、**不认识的像素格式要报错并把 32 位的值写全**、**每一步 SDK 调用的失败都要点名是哪一步**、**半开的句柄要还回去**、**软触发是两件事**(`TriggerMode=ON` **加上** `TriggerSource=SOFTWARE`)、**曝光毫秒要换算成微秒**、**缓冲区用完要还给 SDK**、**改了 IP 要重连而且旧的要先关掉**、**改了触发模式下一次就生效**、**句柄不能漏**、**旋钮类型不对要点名旋钮**(不是"没发现相机") | OpenCV |
+| `camera_nosdk` | 15 | **没装 MVS SDK 那条分支**(实际发货的那一半):**这个构建里确实没有 MVS SDK**、**不可用的原因不是空的**、**原因里点名了环境变量 `MVS_DIR`**、**run() 的报错和面板上那句是同一份**、**没产出图像路径**、**旋钮类型不对要点名旋钮、而且和"SDK 没装"不是同一句**、**三个旋钮的报错互不相同** | OpenCV |
 
 ### 默认流水线上的三个算子(为什么补这层测试)
 
@@ -1113,6 +1118,17 @@ PCB 判定的实现(配方解析 + 定位 + 六条判据 + 短路)搬到了 `com
    NCHW 张量喂了 HWC 数据、名字指针悬空(UAF)、输出维度不检查。
    变异 M85~M97 **杀 9 活 4**(`unexpected results = 0`);
    四个"活"里有一个是 `COLOR_BGR2RGB` 与 `COLOR_RGB2BGR` **本来就是同一个操作**。
+   *2026-10-24 片 5 收口:*`image_source_camera` 的**两条分支第一次都变得可测**——
+   造了一套 header-only 的**假 MVS SDK**
+   (`third_party/fake_mvs/`,只在测试目标里用,绝不进发货二进制),
+   新增 `camera`(90 条)和 `camera_nosdk`(15 条)两个套件。
+   第一次真把那半边编起来就发现:
+   它引用了一个**真 SDK 里根本不存在的常量**(`MV_TRIGGER_MODE_SOFT`)——
+   **也就是说装上 SDK 的机器上它编不过**,而没人知道;
+   另有 6 个静默失效(IP 对不上也照样连 / Bayer 一律按 BG 解 /
+   改了 IP 不重连 / 句柄只开不关 / SDK 返回值全不看 / 缓冲区多大都不看)。
+   变异 M98~M115 **杀 13 活 3**,外加一条**编译期守卫**
+   (`MV_TRIGGER_MODE_SOFT` 改回去就**编不过** —— 那是 BUILD-FAIL,不是"变异存活")。
 5. **子图 / 分支复用**:同一个子流水线被两条支路引用(需要拓扑排序支持)
 
 ## 🎓 回顾:这个项目真正教我的东西

@@ -1076,5 +1076,319 @@ M86 能杀，靠的是假件**释放即清零**这条**比真 SDK 严格**的规
 | 11 · 审计要跟着代码升级 | 流程债 |
 | 9 · CI 上真实 runner | 剩两条纯环境性的（本机消不掉） |
 
+---
+
+# 片 5 —— 假 MVS SDK：让相机的两条分支第一次变得可测
+
+## 三十一、起点：这次比「没测过」还狠一档
+
+`operators/image_source_camera.cpp` 也是两半：
+
+```cpp
+#ifdef  HAS_MVS_SDK
+    ... 真相机（约 85 行）...
+#else
+    ... "SDK 没装" 的空实现 ...
+#endif
+```
+
+本机没装 MVS SDK，于是 `#ifdef` 那半**一次都没被编译过**。
+
+片 4 已经把这件事的重量说清楚了（「没编译过」比「没测过」狠一档）。
+但相机这一片**又多了一层**：它不只是「可能有 bug」，
+而是**引用了一个真 SDK 里根本不存在的常量** ——
+
+```cpp
+MV_CC_SetEnumValue(s_handle, "TriggerMode",
+                   triggerMode == 1 ? MV_TRIGGER_MODE_SOFT : MV_TRIGGER_MODE_OFF);
+```
+
+`MV_TRIGGER_MODE_SOFT` —— **真 MVS SDK 里没有这个常量**。
+（全网搜这个标识符：零命中。所有资料用的都是
+`MV_TRIGGER_MODE_OFF` / `MV_TRIGGER_MODE_ON` 加上
+`MV_TRIGGER_SOURCE_SOFTWARE`。）
+
+> 也就是说：**装上真 SDK 的机器上，这个算子编不过。**
+> 而这件事，永远不会有人发现 —— 因为没人编译过它。
+
+这一片于是有两个层次：
+
+| | 层次 |
+|---|---|
+| **编译期** | 那行 API 调用压根不存在 |
+| **运行期** | 就算编过了，还有六个静默失效等着 |
+
+## 三十二、假 MVS SDK
+
+新建 `third_party/fake_mvs/include/MvCameraControl.h`：
+
+- **纯 C++17**，零 OpenCV、零 Qt、零 MVS SDK 依赖
+- header-only，只实现 `image_source_camera` 用到的 **12 个 API 点**：
+  `MV_CC_EnumDevices` / `CreateHandle` / `OpenDevice` / `StartGrabbing` /
+  `StopGrabbing` / `CloseDevice` / `DestroyHandle` /
+  `SetEnumValue` / `SetCommandValue` / `SetFloatValue` /
+  `GetImageBuffer` / `FreeImageBuffer`
+  加 `MV_CC_DEVICE_INFO_LIST` / `MV_CC_DEVICE_INFO` /
+  `MV_FRAME_OUT` / `MV_FRAME_FRAME_INFO` / `MV_OK` / `MV_GIGE_DEVICE` /
+  `MV_TRIGGER_MODE_*` / `MV_TRIGGER_SOURCE_*` / 像素类型枚举
+
+### 抄的是公开文档，不是真头文件
+
+本机没装真 SDK，**抄不了真头文件**。抄的是权威来源：
+
+| 抄的东西 | 抄自 |
+|---|---|
+| 像素类型取值（Mono8=0x01080001、BayerRG8=0x01080009、BGR8_Packed=0x02180015…） | GigE Vision 标准的 `MvGvspPixelType` |
+| `MV_CC_DEVICE_INFO_LIST` 的形状（`nDeviceNum` + `pDeviceInfo[256]`） | SDK 公开文档 |
+| `nCurrentIp` 是**网络字节序**（高位在前） | SDK 文档 + 官方 Python 示例 |
+| `MV_CC_OpenDevice` 在 C++ 下**有默认参数**（访问模式 / 切换密钥） | SDK 头文件片段 |
+
+> ⚠ 抄错的地方就是欠账（见「三十五」）。
+
+### 假件比真的严三处
+
+1. **模型不存在 → 抛异常**（真 SDK 也会）
+2. **名字必须对**，不对就报错
+3. **释放即清零** —— 假件析构时把那块内存 `memset` 成 0
+   （和假 ONNX Runtime 一个规矩：把「用了已释放的内存」从
+   「偶尔对偶尔错」变成**确定**的错）
+
+### ⚠⚠ 假件**故意不提供** `MV_TRIGGER_MODE_SOFT`
+
+这是本轮最要紧的一条设计决定。
+
+假件要是「贴心地」补上这个常量，编译就永远绿，
+**「这行代码在真 SDK 上压根不存在」这个事实就被遮住了**。
+
+> **假的东西要在该严的地方严。**
+> 严的方向是「让真件会拒绝的东西，假件也拒绝」——
+> 而且要在**同一个阶段**拒绝：真件是编译期拒绝的，假件也该是编译期。
+
+所以那半边的代码一写回 `MV_TRIGGER_MODE_SOFT`，**编译就红**。
+这一条后来变成一条变异（M115），判定是**第三种**：`BUILD-FAIL`。
+
+### 两个独立目标
+
+| 目标 | 测哪半 | 断言数 |
+|---|---|---|
+| `w7_camera_test` | `#ifdef`（真相机） | **90** |
+| `w7_camera_nosdk_test` | `#else`（没装 SDK） | **15** |
+
+两个测试文件都加了编译期守卫（`W7_MVS_FAKE` / `HAS_MVS_SDK`）——
+宁可编译不过，也不要测错东西。
+
+`HAS_MVS_SDK` **绝不加进 `w7_vm_lite`**：那等于把假 SDK 塞进发货的二进制。
+
+## 三十三、它抓到了什么：一个编译错误 + 六个静默失效
+
+### 1. `MV_TRIGGER_MODE_SOFT` 不存在（**编译期**）
+
+软触发在真 SDK 里是**两件事**：
+
+```cpp
+MV_CC_SetEnumValue(handle, "TriggerMode",   MV_TRIGGER_MODE_ON);
+MV_CC_SetEnumValue(handle, "TriggerSource", MV_TRIGGER_SOURCE_SOFTWARE);
+```
+
+只设 `TriggerMode` 的话，相机还在等**外部信号** → 永远不出图 →
+`GetImageBuffer` 一直超时 → 而超时的那条报错会指向「相机」，不指向「触发模式」。
+
+### 2. IP 对不上也照样连（退而求其次）
+
+```cpp
+int selected = 0;                                    // ← 默认第 0 台
+for (...) { if (ip == cameraIp) { selected = i; break; } }
+// 没找到？selected 仍然是 0 —— 于是连第 0 台
+```
+
+用户填 `192.168.1.99`，相机接在 `192.168.1.10`：
+连的是 `.10`，**输出里报的还是 `.99`**。
+不报错、不崩溃、界面和实际跑的不是一回事。
+
+改成：找不到就报错，而且把**实际枚举到的 IP 都列出来**。
+
+### 3. Bayer 一律按 BG 解马赛克
+
+Bayer 有 RG / GR / GB / BG 四种排布，原来**一律**用
+`COLOR_BayerBG2BGR` —— 那三种排布出来的颜色是错的，
+而且不报错、不崩溃，只是颜色悄悄反了。
+
+改成按实际 `enPixelType` 选转换码。
+
+### 4. 改了 IP 不重连
+
+会话状态是 `static bool s_initialized` —— **它不记连的是哪台相机**。
+于是改了 `camera_ip` 也不重连：还在用老相机，输出里报新 IP。
+
+改成按 IP 记（`CameraSession{ handle, ip }`），换 IP 先把旧的关掉。
+
+### 5. 句柄只开不关
+
+`MV_CC_StopGrabbing` / `CloseDevice` / `DestroyHandle` **一次都没调过**。
+加一个 `ImageSourceCamera::releaseSession()`，
+重连前调一次、退出前调一次。
+
+### 6. SDK 的返回值全都不看
+
+`MV_CC_OpenDevice` / `StartGrabbing` / `SetEnumValue` / `SetFloatValue` /
+`SetCommandValue` 的返回值**一个都没检查** ——
+打开失败、开始取流失败、设参数失败，全都当成功往下走。
+
+改成每一步都查，失败就报错**并且点名是哪一步**。
+
+### 7. 相机给的缓冲区多大都不看
+
+`cv::Mat(h, w, CV_8UC3, stOutFrame.pBufAddr)` 直接按
+「宽 × 高 × 通道」去读 —— 相机给的字节数不够就是**越界读**，
+崩的是整个程序，不是「这一条流水线失败」。
+
+改成先比 `nFrameLen`，不够就报错，并把「要多少 / 给了多少」都写出来。
+
+### 顺手改掉的一个小毛病
+
+像素类型的十六进制宽度给的是 4 位 ——
+`0x02180014` 被写成 `0x2180014`，**少一位，看着像另一个数**。
+改成 8 位。
+
+## 三十四、变异 M98~M115：十八条，十四杀三活一编译期
+
+| 编号 | 变异 | 预期 | 实测 | 红条数 |
+|---|---|---|---|---|
+| M98 | IP 对不上又退而求其次连第 0 台 | KILL | KILLED | 4 |
+| M99 | `TriggerSource` 不设了（只剩 `TriggerMode`） | KILL | KILLED | 2 |
+| M100 | Bayer 又一律按 BG 解（还原原 bug） | KILL | KILLED | 1 |
+| M101 | 缓冲区大小检查没了（越界读） | KILL | KILLED | 3 |
+| M102 | 曝光没从毫秒换算成微秒 | KILL | KILLED | 1 |
+| M103 | 枚举失败不报错 | KILL | KILLED | 1 |
+| M104 | `MV_CC_OpenDevice` 的返回值不检查 | KILL | KILLED | 3 |
+| M105 | 打开失败时半开的句柄不销毁 | KILL | KILLED | 1 |
+| M106 | 会话不再记是哪台相机（改 IP 不重连） | KILL | KILLED | 2 |
+| M107 | 像素类型又只给 4 位十六进制 | KILL | KILLED | 1 |
+| M108 | 缓冲区用完不还给 SDK | KILL | KILLED | 1 |
+| M109 | `GetImageBuffer` 失败的名字去掉 | KILL | KILLED | 1 |
+| M110 | `TriggerMode` 的值反了 | KILL | KILLED | 4 |
+| M111 | 「相机列表是空的」不再被察觉 | KILL | KILLED | 1 |
+| M112 | IP 换算换个写法（等价改写） | SURVIVE | SURVIVED | 0 |
+| M113 | 缓冲区大小比较反过来写（等价改写） | SURVIVE | SURVIVED | 0 |
+| M114 | `TriggerMode` 的错误检查反着写（等价改写） | SURVIVE | SURVIVED | 0 |
+| **M115** | **`MV_TRIGGER_MODE_ON` 改回 `MV_TRIGGER_MODE_SOFT`** | **BUILD-FAIL** | **BUILD-FAIL** | —— |
+
+`unexpected results = 0`；还原后两个套件仍全绿
+（脚本还原后用 **SHA-256 逐字节**校验源文件）。
+
+### 本轮多了一种判定：**BUILD-FAIL**
+
+BUILD-FAIL **不是**「变异存活」（那是「跑了但没红」），
+也**不是**干净的 KILL（那是「跑了而且红了」）——
+它是「**代码压根没编过，测试一次都没跑**」。
+
+所以脚本里它有自己的判定和自己的预期：
+
+```powershell
+if (-not (Build-Suite $m.Suite)) {
+    $verdict = 'BUILD-FAIL'
+    $asExpected = ($m.Expect -eq 'BUILD-FAIL')
+}
+```
+
+> 一个变异**只能**声明一种预期。声明错了就是脚本说错了话，
+> `unexpected results` 会把它揪出来。
+
+这一条是片 4 那张「构建失败伪装成变异全部存活」的**反面**：
+构建失败本身是一条有价值的信息，但得有自己的判定，
+不能混进「杀 / 活」里。
+
+### 写变异脚本时踩的两个坑（都是锚点问题）
+
+**① 只改 `if (...)` 那一行会把块体留下，括号不平衡 → BUILD-FAIL。**
+
+```powershell
+# ❌ 这样写:块体还在,多了一个 '}',编译失败 —— 那不是变异,是 BUILD-FAIL
+From = '    if (oret != MV_OK) {'
+To   = '    if (false) { (void)oret; }'
+
+# ✅ 要把**整个块**换掉
+Regex = $true
+From = 'if \(oret != MV_OK\) \{[\s\S]*?return false;\s*\}'
+To   = '(void)oret;'
+```
+
+**② `if (ret != MV_OK) {` 在这个文件里出现了**两次**
+（一次是 `EnumDevices`，一次是 `GetImageBuffer`）——
+锚点必须带上**后面跟着什么**，否则脚本报 SETUP ERROR。
+
+> 「锚点只取 ASCII 部分且唯一」这条规矩，
+> 在中文报错扎堆的算子里尤其要紧：
+> 锚点要么只取 ASCII 且唯一，要么用正则带上「后面跟着什么」。
+
+### 一个失败用例会崩掉整个套件 —— 补帧的讲究
+
+第一版 M104 判的是 **CRASHED** 而不是 KILLED：
+把「打开失败」那段检查删掉之后，算子一路走到 `cv::imwrite` ——
+而失败路径的用例**没给帧**，于是那是**空图**，
+`cv::imwrite` 对空图会**抛异常**，整个套件崩掉。
+
+崩掉也是「没绿」，但那不是一条**能说明问题**的红 ——
+它说明的是「测试数据不够」，不是「算子错了」。
+
+给失败路径的用例也补上一帧之后，M104 变成干净的三条红。
+
+> 通用做法：**失败路径的用例也要准备成功路径才需要的数据。**
+> 否则一旦那段「失败处理」被删掉，症状会跑到别的地方去。
+
+## 三十五、这一轮的数字（实测，不是推算）
+
+| | 片 4 之后 | 片 5 之后 |
+|---|---|---|
+| `camera` 套件断言 | ——（套件不存在） | **90** |
+| `camera_nosdk` 套件断言 | ——（套件不存在） | **15** |
+| W7 套件 / 断言 | 19 / 1943 | 21 / **2048** |
+| W6 套件 / 断言 | 3 / 477 | 3 / **477** |
+| 全仓套件 / 断言 | 22 / 2420 | 24 / **2525** |
+| 累计变异 | 98 | **116**（本轮 +18：14 杀 3 活 1 编译期） |
+| atomic 卡 | 54 | **57** |
+| C++ 文件 / 行数 | 118 / 31,734 | 121 / **33,088** |
+
+> 全仓总数 = W7 2048 + W6 477 = **2525**。
+
+门禁：`tools/ci.ps1` → **ALL CHECKS PASSED**（24 套件 / 2525 断言）
+
+### 欠账 4 收口了
+
+| 欠账 | 状态 |
+|---|---|
+| 4 · 两个 SDK 缺失分支 | ✅ **收**（`dl_infer` 两半 + `image_source_camera` 两半，四条分支全有测试） |
+
+### 假 MVS SDK 换不来的债
+
+**假 SDK 只能保证「`image_source_camera` 的逻辑对」，
+保证不了「`image_source_camera` 和真 MVS SDK 对得上」。**
+
+具体的：
+
+- 假件是**照公开文档抄的**，不是抄的真头文件 ——
+  字段名、常量值、枚举语义都可能对不上。
+  装上真 SDK 时，`MV_CC_DEVICE_INFO` 的 `SpecialInfo` 结构、
+  `MV_FRAME_FRAME_INFO` 的字段顺序，都要**再对一次账**。
+- `MV_CC_OpenDevice` 的默认参数是照文档写的；
+  真头文件里 `#ifdef __cplusplus` 那支的参数类型可能不同。
+- 假件的 `MV_CC_GetImageBuffer` 只吐一帧；
+  真 SDK 的超时语义、帧队列、`nFrameNum` 递增都没验过。
+
+> 这条必须写进欠账，**不能假装收口**。
+> 假件的价值是「让逻辑可测」，不是「让集成免验」。
+
+### 结项还剩什么
+
+| 欠账 | 状态 |
+|---|---|
+| 8 · `std::max(1, ...)` 那层安全下限查不到 | 有意不查，已登记 |
+| 10 · `auto_contour` 保持字面量 | 存档格式的一部分，有意为之 |
+| 11 · 审计要跟着代码升级 | 流程债 |
+| 9 · CI 上真实 runner | 剩两条纯环境性的（本机消不掉） |
+
+**8 / 10 / 11 写清楚就结项。**
+
+
 
 
