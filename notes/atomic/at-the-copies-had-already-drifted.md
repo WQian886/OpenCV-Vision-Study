@@ -38,5 +38,51 @@
 默认值只有一份（`operator_defaults.h`），
 `defaultParams()` / `run()` 兜底 / 面板初值全部引用它。
 
-参见 `notes/notes_W7_Knob_Audit_2026-10.md`、
+## 第六次：2026-10-24，判定口径也抄了两份
+
+W7 结项之后还欠账 17（主窗口零覆盖），
+勘查时发现「结论怎么说」这件事有**两份**实现：
+
+- `mainwindow.cpp` 的 `runPipeline`（给人看的那份）
+- `headless_runner.cpp` 的 `runPipelineJson`（给 CI 看的那份）
+
+抄的时候一模一样，**而且已经漂了**：
+
+| 规则 | headless | GUI |
+|---|---|---|
+| 一帧里有步骤报错 → 既不算 PASS 也不算 FAIL | ✅ | ❌ |
+| 有步骤报错 → 最终结果强制 ERROR | ✅ | ❌ |
+| 整批判定看哪一帧 | 末帧 | 任意一帧 |
+
+后果：**同一条流水线，GUI 说「最终结果: PASS」，headless 说 ERROR。**
+而产线上判废看的是 GUI 那份 —— 它是错的那一份。
+
+### 这次为什么还是没人发现
+
+因为**两边都是绿的**：
+GUI 跑得好好的，CI 四种退出码全对。
+而 `mainwindow.cpp` 不在任何测试目标里，
+所以「两份该一致」这件事**从来没被任何东西检查过**。
+
+> **没有比对，就没有发现。**
+> 零覆盖的真正代价不是「主程序没测试」，
+> 是「主程序和 CI 各有一套判定，而没人比对过」。
+
+### 收法
+
+规则收成**一份**（`frame_verdict.h`），两个调用方都用它，
+再配一条**源码守卫**（判据是「**要求某个可测入口**」，
+不是「禁止某种写法」—— 后者会被等价改写绕过）：
+
+```
+两个调用方都必须走 w7::finalResultOf / w7::classifyBatch / w7::pickFrameResult
+不许再出现自己写的 `if (r == "PASS")` 那种计数循环
+```
+
+> 顺带：这一轮的教训里还有一条**新的** ——
+> 「末帧判定」和「整批判定」是两个概念，混用就是漏检。
+> 那条另开了一张卡：`at-the-last-frame-is-not-the-batch.md`。
+
+参见 `notes/notes_W7_Verdict_2026-10.md`（第六次的完整记录）、
+`notes/notes_W7_Knob_Audit_2026-10.md`、
 `notes/atomic/at-four-copies-of-one-number.md`。

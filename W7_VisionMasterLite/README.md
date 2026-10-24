@@ -65,7 +65,7 @@ W7_VisionMasterLite/
 ├── third_party/fake_mvs/       #   假 MVS SDK(header-only):
 │   └── include/                #   只让 image_source_camera 的 #ifdef 那半能被编译和测试
 │                               #   ⚠ 故意**不**提供真 SDK 里没有的常量
-├── tests/                      # 21 个无头回归测试(2048 断言)
+├── tests/                      # 22 个无头回归测试(2120 断言)
 ├── (无 images/)                # 测试图**只有一份**,在 W6_PCB_DefectProject/images/
 │                               #   (那边才是生成器所在地)。构建时暂存进
 │                               #   build/test_work/<套件名>/images/。
@@ -75,6 +75,9 @@ W7_VisionMasterLite/
 ├── pipelines/smoke.json         # CI 冒烟跑的那条流水线(有单元测试钉着)
 ├── frame_record.h              # 帧接线:"记一笔" + 序号→帧号换算(可行为测试)
 ├── run_engine.h                # 执行引擎:拓扑序 + 前驱输出合并 + 逐节点执行(纯逻辑,可行为测试)
+├── frame_verdict.h             # 判定口径:一帧判了什么 / 整批结论是什么(纯逻辑)
+│                               #   **GUI 和 headless 共用这一份** —— 以前各写一遍,
+│                               #   而且已经漂了(见 notes_W7_Verdict_2026-10.md)
 ├── run_limits.h                # 帧数封顶(纯算术,从拖 QtWidgets 的 run_policy.h 里抽出来)
 ├── pipeline_graph.h            # 读盘的**纯解析层**(JSON → 图):GUI 和 headless 共用一份
 ├── headless_runner.h / .cpp    # 无头跑一条流水线:图 → 引擎 → 结果 JSON(纯 QtCore)
@@ -424,17 +427,17 @@ powershell -ExecutionPolicy Bypass -File tools/w7-run.ps1 `
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,2048 断言 / 21 个套件)
+## 🧪 回归测试(无头,2120 断言 / 22 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
-# 一次跑完全部 21 个套件
+# 一次跑完全部 22 个套件
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
 > ⚠️ **`-C Release` 不能省。** 生成器是 VS 多配置版，`CMAKE_CONFIGURATION_TYPES`
 > 里 Debug 和 Release 都在，而 ctest 不带 `-C` 时**默认按 Debug 找 exe**。
-> 只构建过 Release 的话，21 个套件会全部报 `Not Run`——
+> 只构建过 Release 的话,22 个套件会全部报 `Not Run`——
 > 报错长这样：
 >
 > ```
@@ -1071,12 +1074,15 @@ $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
   后者是欠账 15 / 16,边界和重开条件见结项报告。
 - **主窗口(`mainwindow.cpp`)的行为零测试覆盖**:它不在任何测试目标里。
   引擎侧的那部分已经搬出去了(拓扑序 / 多前驱合并 / 逐节点执行 → `run_engine.h`,
-  有 99 条断言钉着),剩下的是**纯 UI 接线** ——
-  「点 Run 有没有反应」只能靠人眼。这是欠账 17,边界和重开条件见结项报告。
-- **完整的欠账总账**(17 条 / 已收 9 / 未收 8)在
+  有 99 条断言钉着),**判定口径**也搬出去了(2026-10-24 → `frame_verdict.h`,
+  69 条断言 + 变异 15 杀 3 活),剩下的是**纯 UI 接线** ——
+  「点 Run 有没有反应」只能靠人眼。这是欠账 17(**已收一半**),边界和重开条件见结项报告。
+- **完整的欠账总账**(18 条 / 已收 9 / 未收 9)在
   [notes/notes_W7_Close_2026-10.md](../notes/notes_W7_Close_2026-10.md),
   欠账的**完整定义只有一处**:
   [notes/notes_W7_Knob_Audit_2026-10.md](../notes/notes_W7_Knob_Audit_2026-10.md) 第十节。
+- **结项之后还的那一笔**(判定口径收成一份)在
+  [notes/notes_W7_Verdict_2026-10.md](../notes/notes_W7_Verdict_2026-10.md)。
 - ~~**PCB 判定沿用 W6 的样本数据**:`short.png` 会同时报出 `short` 和 `wrong`~~
   —— **2026-10-20 已修**:短路图重画成"两脚被铜条连通"之后,铜条是金色不是青色,
   `short.png` 现在只报 `short`(点名 R2),不再串扰 `wrong`。
@@ -1170,6 +1176,15 @@ PCB 判定的实现(配方解析 + 定位 + 六条判据 + 短路)搬到了 `com
    改了 IP 不重连 / 句柄只开不关 / SDK 返回值全不看 / 缓冲区多大都不看)。
    变异 M98~M115 **杀 14 活 3**,外加一条**编译期守卫**
    (`MV_TRIGGER_MODE_SOFT` 改回去就**编不过** —— 那是 BUILD-FAIL,不是"变异存活")。
+   *2026-10-24 结项之后还了一笔(欠账 17 收一半):*
+   把「**结论怎么说**」抽成 `frame_verdict.h`(纯 QtCore)——
+   GUI 和 headless **共用这一份**。以前两边各写一遍,
+   而且**已经漂了**:GUI 缺两条规则(有步骤报错时它会说"最终结果: PASS"),
+   CI 的退出码是拿**末帧**推的(30 帧里第 7 帧判废、末帧正常 → CI 判"过了",
+   而 GUI 判"整批判 NG" —— 那个是**漏检**)。
+   新套件 `frame_verdict` **69 条**断言,变异 M116~M133 **杀 15 活 3**;
+   其中 M128/M129/M130 是**把本轮找到的三个 bug 原样放回去**,全杀。
+   详见 `notes/notes_W7_Verdict_2026-10.md`。
 5. **子图 / 分支复用**:同一个子流水线被两条支路引用(需要拓扑排序支持)
 
 ## 🎓 回顾:这个项目真正教我的东西

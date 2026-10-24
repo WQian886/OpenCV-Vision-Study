@@ -59,6 +59,7 @@
 
 #include "pipeline_graph.h"   // OpDefaults / PipelineGraph / graphFromJson
 #include "run_engine.h"       // EngineNode / EngineEdge / topoOrder / runFrame
+#include "frame_verdict.h"    // BatchVerdict / FrameTally(判定口径,**和主程序共用**)
 
 namespace w7 {
 
@@ -105,6 +106,18 @@ struct HeadlessResult {
     QVector<HeadlessStep> steps; // 每一步(跨所有帧)
     QJsonObject outputs;         // uuid -> 最后一帧的输出
     QString finalResult;         // PASS / FAIL / UNKNOWN(最后一帧的判定)
+    // ⚠ 整批结论 —— 和 finalResult **不是一回事**:
+    //   finalResult 是**末帧**判了什么;
+    //   batchVerdict 是**这一批**是什么结论
+    //   (任一帧判废 -> FAIL;任一帧跑坏 -> ERROR;中止 -> CANCELLED)。
+    //
+    //   以前 CLI 的退出码是自己拿 finalResult 推的
+    //   (`if (res.finalResult == "FAIL") return 1;`)——
+    //   那是**末帧**判定:30 帧里第 7 帧判废、末帧正常,会被判成"通过"。
+    //   同一批东西,主程序说"整批判 NG",CI 说"过了" —— 而 CI 那个是漏检。
+    //
+    //   现在这一份由 w7::classifyBatch 算好,CLI 只准读它。
+    w7::BatchVerdict batchVerdict = w7::BatchVerdict::Broken;
     int passCount = 0;
     int failCount = 0;
     int frameCount = 0;

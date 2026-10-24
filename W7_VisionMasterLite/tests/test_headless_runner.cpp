@@ -73,6 +73,11 @@ struct Rec {
     QString errorOn;               // 这个算子要"报错"(runner 返回 true,但输出带 error)
     int  frameCount = 0;           // 源算子报多少帧
     QString verdict = QStringLiteral("PASS");   // 判定节点给的 result
+    // 逐帧的判定(空 = 每帧都用 verdict)。
+    //
+    // ⚠ 要有它才能测"多帧里中间某帧判废、末帧正常"那个场景 ——
+    //   而那正是这次抓到的 bug:整批结论以前只看得见末帧。
+    QVector<QString> verdictsByFrame;
 };
 
 struct FakeOps {
@@ -94,8 +99,12 @@ struct FakeOps {
             o["error"] = QStringLiteral("读不到配方文件");
         if (opName == "src" && rec->frameCount > 0)
             o["frame_count"] = rec->frameCount;
-        if (opName == "judge")
-            o["result"] = rec->verdict;
+        if (opName == "judge") {
+            const int fi = inputs.value("frame_index").toInt(0);
+            o["result"] = (fi >= 0 && fi < rec->verdictsByFrame.size())
+                          ? rec->verdictsByFrame.at(fi)
+                          : rec->verdict;
+        }
         *out = o;
         return true;
     }
@@ -420,6 +429,101 @@ static void test_multi_frame() {
         if (in.value("frame_index").toInt(-1) == 2) sawFrame2 = true;
     }
     check(sawFrame2, "frame_index 传下去了(源靠它决定取第几张图)");
+}
+
+// ============================================================
+// 用例 7b:整批结论 —— 末帧判了什么 vs 这一批是什么结论
+// ============================================================
+//
+// ⚠ 这条是 2026-10-24 抽规则时抓到的 bug 的回归测试:
+//
+//   以前 CLI 的退出码是拿 res.finalResult 推的,而 finalResult 是
+//   **末帧**判定。于是:
+//     30 帧抽检,第 7 帧判废,末帧(第 30 帧)正常
+//   -> finalResult = "PASS" -> 退出码 0 -> CI 说"过了"
+//   而主程序那边同一批说「整批判 NG」。
+//   **两个结论,CI 那个是漏检。**
+//
+//   现在整批结论由 w7::classifyBatch 算,放在 res.batchVerdict 里。
+//   口径在 frame_verdict.h,**和主程序共用**。
+// ============================================================
+static void test_batch_verdict() {
+    beginCase("7b. 整批结论:末帧正常**不代表**整批正常");
+
+    // ---- 3 帧:第 1 帧(下标 1)判废,末帧正常 ----
+    {
+        auto rec = std::make_shared<Rec>();
+        rec->frameCount = 3;
+        rec->verdictsByFrame = {QStringLiteral("PASS"),
+                                QStringLiteral("FAIL"),
+                                QStringLiteral("PASS")};
+        FakeOps ops{rec};
+        HeadlessResult res;
+        QString err;
+
+        const QJsonDocument doc = simpleChain();
+        const bool ok = runPipelineJson(doc, {}, fakeFactory, fakeDefaults, ops, &res, err);
+        check(ok, "多帧 -> 跑通");
+        check(res.frameCount == 3, "跑了 3 帧");
+        check(res.failCount == 1,
+              QString("有 1 帧判废(实际 %1)").arg(res.failCount));
+        check(res.passCount == 2,
+              QString("另外 2 帧判 PASS(实际 %1)").arg(res.passCount));
+        // 末帧判定:末帧确实说了 PASS
+        check(res.finalResult == "PASS",
+              QString("末帧判定是 PASS(实际 \"%1\")").arg(res.finalResult));
+        // ⚠ 整批结论:必须是 FAIL
+        check(res.batchVerdict == w7::BatchVerdict::Failed,
+              QString("整批结论是 FAIL(实际 %1)—— 有一帧判废就不能说整批 OK")
+                  .arg(w7::batchVerdictName(res.batchVerdict)));
+        // 结果 JSON 里也有
+        check(res.toJson().value("batch_verdict").toString() == "FAIL",
+              QString("结果 JSON 里 batch_verdict = FAIL(实际 \"%1\")")
+                  .arg(res.toJson().value("batch_verdict").toString()));
+    }
+
+    // ---- 全批都 PASS -> 整批 PASS ----
+    {
+        auto rec = std::make_shared<Rec>();
+        rec->frameCount = 3;
+        FakeOps ops{rec};
+        HeadlessResult res;
+        QString err;
+        runPipelineJson(simpleChain(), {}, fakeFactory, fakeDefaults, ops, &res, err);
+        check(res.batchVerdict == w7::BatchVerdict::Passed,
+              "三帧全 PASS -> 整批 PASS");
+        check(res.toJson().value("batch_verdict").toString() == "PASS",
+              "结果 JSON 里 batch_verdict = PASS");
+    }
+
+    // ---- 有一步报错 -> 整批 ERROR(不是 FAIL,更不是 PASS) ----
+    {
+        auto rec = std::make_shared<Rec>();
+        rec->frameCount = 2;
+        rec->errorOn = QStringLiteral("src");
+        FakeOps ops{rec};
+        HeadlessResult res;
+        QString err;
+        runPipelineJson(simpleChain(), {}, fakeFactory, fakeDefaults, ops, &res, err);
+        check(res.errorCount == 2,
+              QString("两帧各报一步错(实际 %1)").arg(res.errorCount));
+        check(res.batchVerdict == w7::BatchVerdict::Errored,
+              QString("整批结论是 ERROR(实际 %1)—— 跑坏的帧不算判废,也不算通过")
+                  .arg(w7::batchVerdictName(res.batchVerdict)));
+    }
+
+    // ---- 一帧判废 -> 也是 Failed(判据是"有没有帧判废",不是"有几帧") ----
+    {
+        auto rec = std::make_shared<Rec>();
+        rec->frameCount = 1;
+        rec->verdict = QStringLiteral("FAIL");
+        FakeOps ops{rec};
+        HeadlessResult res;
+        QString err;
+        runPipelineJson(simpleChain(), {}, fakeFactory, fakeDefaults, ops, &res, err);
+        check(res.batchVerdict == w7::BatchVerdict::Failed,
+              "一帧判废 -> 也是 FAIL(和 30 帧里 1 帧判废是同一条规则)");
+    }
 }
 
 // ============================================================
@@ -963,6 +1067,7 @@ int main(int argc, char* argv[]) {
     test_operator_failure();
     test_fallback_image_path();
     test_multi_frame();
+    test_batch_verdict();
     test_frame_cap();
     test_result_json();
     test_not_vacuous();

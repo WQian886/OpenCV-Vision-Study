@@ -7,6 +7,7 @@
 #include "step_scope.h"   // 单步执行的"跑哪些节点"(纯逻辑,见头文件里的说明)
 #include "frame_record.h" // 帧循环"记一笔" + 序号→帧号换算(可行为测试)
 #include "run_engine.h"  // 拓扑序 + 前驱输出合并(纯逻辑,可行为测试)
+#include "frame_verdict.h" // 帧判定与整批结论(纯逻辑,**和 headless 共用**这一份)
 
 #include <QDockWidget>
 #include <QToolBar>
@@ -998,7 +999,16 @@ void MainWindow::runPipeline(OperatorNode* target) {
     int finalIndex = -1;                                  // 最后一个跑完的节点(下标)
     QJsonObject finalResult;                        // 保留最后一帧的结果供显示
     int totalFrames = 1;
-    int passCount = 0, failCount = 0, frameDone = 0;
+    // 逐帧累计 —— 判定口径在 frame_verdict.h 里,**和 headless 共用一份**。
+    //
+    // ⚠ 以前这一段是两边各写一遍的,而且**已经漂过**:
+    //   headless 那边有两条规则(坏帧不算 PASS/FAIL、有错强制 ERROR),
+    //   这边两条都没有 —— 于是同一条流水线,
+    //   这边说「🎉 最终结果: PASS」,那边说 final_result: ERROR。
+    //   产线上判废看的是**这边**这份,所以它是错的那一份。
+    //
+    //   2026-10-24 结项对账时发现,现在抽成 frame_verdict.h 那**一份**。
+    w7::FrameTally tally;
     bool cancelled = false;
 
     // 距上次抽帧的时长,用来给 processEvents 限频。
@@ -1033,13 +1043,20 @@ void MainWindow::runPipeline(OperatorNode* target) {
         // 在节点中间硬停会让这一帧的输出半新半旧,汇总数字反而对不上。
         if (m_runState == w7::RunState::Cancelling) {
             cancelled = true;
-            appendLog(tr("[Run] 🛑 已中止,完成 %1 帧").arg(frameDone));
+            appendLog(tr("[Run] 🛑 已中止,完成 %1 帧").arg(tally.frames));
             break;
         }
 
         frameOutputs.clear();
         finalIndex = -1;
         QJsonObject frameResult;
+        // 本帧有几个步骤报错。
+        //
+        // ⚠ 这个计数以前**压根不存在** —— 于是"跑坏了的帧"和"判通过的帧"
+        //   在这里长得一模一样,一个报错的流水线会被说成「最终结果: PASS」。
+        //   headless 那边的同一段逻辑有这个计数(它有测试钉着),
+        //   这边没有 —— 两份已经漂了。现在两边共用 frame_verdict.h。
+        int frameErrors = 0;
         appendLog(tr("──────── 第 %1/%2 帧 ────────")
                   .arg(frame + 1).arg(qMax(totalFrames, frame + 1)));
 
@@ -1149,6 +1166,14 @@ void MainWindow::runPipeline(OperatorNode* target) {
                     return;
                 }
                 case w7::EnginePhase::After: {
+                    // ⚠ 本帧有几个步骤报错 —— 判定的关键。
+                    //   判据和 headless 那边**一字不差**:
+                    //   「算子跑成功了,但输出里带 error」才算报错。
+                    //   (算子压根没注册那种,输出是空的,不算 ——
+                    //    它连判都没判成,归"没跑"那一类。)
+                    //   必须放在所有 early return **之前** ——
+                    //   下面有几条 return,漏一条就少算一步。
+                    if (info.output.contains(QStringLiteral("error"))) ++frameErrors;
                     m_canvas->highlightNode(info.opName, false);
                     // ⚠ 节点可能在这一步**之前**就被删了 ——
                     //   Before 里的 processEvents() 会把用户的右键删节点派发进来。
@@ -1247,11 +1272,10 @@ void MainWindow::runPipeline(OperatorNode* target) {
 
             // 本帧的结果(原来是在节点循环里边跑边攒的)
             frameOutputs = ef.outputs;
-            for (int idx : ef.executed) {
-                finalIndex = idx;
-                const QJsonObject& out = ef.outputs.at(idx);
-                if (out.contains("result")) frameResult = out;
-            }
+            // 取「最后一个跑了而且带 result 的节点」——
+            // 和 headless **共用**这一份(frame_verdict.h)。
+            // 以前两边各写一遍,一模一样 —— 一样的东西就是两份会各自漂的东西。
+            frameResult = w7::pickFrameResult(ef.outputs, ef.executed, &finalIndex);
         }
 
         // === 单步执行:超出范围的那一步,说明白停在哪 ===
@@ -1265,13 +1289,14 @@ void MainWindow::runPipeline(OperatorNode* target) {
         }
 
         // ---------- 本帧收尾 ----------
-        if (!frameResult.contains("result") && finalIndex >= 0) {
-            frameResult = frameOutputs.at(finalIndex);
-        }
+        //
+        // ⚠ 判定口径在 frame_verdict.h 里 —— 和 headless **共用**这一份。
+        //   坏帧(本帧有步骤报错)既不算 PASS 也不算 FAIL:
+        //   它是"跑坏了",不是"跑过了"也不是"没通过"。
+        //   以前这边没有这条规则,于是 30 帧里坏 1 帧、末帧正常,
+        //   汇总出来还是"全批 30 帧判 OK" —— 抽检漏检。
         const QString r = frameResult.value("result").toString();
-        if (r == "PASS")      ++passCount;
-        else if (r == "FAIL") ++failCount;
-        ++frameDone;
+        tally.addFrame(r, frameErrors);
 
         finalResult = frameResult;   // 留给后面的结果图显示
 
@@ -1304,7 +1329,7 @@ void MainWindow::runPipeline(OperatorNode* target) {
 
     // 缓存里记着每一帧是哪一帧(见 m_stepCache),不需要额外的
     // "来自第几帧"计数器。以前那个计数器还有一个隐患:
-    // 存的是 frameDone(跑完的帧数),不是"这些结果来自第几帧" ——
+    // 存的是"跑完的帧数"(tally.frames),不是"这些结果来自第几帧" ——
     // 中途 Stop 时两者差一帧,标题会写"第 7 帧"而缓存里其实是第 6 帧。
     // 现在标题的帧号直接来自缓存的 key,不存在这种对不上的可能。
 
@@ -1316,48 +1341,88 @@ void MainWindow::runPipeline(OperatorNode* target) {
     // 恰好前 3 帧都 PASS,报"全批 3 帧判 OK"看起来像整批合格,
     // 而剩下 1997 帧根本没跑 —— 这是个会误导判废的假结论。
     // 所以中止时明说"跑了一部分,结论不完整"。
+    //
+    // ⚠ 整批结论的口径在 frame_verdict.h 里(classifyBatch)——
+    //   和 headless **共用**这一份。优先级是:
+    //     Cancelled > Errored > Failed > Passed
+    //   中止的批次不是整批结论;跑坏的帧也不是"判过了";
+    //   有一帧判废就是整批判 NG(末帧正常不算数)。
+    //
+    //   「要不要显示这段汇总」是**展示**问题(只有多帧才报),
+    //   「这一批是什么结论」是**判定**问题 —— 两者不能混。
     if (totalFrames > 1) {
+        const w7::BatchVerdict bv = w7::classifyBatch(tally, cancelled);
         appendLog("----------------------------------------");
         appendLog(tr("📊 批量汇总: 共 %1 帧 — PASS %2 / FAIL %3")
-            .arg(frameDone).arg(passCount).arg(failCount));
-        if (cancelled) {
+            .arg(tally.frames).arg(tally.pass).arg(tally.fail));
+        switch (bv) {
+        case w7::BatchVerdict::Cancelled:
             appendLog(tr("🛑 本批被手动中止:只跑完 %1/%2 帧,**这不是整批结论**")
-                .arg(frameDone).arg(totalFrames));
+                .arg(tally.frames).arg(totalFrames));
             statusBar()->showMessage(tr("🛑 已中止(%1/%2 帧)")
-                .arg(frameDone).arg(totalFrames), 5000);
-        } else if (failCount > 0) {
-            appendLog(tr("⚠️ 有 %1 帧判废,整批判 NG").arg(failCount));
+                .arg(tally.frames).arg(totalFrames), 5000);
+            break;
+        case w7::BatchVerdict::Errored:
+            // ⚠ 这条以前不存在 —— 有坏帧时会落到下面的"全批 N 帧判 OK"。
+            //   "全批 N 帧判 OK"这句话的每一个字都得是真的:
+            //   跑坏了的帧压根没判成,不能说"判 OK"。
+            appendLog(tr("⚠️ 有 %1 帧跑坏了(步骤报错),整批结论**不完整**")
+                .arg(tally.error));
+            statusBar()->showMessage(tr("⚠️ 批量有错 (%1/%2 帧)")
+                .arg(tally.error).arg(tally.frames), 5000);
+            break;
+        case w7::BatchVerdict::Failed:
+            appendLog(tr("⚠️ 有 %1 帧判废,整批判 NG").arg(tally.fail));
             statusBar()->showMessage(tr("❌ 批量 FAIL (%1/%2 帧)")
-                .arg(failCount).arg(frameDone), 5000);
-        } else {
-            appendLog(tr("✅ 全批 %1 帧判 OK").arg(frameDone));
-            statusBar()->showMessage(tr("✅ 批量 PASS (%1 帧)").arg(frameDone), 5000);
+                .arg(tally.fail).arg(tally.frames), 5000);
+            break;
+        case w7::BatchVerdict::Passed:
+            appendLog(tr("✅ 全批 %1 帧判 OK").arg(tally.frames));
+            statusBar()->showMessage(tr("✅ 批量 PASS (%1 帧)").arg(tally.frames), 5000);
+            break;
         }
     }
 
-    // === 最终结果判定(优先 finalResult,否则取最后节点的 output) ===
+    // === 最终结果判定 ===
     // 多帧时上面已经报过批量汇总了,这里只补一句"末帧是什么",
     // 不再刷一遍 PASS/FAIL —— 两处都报会让人以为程序判了两次。
-    if (!finalResult.contains("result") && finalIndex >= 0) {
-        finalResult = frameOutputs.at(finalIndex);
-    }
-    QString result = finalResult.value("result").toString();
-    if (result.isEmpty()) result = "UNKNOWN";
+    //
+    // ⚠ 口径在 frame_verdict.h 里 —— 和 headless **共用**这一份。
+    //   **有步骤报错 -> 强制 ERROR**:判定节点说 PASS 不代表整条流水线跑成了,
+    //   上游报过错,那个 PASS 就是**空头**的。
+    //   以前这边没有这条规则(那边有,而且有测试钉着)——
+    //   产线上判废看的是 GUI 这份,所以它是错的那一份。
+    //
+    //   末帧那个"取最后一个带 result 的输出"的兜底**已经不在这里了**:
+    //   它住在 pickFrameResult 里(frameResult 出来时就已经兜好),
+    //   在这儿再写一遍就是第二份 —— 而第二份会漂。
+    const QString finalVerdict = w7::finalResultOf(tally);   // 整条流水线的结论
+    const QString lastVerdict  = w7::lastResultOf(tally);    // 末帧判了什么
     if (totalFrames <= 1) {
         appendLog("----------------------------------------");
-        if (result == "PASS") {
+        if (finalVerdict == "PASS") {
             appendLog(tr("🎉 最终结果: PASS (%1)").arg(
                 finalResult.value("description").toString()));
             statusBar()->showMessage(tr("✅ PASS"), 5000);
-        } else if (result == "FAIL") {
+        } else if (finalVerdict == "FAIL") {
             appendLog(tr("❌ 最终结果: FAIL (%1)").arg(
                 finalResult.value("description").toString()));
             statusBar()->showMessage(tr("❌ FAIL"), 5000);
+        } else if (finalVerdict == "ERROR") {
+            // ⚠ 以前这里会落到 else,打「ℹ️ 最终结果: PASS」——
+            //   那个 PASS 是**空头**的(上游报过错)。
+            appendLog(tr("❌ 最终结果: ERROR (有步骤报错,判定不算数)"));
+            statusBar()->showMessage(tr("❌ ERROR"), 5000);
         } else {
-            appendLog(tr("ℹ️  最终结果: %1").arg(result));
+            appendLog(tr("ℹ️  最终结果: %1").arg(finalVerdict));
         }
     } else {
-        appendLog(tr("ℹ️  末帧(%1)结果: %2").arg(frameDone).arg(result));
+        appendLog(tr("ℹ️  末帧(%1)结果: %2").arg(tally.frames).arg(lastVerdict));
+        if (finalVerdict == "ERROR" && lastVerdict != "ERROR") {
+            // 末帧说 PASS、整批却是 ERROR —— 两句都摆出来,
+            // 别让人只看见"末帧 PASS"就以为整批过了。
+            appendLog(tr("⚠️ 本批有步骤报错,整批结论是 ERROR(末帧那个 PASS 不算数)"));
+        }
     }
 
     // === P3: 根据最后节点 output 决定显示什么 ===

@@ -796,6 +796,45 @@ endif()
 w7_add_test(run_engine w7_engine_test)
 
 # ============================================================
+# 帧判定与整批结论的测试套件
+# ============================================================
+# 依赖面:frame_verdict.h —— **纯 QtCore**,零 OpenCV、零 QtWidgets。
+#
+# 为什么要有这个套件:
+#   "跑完一条流水线,结论到底是什么"这件事以前有**两份**:
+#     · mainwindow.cpp 的 runPipeline   —— 给人看的那份
+#     · headless_runner.cpp 的 runPipelineJson —— 给 CI 看的那份
+#   mainwindow.cpp 不在任何测试目标里,于是那份只有源码 lint 看着。
+#
+#   2026-10-24 结项对账时发现两份**已经漂了**:
+#   headless 有两条规则(坏帧不算 PASS/FAIL、有错强制 ERROR),
+#   GUI 那份两条都没有 ——
+#   同一条流水线,GUI 说"最终结果: PASS",headless 说 ERROR。
+#
+#   现在规则抽成**一份**(frame_verdict.h),两边都用它,
+#   这个套件直接测它,外加一条源码守卫守住"两边都走这一份"。
+# ============================================================
+qt_add_executable(w7_frame_verdict_test
+    tests/test_frame_verdict.cpp
+)
+
+target_include_directories(w7_frame_verdict_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(w7_frame_verdict_test PRIVATE Qt6::Core)
+
+# 源码守卫要读 mainwindow.cpp 和 headless_runner.cpp
+target_compile_definitions(w7_frame_verdict_test PRIVATE
+    W7_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
+if(MSVC)
+    target_compile_options(w7_frame_verdict_test PRIVATE /utf-8)
+endif()
+
+w7_add_test(frame_verdict w7_frame_verdict_test)
+
+# ============================================================
 # headless runner 的测试套件
 # ============================================================
 # 依赖面:headless_runner.h + pipeline_graph.h + run_engine.h

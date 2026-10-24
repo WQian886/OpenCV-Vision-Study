@@ -1,5 +1,6 @@
 #include "headless_cli.h"
 #include "headless_runner.h"
+#include "frame_verdict.h"   // batchVerdictName(判定口径,**和主程序共用**)
 
 #include "operators/operator_base.h"
 #include "operators/operator_factory.h"
@@ -112,9 +113,17 @@ int runHeadlessCli(const CliOptions& opt) {
     }
 
     // ---- 摘要 ----
-    out << QStringLiteral("[Run] 跑完: %1 帧,PASS %2,FAIL %3,判定 %4")
+    //
+    // ⚠ 末帧判定和整批结论是**两回事**,两个都打出来:
+    //   末帧判定(final_result)—— 末帧判了什么
+    //   整批结论(batch_verdict)—— 这一批是什么结论(退出码按这个来)
+    //
+    // 以前这里只打末帧判定,而退出码也是拿末帧判定推的 ——
+    // 于是"判定 PASS"配"退出码 1"这种自相矛盾的话会出现。
+    out << QStringLiteral("[Run] 跑完: %1 帧,PASS %2,FAIL %3,末帧判定 %4,整批结论 %5")
            .arg(res.frameCount).arg(res.passCount).arg(res.failCount)
-           .arg(res.finalResult);
+           .arg(res.finalResult)
+           .arg(w7::batchVerdictName(res.batchVerdict));
     if (res.errorCount > 0)
         out << QStringLiteral("(有 %1 步报错)").arg(res.errorCount);
     out << "\n";
@@ -128,12 +137,25 @@ int runHeadlessCli(const CliOptions& opt) {
     //
     //   3 比 1 更"根本",所以先判 3:
     //   步骤报错时那个 FAIL 往往只是它的**后果**。
-    if (res.errorCount > 0) {
+    //
+    // ⚠⚠ 整批结论用 res.batchVerdict,**不用** res.finalResult:
+    //   finalResult 是**末帧**判了什么;batchVerdict 是这一批的结论
+    //   (任一帧判废 -> FAIL;任一帧跑坏 -> ERROR)。
+    //
+    //   以前这里拿 res.finalResult 自己推,于是:
+    //     30 帧抽检,第 7 帧判废,末帧(第 30 帧)正常
+    //   -> finalResult 是 "PASS" -> 退出码 0 -> CI 说"过了"
+    //   而主程序那边同一批说「整批判 NG」。
+    //   **两个结论,CI 那个是漏检。**
+    //
+    //   整批结论现在由 w7::classifyBatch 算好(和主程序共用那一份),
+    //   这里只准读,不准自己再推一遍。
+    if (res.batchVerdict == w7::BatchVerdict::Errored) {
         err << QStringLiteral("[Run] ❌ 有 %1 步报错(算子跑了但报错了)\n")
                .arg(res.errorCount);
         return 3;
     }
-    if (res.finalResult == QStringLiteral("FAIL")) return 1;
+    if (res.batchVerdict == w7::BatchVerdict::Failed) return 1;
     return 0;
 }
 
