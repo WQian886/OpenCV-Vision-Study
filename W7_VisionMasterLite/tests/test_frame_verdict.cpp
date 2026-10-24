@@ -424,20 +424,29 @@ static void test_both_callers_use_shared_rules() {
               QString("%1 里没有自己写的 `if (verdict == \"PASS\")` 计数循环").arg(c.file));
         check(!src.contains("if (result == \"PASS\")"),
               QString("%1 里没有自己写的 `if (result == \"PASS\")` 计数循环").arg(c.file));
-    }
 
-    // ⚠ 主程序**必须**有坏帧计数 —— 以前它压根没有这个概念
-    {
-        QFile f(base + "/mainwindow.cpp");
-        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            const QString src = QString::fromUtf8(f.readAll());
-            // ⚠ 判据是 "**++**frameErrors",不是 "frameErrors" ——
-            //   只查名字的话,`frameErrors += 0` 也能过(那等于不数)。
-            //   变异 M129 正是这一条:它把自增改成加零,坏帧就又不数了。
-            check(src.contains("++frameErrors"),
-                  "mainwindow.cpp 真的在给 frameErrors **自增** —— "
-                  "以前它压根没有这个概念,所以坏帧被算成了 PASS");
-        }
+        // ⚠ 坏步的**采集**也必须走这一份 ——
+        //   2026-10-24 抽 frame_verdict.h 的时候只抽了**分类**,
+        //   「哪一步算坏」这个**判据**两边还是各写一遍:
+        //       if (info.output.contains("error")) ++frameErrors;
+        //   而那句话只认"跑成了但报了错",**认不出"压根没跑成"** ——
+        //   算子返回 false 时引擎把输出置空了,数都数不到。
+        //
+        // ⚠ 判据是 "noteStep(info.failed" —— 不是 "noteStep"、也不是 "frameErrors":
+        //   · 只查名字的话,`frameErrors` 声明了却从不数也能过(那等于不数);
+        //   · 只查 "noteStep(" 的话,把 `info.failed` 换成 `false` 也能过 ——
+        //     而那**正是**本轮修的那个洞(算子压根没跑成时数不到)。
+        check(src.contains("noteStep(info.failed"),
+              QString("%1 的坏帧计数走共享采集器,而且**把 failed 传进去了** —— "
+                      "以前两边各写一遍判据,而那句话只认\"跑成了但报了错\","
+                      "算子压根没跑成时数都数不到").arg(c.file));
+
+        // ⚠ 旧的**内联判据**不许再出现 ——
+        //   它是"抄副本"的本体:两边各写一遍,于是各自漂。
+        //   判据现在住在 w7::isBadStep 里,采集住在 w7::FrameErrorCounter 里。
+        check(!src.contains("info.output.contains(QStringLiteral(\"error\"))"),
+              QString("%1 里没有自己写的 `info.output.contains(\"error\")` 判据 —— "
+                      "抄副本的本体,判据只能住在 w7::isBadStep 里").arg(c.file));
     }
 
     // ⚠⚠ headless 的**退出码**不许自己推导整批结论
@@ -463,6 +472,77 @@ static void test_both_callers_use_shared_rules() {
     }
 }
 
+// ============================================================
+// 用例 7:一步算不算坏
+// ============================================================
+//
+// ⚠ 这条用例护的是 2026-10-25 补上的那个洞。
+//
+//   坏步有两种**不一样**的形状,以前被当成了一种:
+//     1) 跑成了但报了错 —— 算子返回 true,输出里带 error 键
+//     2) 压根没跑成     —— 算子返回 false,**输出被引擎置空**
+//
+//   以前只认第 1 种 —— 第 2 种因为输出是空的,
+//   「输出里带 error」那条判据**数都数不到**。
+//   于是算子失败了 -> 链继续往下跑 -> 下游拿空输出 + 默认值兜底
+//   -> 数字看着正常 -> 判 PASS。
+//
+//   第 2 种才是真正危险的:第 1 种至少在输出里**写着** error。
+// ============================================================
+static void test_is_bad_step() {
+    beginCase("7. isBadStep:两种失败形状都得算坏");
+
+    QJsonObject withError;
+    withError["error"] = QStringLiteral("读不到配方文件");
+
+    QJsonObject withResult;
+    withResult["result"] = QStringLiteral("PASS");
+
+    // ---- 第 1 种:跑成了但报了错 ----
+    check(w7::isBadStep(false, withError),
+          "跑成了但输出里带 error -> 算坏");
+
+    // ---- 第 2 种:压根没跑成(**本轮补上的那个洞**)----
+    check(w7::isBadStep(true, QJsonObject()),
+          "压根没跑成(failed)也算坏 —— "
+          "以前数不到,因为引擎把失败步骤的输出置空了");
+
+    // ---- 两种一起来 ----
+    check(w7::isBadStep(true, withError), "又失败又带 error -> 算坏");
+
+    // ---- 不能误报 ----
+    check(!w7::isBadStep(false, QJsonObject()), "干干净净的一步 -> 不算坏");
+    check(!w7::isBadStep(false, withResult),
+          "输出里只有 result(PASS)-> 不算坏");
+
+    // ---- 采集器 ----
+    {
+        w7::FrameErrorCounter c;
+        check(c.count() == 0, "新计数器是空的");
+        check(!c.noteStep(false, QJsonObject()), "好步返回 false(不是坏的)");
+        check(c.count() == 0, "好步不进计数");
+        check(c.noteStep(false, withError), "坏步返回 true");
+        check(c.count() == 1, "计数 +1");
+        check(c.noteStep(true, QJsonObject()), "压根没跑成也算坏");
+        check(c.count() == 2, "计数 +1");
+        check(!c.noteStep(false, withResult), "只有 result 的步不算坏");
+        check(c.count() == 2, "计数没多动");
+    }
+
+    // ---- 采集器接到帧判定上:坏帧既不算 PASS 也不算 FAIL ----
+    {
+        w7::FrameErrorCounter c;
+        c.noteStep(true, QJsonObject());     // 压根没跑成
+        w7::FrameTally t;
+        t.addFrame(QStringLiteral("PASS"), c.count());
+        check(t.pass == 0, "坏帧不计入 pass");
+        check(t.fail == 0, "坏帧不计入 fail");
+        check(t.error == 1, "坏帧计入 error");
+        check(w7::finalResultOf(t) == QStringLiteral("ERROR"),
+              "有坏帧 -> 最终结果是 ERROR,不许说 PASS");
+    }
+}
+
 int main(int argc, char* argv[]) {
     qInfo().noquote() << "W7 帧判定与整批结论 回归测试";
 
@@ -472,6 +552,7 @@ int main(int argc, char* argv[]) {
     test_batch_verdict();
     test_pick_frame_result();
     test_both_callers_use_shared_rules();
+    test_is_bad_step();
 
     qInfo().noquote() << "\n================================";
     qInfo().noquote() << "通过:" << g_pass << "  失败:" << g_fail;

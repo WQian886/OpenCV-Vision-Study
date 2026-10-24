@@ -133,20 +133,23 @@ bool runPipelineJson(const QJsonDocument& doc,
     w7::FrameTally tally;
     for (int frame = 0; frame < totalFrames; ++frame) {
         QVector<HeadlessStep> frameSteps;
-        int frameErrors = 0;      // 这一帧里报错的步数
+        w7::FrameErrorCounter frameErrors;   // 这一帧里的坏步数(判据和主程序共用一份)
 
         auto hook = [&](EnginePhase phase, const EngineStepInfo& info) {
             if (phase == EnginePhase::Before) return;   // Before 只是"要跑了"
-            // ⚠ 输出里带 error 的步骤要**单独数**:
+            // ⚠ 坏步要**单独数**:
             //   算子"跑成功"但报了个错(比如读不到配方文件)——
             //   引擎看它没崩,于是当成功记下了。
             //   可对用户来说那就是**没跑成**。
             //   窗口那边把这种状态点标成橙色,这边也要算成错误 ——
             //   不然退出码是 0,CI 就当它过了。
-            if (info.output.contains(QStringLiteral("error"))) {
-                ++frameErrors;
-                ++res.errorCount;
-            }
+            //
+            // ⚠ 判据在 frame_verdict.h 里(w7::isBadStep),和主程序共用一份:
+            //     · 跑成了但输出里带 error
+            //     · **压根没跑成**(info.failed)—— 2026-10-25 才补上,
+            //       以前数不到:引擎把失败步骤的输出置空了,
+            //       失败原因在 info.error 里,不在输出里
+            if (frameErrors.noteStep(info.failed, info.output)) ++res.errorCount;
             HeadlessStep st;
             st.frame   = frame;
             st.step    = info.step;
@@ -191,7 +194,7 @@ bool runPipelineJson(const QJsonDocument& doc,
         //   数字看着正常,结论却是错的。
         //
         //   口径在 frame_verdict.h 里(classifyFrame),和主程序共用。
-        tally.addFrame(verdict, frameErrors);
+        tally.addFrame(verdict, frameErrors.count());
         res.passCount  = tally.pass;
         res.failCount  = tally.fail;
         res.frameCount = tally.frames;

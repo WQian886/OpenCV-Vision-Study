@@ -1050,13 +1050,18 @@ void MainWindow::runPipeline(OperatorNode* target) {
         frameOutputs.clear();
         finalIndex = -1;
         QJsonObject frameResult;
-        // 本帧有几个步骤报错。
+        // 本帧有几个**坏步**。
         //
         // ⚠ 这个计数以前**压根不存在** —— 于是"跑坏了的帧"和"判通过的帧"
         //   在这里长得一模一样,一个报错的流水线会被说成「最终结果: PASS」。
         //   headless 那边的同一段逻辑有这个计数(它有测试钉着),
         //   这边没有 —— 两份已经漂了。现在两边共用 frame_verdict.h。
-        int frameErrors = 0;
+        //
+        // ⚠ 连"怎么算坏"也共用(w7::FrameErrorCounter):
+        //   判据以前两边各写一遍(`info.output.contains("error")`),
+        //   而那句话只认"跑成了但报了错",**认不出"压根没跑成"** ——
+        //   算子返回 false 时引擎把输出置空了,数都数不到。
+        w7::FrameErrorCounter frameErrors;
         appendLog(tr("──────── 第 %1/%2 帧 ────────")
                   .arg(frame + 1).arg(qMax(totalFrames, frame + 1)));
 
@@ -1166,14 +1171,18 @@ void MainWindow::runPipeline(OperatorNode* target) {
                     return;
                 }
                 case w7::EnginePhase::After: {
-                    // ⚠ 本帧有几个步骤报错 —— 判定的关键。
-                    //   判据和 headless 那边**一字不差**:
-                    //   「算子跑成功了,但输出里带 error」才算报错。
-                    //   (算子压根没注册那种,输出是空的,不算 ——
-                    //    它连判都没判成,归"没跑"那一类。)
+                    // ⚠ 本帧有几个坏步 —— 判定的关键。
+                    //   判据在 frame_verdict.h 里(w7::FrameErrorCounter),
+                    //   和 headless 那边**共用同一份**。
+                    //
+                    //   ⚠ 两种失败都算(w7::isBadStep):
+                    //     · 跑成了但输出里带 error
+                    //     · **压根没跑成**(info.failed)—— 2026-10-25 才补上,
+                    //       以前数不到:引擎把失败步骤的输出置空了,
+                    //       失败原因在 info.error 里,不在输出里
                     //   必须放在所有 early return **之前** ——
                     //   下面有几条 return,漏一条就少算一步。
-                    if (info.output.contains(QStringLiteral("error"))) ++frameErrors;
+                    frameErrors.noteStep(info.failed, info.output);
                     m_canvas->highlightNode(info.opName, false);
                     // ⚠ 节点可能在这一步**之前**就被删了 ——
                     //   Before 里的 processEvents() 会把用户的右键删节点派发进来。
@@ -1296,7 +1305,7 @@ void MainWindow::runPipeline(OperatorNode* target) {
         //   以前这边没有这条规则,于是 30 帧里坏 1 帧、末帧正常,
         //   汇总出来还是"全批 30 帧判 OK" —— 抽检漏检。
         const QString r = frameResult.value("result").toString();
-        tally.addFrame(r, frameErrors);
+        tally.addFrame(r, frameErrors.count());
 
         finalResult = frameResult;   // 留给后面的结果图显示
 

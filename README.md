@@ -19,7 +19,7 @@
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 477 条断言**
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。17 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），22 个无头回归测试共 2120 条断言。**已结项**（2026-10-24），欠账 18 条已收 9 条，剩下 9 条都写清了边界和重开条件 → [结项报告](./notes/notes_W7_Close_2026-10.md)
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。17 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），22 个无头回归测试共 2152 条断言。**已结项**（2026-10-24），欠账 18 条已收 9 条，剩下 9 条都写清了边界和重开条件（其中 17 / 18 各收了一半） → [结项报告](./notes/notes_W7_Close_2026-10.md)
 
 ## 🔗 两个共享核心（common/）
 
@@ -73,7 +73,7 @@ cd W7_VisionMasterLite
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
-22 个套件 / 2120 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+22 个套件 / 2152 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试，
 `pcb_core` 则是共享判定核心自己的测试（**W6 和 W7 链的是同一份源码**）。
 
@@ -129,7 +129,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 21 份 + 60 张 atomic 卡，~705 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 22 份 + 61 张 atomic 卡，~734 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -152,7 +152,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_W7_Close_2026-10.md` (18 KB) — **W7 结项报告**：欠账总账、17 条债的边界与重开条件、明确不覆盖的范围、怎么复现这份结项
 - `notes_W7_Verdict_2026-10.md` (15 KB) — 结项之后还的第一笔：把「结论怎么说」收成**一份**规则（GUI 和 CI 共用），顺带抓到 CI 的一个**漏检**
 
-`notes/atomic/` 里是**单条教训卡片**（60 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（61 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -204,7 +204,7 @@ OpenCV/
 ├── common/cmake/          # 三方依赖路径(本机默认值 + CI 覆盖)
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 检查源码树没被写脏
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（21 份 + 60 张 atomic 卡）
+├── notes/                 # 变更日志（22 份 + 61 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -214,7 +214,7 @@ OpenCV/
 ## 📊 统计
 
 - 7 个 C++ 项目 + 2 个共享核心
-- 123 个 C++ 文件 / **37,614 行**（含注释与空行）。口径是**一条能跑的完整命令**，2026-10-24 实测：
+- 123 个 C++ 文件 / **37,861 行**（含注释与空行）。口径是**一条能跑的完整命令**，2026-10-25 实测：
 
   ```powershell
   $files = git ls-files '*.cpp' '*.h'
@@ -229,7 +229,7 @@ OpenCV/
   > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
   > 连最接近的 ANSI 口径（33,368）也对不上。
   > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
-- 21 份变更日志 + 60 张 atomic 卡 / ~705 KB
-- **25 个无头回归测试 / 2597 条断言**（W7 22 个 / 2120，W6 3 个 / 477；
+- 22 份变更日志 + 61 张 atomic 卡 / ~734 KB
+- **25 个无头回归测试 / 2629 条断言**（W7 22 个 / 2152，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

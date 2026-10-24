@@ -361,6 +361,90 @@ static void test_operator_failure() {
 }
 
 // ============================================================
+// 用例 5b:算子压根没跑成
+// ============================================================
+//
+// ⚠ 这条用例护的是本项目最贵的那类静默失效。
+//
+//   2026-10-25 之前,坏步只认一种:
+//     「算子跑成功了,但输出里带 error」
+//   而**算子返回 false**(压根没跑成)的那种,输出是**空的**
+//   (引擎把失败步骤的输出置空,失败原因写在 info.error 里),
+//   于是「输出里带 error」**数都数不到**。
+//
+//   后果链条:
+//     src 算子返回 false -> 这一步被吞 -> 链继续往下跑
+//     -> judge 拿到**空的上游输出** -> judge 照样说 PASS
+//     -> 那一帧算 PASS -> 整批结论 PASS -> 退出码 0
+//     -> CI 说「过了」
+//
+//   整条链上**没有一个红点**:GUI 那边只有一行 ❌ 日志,
+//   headless 这边 errorCount 是 0。
+//   而用户存的那条流水线其实**压根没跑成**。
+// ============================================================
+static void test_operator_failed_is_bad_frame() {
+    beginCase("5b. 算子压根没跑成:这一帧是坏帧,不是 PASS");
+
+    auto rec = std::make_shared<Rec>();
+    rec->failOn = QStringLiteral("src");
+    FakeOps ops{rec};
+    HeadlessResult res;
+    QString err;
+
+    const QJsonDocument doc = simpleChain();
+    const bool ok = runPipelineJson(doc, {}, fakeFactory, fakeDefaults, ops, &res, err);
+    check(ok, "算子返回 false,但整条**不算崩**(链继续往下跑)");
+
+    // ---- 静默失效的核心机制:下游拿到的是**空的上游输出** ----
+    //
+    // ⚠ 先把这个摆出来,因为它是后面所有断言的根因:
+    //   下游拿不到上游的产出,却**没有任何东西告诉它**上游挂了。
+    //   src 的输出里有 "op" 键;它挂了,输出被置空,
+    //   于是 judge 的 inputs 里没有 "op"。
+    {
+        const bool judgeGotEmptyUpstream =
+            rec->inputs.size() >= 2 &&
+            !rec->inputs.at(1).contains(QStringLiteral("op"));
+        check(judgeGotEmptyUpstream,
+              "下游拿到的是**空的上游输出** —— "
+              "上游挂了这件事,没有任何东西告诉它");
+    }
+
+    // ---- 判定:这一帧是**坏帧**,不是 PASS ----
+    check(res.errorCount == 1,
+          QString("压根没跑成的那一步被数出来了(实际 %1)").arg(res.errorCount));
+    check(res.passCount == 0,
+          QString("那一帧既不算 PASS 也不算 FAIL(实际 pass=%1)").arg(res.passCount));
+    check(res.failCount == 0,
+          QString("跑坏了不是判废(实际 fail=%1)").arg(res.failCount));
+    check(res.finalResult == "ERROR",
+          QString("最终结果不许说 PASS(实际 \"%1\")").arg(res.finalResult));
+    check(res.batchVerdict == w7::BatchVerdict::Errored,
+          QString("整批结论是 Errored(实际 %1)")
+              .arg(w7::batchVerdictName(res.batchVerdict)));
+    check(res.toJson().value("batch_verdict").toString() == "ERROR",
+          "结果 JSON 里也说了(不然 CI 看不见)");
+
+    // 判定节点自己的原始结论还在 —— 没丢
+    check(res.outputs.value(uuidOf("u-judge")).toObject().value("result").toString() == "PASS",
+          "判定节点的原始结论还在 outputs 里(没被抹掉)");
+
+    // ---- 不能误报:没失败的时候不许数出错 ----
+    {
+        auto rec2 = std::make_shared<Rec>();
+        FakeOps ops2{rec2};
+        HeadlessResult res2;
+        QString err2;
+        runPipelineJson(simpleChain(), {}, fakeFactory, fakeDefaults, ops2, &res2, err2);
+        check(res2.errorCount == 0,
+              QString("没失败的时候不误报(实际 %1)").arg(res2.errorCount));
+        check(res2.batchVerdict == w7::BatchVerdict::Passed,
+              QString("没失败的时候整批结论是 Passed(实际 %1)")
+                  .arg(w7::batchVerdictName(res2.batchVerdict)));
+    }
+}
+
+// ============================================================
 // 用例 6:兜底 image_path
 // ============================================================
 static void test_fallback_image_path() {
@@ -1065,6 +1149,7 @@ int main(int argc, char* argv[]) {
     test_cycle_refused();
     test_happy_path();
     test_operator_failure();
+    test_operator_failed_is_bad_frame();
     test_fallback_image_path();
     test_multi_frame();
     test_batch_verdict();
