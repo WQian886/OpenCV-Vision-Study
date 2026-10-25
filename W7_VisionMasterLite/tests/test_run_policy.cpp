@@ -30,6 +30,7 @@
 #include <windows.h>
 
 #include "run_policy.h"
+#include "log_view.h"        // 日志控件配置(2026-10-25 从 run_policy.h 搬出来)
 #include "step_scope.h"
 #include "artifact_path.h"
 #include "step_frame_cache.h"

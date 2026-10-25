@@ -99,11 +99,84 @@ check(code.contains("w7::planResultRender"), "...");
 - [ ] 剥注释这个动作本身**被测了吗**？
 - [ ] 判据落在**可测入口**上，还是落在**某种写法**上？
 
+## 2026-10-25 补：lint 的替代品是**编译期约束**
+
+这一张卡说「源码守卫会被注释喂饱」。
+但它没说完一件事 —— **不是所有边界都该由 lint 守**。
+
+### lint 的三个漏法，本项目全栽过
+
+| 漏法 | 现场 |
+|---|---|
+| **注释喂饱它** | `contains("w7::planResultRender")` 被 mainwindow.cpp 的**注释**满足 —— 变异 M154 把真调用删干净了，守卫照样绿 |
+| **等价改写绕过** | `out.value("mask_path")` → `out["mask_path"]`，同一个意思，lint 看不见 |
+| **搬家不红** | 规则从查这个字符串搬到查那个字符串，两条 lint 都还绿 |
+
+### 编译器没有这三个漏法
+
+它查的是**依赖**，不是文本：
+
+- 注释骗不了它；
+- 等价改写骗不了它；
+- 搬家会直接让它**编不过**。
+
+### 分工
+
+| 判据是…… | 用什么守 |
+|---|---|
+| **文本**的 | lint（而且要先剥注释） |
+| **依赖**的 | **编译期约束** —— 一个只链最窄依赖的目标 |
+| **行为**的 | 断言 |
+
+> 「层」这条边界（W7 的纯层不许拖 widget / OpenCV）
+> 判据恰恰是**依赖** ——
+> 所以它**一开始就不该由 lint 守**。
+
+### 怎么交给编译器
+
+```cmake
+target_link_libraries(w7_pure_test PRIVATE Qt6::Core)   # 只有 Core
+```
+
+```cpp
+// tests/test_pure_layer.cpp —— 这些 include 本身就是守卫
+#include "run_limits.h"
+#include "run_policy.h"
+// ...
+```
+
+往任何一个纯头文件里塞一个 QWidget，
+那个目标就**编不过**：
+
+```
+run_policy.h(41,10): error C1083: 无法打开包括文件: "QPlainTextEdit": No such file or directory
+```
+
+### ⚠ 但要记住两件事
+
+**一、闸本身也会被拆掉。**
+有人往那个 target 的 link 里加上 `Qt6::Widgets`，闸就没了 ——
+而套件**照样全绿**。所以得有一条**守住闸的形状**的守卫。
+
+**二、失败发生在构建那一步。**
+第一反应容易是「环境坏了」——
+所以要配一条**读得懂**的守卫，把同一件事用中文再说一遍。
+
+### 一句话
+
+> **能交给编译器守的边界，就别交给 lint。**
+> lint 是「文本里有没有」，编译器是「依赖里有没有」——
+> 后者强一个量级。
+
+详见 `notes/atomic/at-the-compiler-can-guard-what-a-lint-cannot.md`。
+
 ## 配套
 
 - `notes/atomic/at-the-message-is-not-the-assertion.md` —— 断言声称的对象 vs 实际读的对象
 - `notes/atomic/at-a-lint-that-finds-nothing-looks-green.md` —— 扫到 0 个对象，样子和通过一模一样
 - `notes/atomic/at-zero-violations-is-not-proof-the-rule-works.md` —— 零违规不能证明规则在干活
 - `notes/atomic/at-mutation-ruler-broken.md` —— 变异活下来先怀疑尺子
+- `notes/atomic/at-the-compiler-can-guard-what-a-lint-cannot.md` —— **本卡的补充**
 
-参见 `notes/notes_W7_RenderPlan_2026-10.md`。
+参见 `notes/notes_W7_RenderPlan_2026-10.md`、
+`notes/notes_W7_FrameProtocol_2026-10.md`。

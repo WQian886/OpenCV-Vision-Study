@@ -14,13 +14,15 @@
 > (总账、怎么复现、怎么继续,都在那儿)
 > 欠账的**完整定义只有一处**:`notes/notes_W7_Knob_Audit_2026-10.md` 第十节。
 >
-> 📌 **2026-10-25 结项后又还了三笔**:
+> 📌 **2026-10-25 结项后又还了四笔**:
 > 欠账 17 收了一半(判定口径搬成 `frame_verdict.h`,GUI 和 CI 共用一份),
 > 欠账 18 的**运行期形状**也收掉了(「压根没跑成」的那一步现在算坏帧)——
 > 顺带发现上一轮只抽了「分类」没抽「采集」,那是**刚建好的架构里的裂缝**;
 > 第三笔把**结果面板「显示哪张图」**也收成了一份(`result_render_plan.h`),
 > 欠账 17 的边界跟着缩小(见下面「已知限制」),
-> 同时**新登记了欠账 19**(`PipelineGraph` 三个字段「写了没人读」)。
+> 同时**新登记了欠账 19**(`PipelineGraph` 三个字段「写了没人读」);
+> 第四笔把**「源怎么报帧数」**也收成了一份(`run_limits.h :: resolveFrameCount`),
+> 顺带给**分层**加了道**编译期**的闸 —— 本项目**第一条不用 lint 守的边界**。
 
 ## 🎯 学习目标
 1. 理解**工业视觉平台的 3 层架构**:算子 + 流水线 + GUI
@@ -73,7 +75,7 @@ W7_VisionMasterLite/
 ├── third_party/fake_mvs/       #   假 MVS SDK(header-only):
 │   └── include/                #   只让 image_source_camera 的 #ifdef 那半能被编译和测试
 │                               #   ⚠ 故意**不**提供真 SDK 里没有的常量
-├── tests/                      # 23 个无头回归测试(2218 断言)
+├── tests/                      # 24 个无头回归测试(2251 断言)
 ├── (无 images/)                # 测试图**只有一份**,在 W6_PCB_DefectProject/images/
 │                               #   (那边才是生成器所在地)。构建时暂存进
 │                               #   build/test_work/<套件名>/images/。
@@ -439,17 +441,17 @@ powershell -ExecutionPolicy Bypass -File tools/w7-run.ps1 `
 > 留下悬垂指针后 Run 引擎遍历会段错误。改为发信号,由 MainWindow
 > 统一走 `PipelineView::removeNode`(它已实现正确的清理顺序)。
 
-## 🧪 回归测试(无头,2152 断言 / 22 个套件)
+## 🧪 回归测试(无头,2251 断言 / 24 个套件)
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W7_VisionMasterLite
-# 一次跑完全部 23 个套件
+# 一次跑完全部 24 个套件
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
 > ⚠️ **`-C Release` 不能省。** 生成器是 VS 多配置版，`CMAKE_CONFIGURATION_TYPES`
 > 里 Debug 和 Release 都在，而 ctest 不带 `-C` 时**默认按 Debug 找 exe**。
-> 只构建过 Release 的话,23 个套件会全部报 `Not Run`——
+> 只构建过 Release 的话,24 个套件会全部报 `Not Run`——
 > 报错长这样：
 >
 > ```
@@ -486,6 +488,20 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 | `dl_infer_nosdk` | 10 | **没装 ONNX Runtime 那条分支**(实际发货的那一半):**这个构建里确实没有 ONNX Runtime**、**不可用的原因不是空的**、**原因里点名了环境变量**、**上游没给图要报错点名 `image_path`**、**模型文件不存在要报错**、**`model_path` 类型不对要点名这个旋钮**、**两种病因给出的是不同的报错**(不然这条用例是恒真的)、**都正常的时候才说 SDK 的事**、**顺便说清模型文件是在的** | OpenCV |
 | `camera` | 93 | **工业相机那条分支**(用一套 header-only 的**假 MVS SDK**顶掉真 SDK):**IP 对不上不许偷偷连第一台**、**报错里要列出实际找到的相机**(顺带钉住 IP 的字节序)、**Bayer 四种排布各用各的转换码**(同一份原始数据按 RG 解和按 BG 解差 128)、**相机给的缓冲区太小要报错不许越界读**、**不认识的像素格式要报错并把 32 位的值写全**、**每一步 SDK 调用的失败都要点名是哪一步**、**半开的句柄要还回去**、**软触发是两件事**(`TriggerMode=ON` **加上** `TriggerSource=SOFTWARE`)、**曝光毫秒要换算成微秒**、**缓冲区用完要还给 SDK**、**改了 IP 要重连而且旧的要先关掉**、**改了触发模式下一次就生效**、**句柄不能漏**、**旋钮类型不对要点名旋钮**(不是"没发现相机") | OpenCV |
 | `camera_nosdk` | 15 | **没装 MVS SDK 那条分支**(实际发货的那一半):**这个构建里确实没有 MVS SDK**、**不可用的原因不是空的**、**原因里点名了环境变量 `MVS_DIR`**、**run() 的报错和面板上那句是同一份**、**没产出图像路径**、**旋钮类型不对要点名旋钮、而且和"SDK 没装"不是同一句**、**三个旋钮的报错互不相同** | OpenCV |
+| `pure_layer` | 33 | **纯层(零 Widgets / 零 OpenCV)**:**「源怎么报帧数」只有一份**(第一个带 `frame_count` 的输出说了算 / 0·负数·非数字一律当 1 帧 / 超上限要截断**而且必须报出来** / 报出来的是**原始值**不是截断后的)、**两个调用方(GUI 和 headless)都必须走这一份**(源码守卫,查之前**先剥掉注释**)、**widget 依赖只在一个文件里**(`log_view.h`)、**纯头文件不许 include widget / opencv2 / GUI-owning 头**(引号形式的 `mainwindow.h` 也查 —— 它拖的 widget 比 `<QWidget>` 还多)、**守住编译期闸自己的形状**(那个目标只准链 `Qt6::Core`) | **只链 `Qt6::Core`**(见下) |
+
+> ⚠ `pure_layer` 这一套的价值**不在它跑的断言,在它只链 `Qt6::Core`**:
+> 它 include 了全部纯头文件,于是往任何一个纯头文件里塞一个 QWidget /
+> `QPlainTextEdit` / `opencv2`,**那个目标就编不过** ——
+> CI 在**构建**那一步就红,不是测试那一步。
+>
+> 这是本项目**第一条不用 lint 守的边界**:
+> **lint 查的是文本,编译器查的是依赖** ——
+> 前者会被注释骗、会被等价改写骗,后者不会。
+>
+> 破坏它时失败在构建那一步,第一反应容易是「环境坏了」——
+> 所以上面还配了一条**读得懂**的守卫(用例 4)把同一件事用中文讲出来。
+> 变异 M169 就是它的工作现场:**预期结果是 BUILD-FAIL,不是红断言**。
 
 ### 默认流水线上的三个算子(为什么补这层测试)
 
@@ -1091,7 +1107,9 @@ $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
   有 99 条断言钉着),**判定口径**也搬出去了(2026-10-24 → `frame_verdict.h`,
   69 条断言 + 变异 15 杀 3 活 → **90 条断言 + 两轮变异共 23 杀 6 活**),
   **「显示哪张图」的规则**也搬出去了(2026-10-25 → `result_render_plan.h`,
-  62 条断言 + 变异 17 杀 14 活 4),剩下的是**纯 UI 接线** ——
+  62 条断言 + 变异 17 杀 14 活 4),
+  **「源怎么报帧数」的协议**也搬出去了(2026-10-25 → `run_limits.h :: resolveFrameCount`,
+  33 条断言 + 变异 18 杀 7 活 2 + 1 编译期),剩下的是**纯 UI 接线** ——
   「点 Run 有没有反应」只能靠人眼。这是欠账 17(**已收一半**),边界和重开条件见结项报告。
   > 搬出去的标准本轮定清楚了:**不是「能不能」在 QWidget 之外测,
   > 是「错了用户会不会自己发现」。**
@@ -1117,10 +1135,11 @@ $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
   [notes/notes_W7_Close_2026-10.md](../notes/notes_W7_Close_2026-10.md),
   欠账的**完整定义只有一处**:
   [notes/notes_W7_Knob_Audit_2026-10.md](../notes/notes_W7_Knob_Audit_2026-10.md) 第十节。
-- **结项之后还的三笔**在
+- **结项之后还的四笔**在
   [notes/notes_W7_Verdict_2026-10.md](../notes/notes_W7_Verdict_2026-10.md)(判定口径收成一份)、
-  [notes/notes_W7_BadStep_2026-10.md](../notes/notes_W7_BadStep_2026-10.md)(让「跑坏了」真的算进判定)
-  和 [notes/notes_W7_RenderPlan_2026-10.md](../notes/notes_W7_RenderPlan_2026-10.md)(结果面板「显示哪张图」收成一份)。
+  [notes/notes_W7_BadStep_2026-10.md](../notes/notes_W7_BadStep_2026-10.md)(让「跑坏了」真的算进判定)、
+  [notes/notes_W7_RenderPlan_2026-10.md](../notes/notes_W7_RenderPlan_2026-10.md)(结果面板「显示哪张图」收成一份)
+  和 [notes/notes_W7_FrameProtocol_2026-10.md](../notes/notes_W7_FrameProtocol_2026-10.md)(帧协议收成一份 + **编译期分层约束**)。
 - ~~**PCB 判定沿用 W6 的样本数据**:`short.png` 会同时报出 `short` 和 `wrong`~~
   —— **2026-10-20 已修**:短路图重画成"两脚被铜条连通"之后,铜条是金色不是青色,
   `short.png` 现在只报 `short`(点名 R2),不再串扰 `wrong`。
@@ -1252,6 +1271,20 @@ PCB 判定的实现(配方解析 + 定位 + 六条判据 + 短路)搬到了 `com
    一条源码守卫**被注释喂饱**(`contains("w7::planResultRender")` ——
    而 `mainwindow.cpp` 的**注释里**就写着这句话)。
    详见 `notes/notes_W7_RenderPlan_2026-10.md`。
+   *2026-10-25 结项之后还了第四笔(欠账 17 第三次收一半):*
+   把「**源怎么报帧数**」这份协议抽成 `run_limits.h :: resolveFrameCount`
+   (纯 QtCore)—— GUI 和 headless **共用这一份**。
+   以前两边**各写一遍**(本项目栽过**九遍**的「抄副本」的**第十遍**);
+   这一次它**还没漂**(两份行为完全一致),
+   但收它的理由和前几次**一个字没变**:
+   没有东西保证它们一致,而哪天不一致的时候**两边都是绿的**。
+   顺手还发现 `run_policy.h`(纯策略层)为了一个三行的 widget 调用
+   拖了 `<QPlainTextEdit>` —— 而「纯层不许拖 widget」这条边界
+   **只写在注释里**。于是 widget 的那一小块搬去了 `log_view.h`,
+   并且给它加了道**编译期**的闸:`w7_pure_test` 那个目标**只链 `Qt6::Core`**。
+   新套件 `pure_layer` **33 条**断言,变异 M163~M172
+   **杀 7 活 2 + 1 编译期**(M169 预期就是 BUILD-FAIL)。
+   详见 `notes/notes_W7_FrameProtocol_2026-10.md`。
 5. **子图 / 分支复用**:同一个子流水线被两条支路引用(需要拓扑排序支持)
 
 ## 🎓 回顾:这个项目真正教我的东西

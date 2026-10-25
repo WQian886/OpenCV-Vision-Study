@@ -217,18 +217,19 @@ bool runPipelineJson(const QJsonDocument& doc,
         res.outputs = outs;
 
         // ---- 首帧跑完才知道一共有多少帧 ----
+        //
+        // ⚠ 2026-10-25:「帧协议」收成**一份**了(w7::resolveFrameCount)。
+        //   以前这里是 mainwindow.cpp 和 headless_runner.cpp **各写一遍**
+        //   —— 规则只有三条,两边各写一份就没有东西保证它们一致。
+        //   详见 run_limits.h 里 resolveFrameCount 那段。
         if (frame == 0) {
-            for (const QJsonObject& o : ef.outputs) {
-                if (!o.contains("frame_count")) continue;
-                const int reported = o.value("frame_count").toInt(1);
-                bool truncated = false;
-                totalFrames = clampFrameCount(reported, &truncated);
-                if (truncated) {
-                    res.logs.append(QStringLiteral(
-                        "[Run] ⚠️ 一共有 %1 帧,超过单次上限 %2 帧,只跑前 %2 帧")
-                        .arg(reported).arg(kMaxRunFrames));
-                }
-                break;
+            int reported = 1;
+            bool truncated = false;
+            totalFrames = resolveFrameCount(ef.outputs, &reported, &truncated);
+            if (truncated) {
+                res.logs.append(QStringLiteral(
+                    "[Run] ⚠️ 一共有 %1 帧,超过单次上限 %2 帧,只跑前 %2 帧")
+                    .arg(reported).arg(kMaxRunFrames));
             }
             // 用户给的帧数上限
             const int cap = (opt.maxFrames > 0) ? opt.maxFrames : kMaxRunFrames;

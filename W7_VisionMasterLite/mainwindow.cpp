@@ -9,6 +9,7 @@
 #include "run_engine.h"  // 拓扑序 + 前驱输出合并(纯逻辑,可行为测试)
 #include "frame_verdict.h" // 帧判定与整批结论(纯逻辑,**和 headless 共用**这一份)
 #include "result_render_plan.h" // 结果面板"显示哪张图"(纯逻辑,**和存在性判据共用**这一份)
+#include "log_view.h"          // 日志控件配置(**唯一**和 QPlainTextEdit 有关系的地方)
 
 #include <QDockWidget>
 #include <QToolBar>
@@ -1319,19 +1320,20 @@ void MainWindow::runPipeline(OperatorNode* target) {
         // 这条链就是用户报的"跑着跑着卡死"。
         //
         // 截断了必须在日志里说清楚,不然用户会以为全跑完了。
+        //
+        // ⚠ 2026-10-25:「帧协议」收成**一份**了(w7::resolveFrameCount)。
+        //   以前这段是 mainwindow.cpp 和 headless_runner.cpp **各写一遍** ——
+        //   规则只有三条(源报 frame_count / 第一个说了算 / 要过 clamp),
+        //   但两边各写一份,就没有任何东西保证它们一致了。
+        //   详见 run_limits.h 里 resolveFrameCount 那段。
         if (frame == 0) {
-            for (const QJsonObject& out : frameOutputs) {
-                if (out.contains("frame_count")) {
-                    const int reported = out.value("frame_count").toInt(1);
-                    bool truncated = false;
-                    totalFrames = w7::clampFrameCount(reported, &truncated);
-                    if (truncated) {
-                        appendLog(tr("⚠️ 一共有 %1 帧,超过单次上限 %2 帧,只跑前 %2 帧")
-                            .arg(reported).arg(w7::kMaxRunFrames));
-                        appendLog(tr("   要跑全部就分批,或者把上限调高(kMaxRunFrames)"));
-                    }
-                    break;
-                }
+            int reported = 1;
+            bool truncated = false;
+            totalFrames = w7::resolveFrameCount(frameOutputs, &reported, &truncated);
+            if (truncated) {
+                appendLog(tr("⚠️ 一共有 %1 帧,超过单次上限 %2 帧,只跑前 %2 帧")
+                    .arg(reported).arg(w7::kMaxRunFrames));
+                appendLog(tr("   要跑全部就分批,或者把上限调高(kMaxRunFrames)"));
             }
             statusBar()->showMessage(tr("共 %1 帧").arg(totalFrames), 3000);
         }

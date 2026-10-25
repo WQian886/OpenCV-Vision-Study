@@ -26,13 +26,21 @@
 //   1) 帧数封顶   -> 掐住"行数"的源头
 //   2) 重绘限频   -> 掐住"每行都重绘"
 //   3) 可取消     -> 掐住"用户没法自救"
+//
+// ⚠ 2026-10-25:本文件现在是**纯 QtCore**了。
+//   以前它为了一个 widget 调用拖了 <QPlainTextEdit>:
+//       inline constexpr int kLogMaxLines = 5000;
+//       inline void configureLogView(QPlainTextEdit* w, int cap = ...);
+//   那两个搬去了 log_view.h ——
+//   「层」这条边界现在由**编译器**守着:
+//   tests/test_pure_layer.cpp 有一个只链 Qt6::Core 的目标 include 了这个头,
+//   往这儿塞一个 QWidget 会让那个目标**编不过**。
 // ============================================================
 
 #include <QtGlobal>
-#include <QPlainTextEdit>
 
-// 帧数封顶那条规则是**纯算术**,拆到纯头文件里去了 ——
-// headless runner(纯 QtCore)也要用它,而这个头文件拖 QtWidgets。
+// 帧数封顶 + 帧协议是**纯 QtCore**,拆到纯头文件里去了 ——
+// headless runner(纯 QtCore)也要用它们,而这个头文件拖 QtWidgets。
 // 定义只有一份,这里只是把它引进来。
 #include "run_limits.h"
 
@@ -126,31 +134,15 @@ inline void endRun(RunState* s) {
 }
 
 // ============================================================
-// 日志控件的配置
-//
-// 为什么单独拉出这个函数(而不是在 setupResultPanel 里直接写两行):
-//
-// 主窗口没法无头构造(要真窗口 + 全部算子),所以第一版的测试是
-// "自己 new 一个 QPlainTextEdit,设上限,写几千行,看块数有没有被卡住"。
-// 那个测试只证明了**机制**成立(setMaximumBlockCount 确实管用),
-// 但完全没证明**主窗口真的调了它** —— 把 mainwindow.cpp 里那行删掉,
-// 测试照样全绿。这就是"测了个寂寞"的另一种形态:测的是平行宇宙。
-//
-// 所以把配置收进这个函数,主窗口和测试调的是同一段代码。
-// 剩下的缺口只有"主窗口忘了调这个函数"这一行 —— 那是 grep 一下就
-// 能确认的事,比"上限机制到底管不管用"这种基础假设可靠得多。
-//
-// cap 参数只为测试提速而存在:测"代价曲线形状"时用小上限跑得快,
-// 测"真实上限"时用默认值。
+// 日志控件的配置 —— **不在这里了**
 // ============================================================
-inline constexpr int kLogMaxLines = 5000;
-
-inline void configureLogView(QPlainTextEdit* w, int cap = kLogMaxLines) {
-    if (!w) return;
-    w->setReadOnly(true);
-    // 不封顶的话文档只涨不删,内存和单次重绘代价一起涨。
-    // 实测单行重绘 785 us 且随行数上涨,行数不封顶 = 代价不封顶。
-    w->document()->setMaximumBlockCount(cap);
-}
+//
+// ⚠ 2026-10-25 搬去了 log_view.h。
+//   以前 kLogMaxLines 和 configureLogView(QPlainTextEdit*) 住在这儿,
+//   于是这个「纯策略」头文件拖了 <QPlainTextEdit>。
+//   搬走之后本文件只剩纯逻辑 —— 整数进、整数出。
+//
+//   见 log_view.h 开头那段「为什么」。
+// ============================================================
 
 } // namespace w7

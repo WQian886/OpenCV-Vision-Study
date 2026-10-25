@@ -241,3 +241,81 @@ inline const ImageCandidate* pickBaseImage(const QVector<ImageCandidate>& cands,
 `notes/notes_W7_BadStep_2026-10.md`（第七次）、
 `notes/notes_W7_Verdict_2026-10.md`（第六次）、
 `notes/notes_W7_Knob_Audit_2026-10.md`。
+
+## 第十次：2026-10-25，「源怎么报帧数」抄了两份
+
+规则只有**三条**：
+
+1. 源在**输出**里报一个 `frame_count` 字段；
+2. **第一个**带这个字段的输出说了算（按执行序）；
+3. 报出来的数要过 `clampFrameCount`。
+
+实现有**两份**：
+
+| | 在哪 |
+|---|---|
+| GUI | `mainwindow.cpp :: MainWindow::runPipeline` |
+| CI | `headless_runner.cpp :: runPipelineJson` |
+
+### 这一次特别的地方：它**还没漂**
+
+前十次里，多数是「抄的时候一模一样，然后真的漂了」。
+这一次两份**行为完全一致**。
+
+但收它的理由和前几次**一个字没变**：
+
+> 没有东西保证它们一致；
+> 哪天源算子改了 `frame_count` 的语义，两边会各按各的理解算；
+> 而**两边都是绿的**。
+
+> **「还没出事」和「不会出事」之间，隔着的正是这条规则。**
+> 「这次没漂」只是说明**爆款还没到**，不是说明**收它没必要**。
+
+### 它为什么一点都不显眼
+
+因为它藏在**一个字段名**里。
+
+`frame_count` 在 `run_limits.h`、两个调用方、还有各个源算子里都出现 ——
+任何一次 grep 都会搜到它，所以它**看起来像是一份**。
+
+而实际上「哪一帧的输出算第一个」只有**那份循环**说了算 ——
+而循环有两条。
+
+> **藏在名字里的副本，比藏在两个函数里的副本更难发现。**
+> 前者连「找一份出来」的念头都不会起。
+
+### 顺带：测试代码里的副本
+
+写新套件时发现 `stripComments` 已经有一份（在 `test_result_render_plan.cpp` 里）。
+直接复制就是**第十一份**副本 ——
+所以抽成了 `tests/source_scan.h`。
+
+> 测试代码里的副本更危险：
+> 它让人以为「这工具已经标准化了」，
+> 于是下一个人**再抄一遍**。
+
+### 收法
+
+抽一个**两边都调**的函数（`w7::resolveFrameCount`），
+规则从「各写一份循环」变成「**一条数据**」：
+
+```cpp
+inline int resolveFrameCount(const QVector<QJsonObject>& outputs,
+                             int* reportedOut = nullptr,
+                             bool* truncated = nullptr);
+```
+
+两个调用点各剩一行。
+
+### 配套
+
+`notes/atomic/at-the-compiler-can-guard-what-a-lint-cannot.md`
+（这条边界的另一半：分层靠编译期守）、
+`notes/atomic/at-the-guard-can-be-fed-by-a-comment.md`
+（源码守卫会被注释喂饱）。
+
+参见 `notes/notes_W7_FrameProtocol_2026-10.md`、
+`notes/notes_W7_RenderPlan_2026-10.md`（第九次）、
+`notes/notes_W7_BadStep_2026-10.md`（第七次）、
+`notes/notes_W7_Verdict_2026-10.md`（第六次）、
+`notes/notes_W7_Knob_Audit_2026-10.md`。

@@ -19,7 +19,7 @@
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 477 条断言**
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。17 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），23 个无头回归测试共 2218 条断言。**已结项**（2026-10-24），欠账 19 条已收 9 条，剩下 10 条都写清了边界和重开条件（其中 17 / 18 各收了一半） → [结项报告](./notes/notes_W7_Close_2026-10.md)
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。17 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），24 个无头回归测试共 2251 条断言。**已结项**（2026-10-24），欠账 19 条已收 9 条，剩下 10 条都写清了边界和重开条件（其中 17 / 18 各收了一半） → [结项报告](./notes/notes_W7_Close_2026-10.md)
 
 ## 🔗 两个共享核心（common/）
 
@@ -73,7 +73,7 @@ cd W7_VisionMasterLite
 cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && "D:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build -C Release --output-on-failure'
 ```
 
-23 个套件 / 2218 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
+24 个套件 / 2251 断言，`QT_QPA_PLATFORM=offscreen` 无需显示器。
 其中 `pcb_operators` 直接把 W6 当时的肉眼验收清单（8 张样本图）变成可重复执行的测试，
 `pcb_core` 则是共享判定核心自己的测试（**W6 和 W7 链的是同一份源码**）。
 
@@ -93,7 +93,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 >
 > 看着像代码全坏了，其实一个测试都没跑。
 
-> 测试失败时想看是哪条断言挂了，CMakeLists 里已经给 23 个套件都设了
+> 测试失败时想看是哪条断言挂了，CMakeLists 里已经给 24 个套件都设了
 > `QT_FORCE_STDERR_LOGGING=1`。不加的话 Qt 6 在 Windows 上会把 `qInfo`
 > 送到调试通道而不是 stderr，`--output-on-failure` 只能看到一个非零退出码。
 
@@ -153,8 +153,9 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_W7_Verdict_2026-10.md` (18 KB) — 结项之后还的第一笔：把「结论怎么说」收成**一份**规则（GUI 和 CI 共用），顺带抓到 CI 的一个**漏检**
 - `notes_W7_BadStep_2026-10.md` (15 KB) — 结项之后还的第二笔：让「跑坏了」真的算进判定（引擎把输出置空 → 旧判据数不到它）
 - `notes_W7_RenderPlan_2026-10.md` (16 KB) — 结项之后还的第三笔：结果面板「显示哪张图」收成**一份**规则，顺带抓到本轮自己的两个洞
+- `notes_W7_FrameProtocol_2026-10.md` (19 KB) — 结项之后还的第四笔：「源怎么报帧数」收成**一份**（第十份抄副本）+ 纯层瘦身 + **本项目第一条编译期约束**（只链 `Qt6::Core` 的目标往纯层塞 widget 就编不过）
 
-`notes/atomic/` 里是**单条教训卡片**（63 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（64 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -206,7 +207,7 @@ OpenCV/
 ├── common/cmake/          # 三方依赖路径(本机默认值 + CI 覆盖)
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 检查源码树没被写脏
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（23 份 + 63 张 atomic 卡）
+├── notes/                 # 变更日志（24 份 + 64 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -216,7 +217,7 @@ OpenCV/
 ## 📊 统计
 
 - 7 个 C++ 项目 + 2 个共享核心
-- 125 个 C++ 文件 / **38,882 行**（含注释与空行）。口径是**一条能跑的完整命令**，2026-10-25 实测：
+- 128 个 C++ 文件 / **39,453 行**（含注释与空行）。口径是**一条能跑的完整命令**，2026-10-25 实测：
 
   ```powershell
   $files = git ls-files '*.cpp' '*.h'
@@ -231,7 +232,7 @@ OpenCV/
   > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
   > 连最接近的 ANSI 口径（33,368）也对不上。
   > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
-- 23 份变更日志 + 63 张 atomic 卡 / ~772 KB
-- **26 个无头回归测试 / 2695 条断言**（W7 23 个 / 2218，W6 3 个 / 477；
+- 24 份变更日志 + 64 张 atomic 卡 / ~808 KB
+- **27 个无头回归测试 / 2728 条断言**（W7 24 个 / 2251，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

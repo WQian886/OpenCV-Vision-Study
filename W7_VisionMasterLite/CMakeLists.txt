@@ -1344,6 +1344,58 @@ add_custom_command(TARGET w7_knob_test POST_BUILD
 w7_add_test(operator_knobs w7_knob_test)
 
 # ============================================================
+# 纯层(零 Widgets / 零 OpenCV)的编译期约束 + 帧协议测试
+# ============================================================
+#
+# ⚠ 这个目标的价值**不在它跑的断言**,在它**只链 Qt6::Core**。
+#
+#   它 include 了全部纯头文件:
+#     run_limits.h / run_policy.h / frame_verdict.h / run_engine.h
+#     pipeline_graph.h / result_render_plan.h / step_frame_cache.h
+#     frame_record.h / headless_runner.h
+#
+#   哪天有人往任何一个纯头文件里塞一个 QWidget / QPlainTextEdit /
+#   opencv2,**这个目标编不过** —— CI 在构建那一步就红。
+#
+#   这比源码 lint 强一个量级:
+#     lint 查的是**文本** —— 注释也是文本,还能被等价改写绕过
+#       (本项目栽过:contains("w7::planResultRender") 被一句注释喂饱);
+#     编译器查的是**依赖** —— 注释骗不了它,等价改写也骗不了它。
+#
+#   这是本项目**第一条不用 lint 守的边界**。
+#
+# ⚠ 用例 5 还守着**这道闸自己的形状**:
+#   万一有人往这个 target 的 link 里加上 Qt6::Widgets / OpenCV_LIBS,
+#   闸就没了 —— 而套件照样全绿(它只是又拖进来一个 widget 而已)。
+#
+# ⚠ 帧协议测试也住在这儿:
+#   「源怎么报帧数」以前在 mainwindow.cpp 和 headless_runner.cpp
+#   **各写一遍**(第十份抄副本),现在收成 run_limits.h 的
+#   resolveFrameCount(),两边都调它。
+# ============================================================
+qt_add_executable(w7_pure_test
+    tests/test_pure_layer.cpp
+)
+
+target_include_directories(w7_pure_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# ⚠ 只准链 Qt6::Core。Qt6::Widgets / OpenCV_LIBS 一律不许进这里 ——
+#   进了,编译期那道闸就没了(用例 5 会红)。
+target_link_libraries(w7_pure_test PRIVATE Qt6::Core)
+
+# 源码守卫要读 mainwindow.cpp / headless_runner.cpp / CMakeLists.txt
+target_compile_definitions(w7_pure_test PRIVATE
+    W7_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
+if(MSVC)
+    target_compile_options(w7_pure_test PRIVATE /utf-8)
+endif()
+
+w7_add_test(pure_layer w7_pure_test)
+
+# ============================================================
 # 让测试失败时能看到是哪条断言挂了
 #
 # Qt 6 在 Windows 上默认把 qInfo/qDebug 送到 Windows 调试通道而不是 stderr,
@@ -1356,7 +1408,7 @@ w7_add_test(operator_knobs w7_knob_test)
 set_tests_properties(
     undo_redo pcb_operators dl_postprocess image_sources
     step_result pin_and_recent line_fit measurement run_policy detection_operators
-    template_match operator_library operator_knobs
+    template_match operator_library operator_knobs pure_layer
     PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1"
 )
 

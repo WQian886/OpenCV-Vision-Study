@@ -72,8 +72,10 @@
 #include <QVector>
 
 #include "result_render_plan.h"
+#include "source_scan.h"   // 剥注释 / 读源码(共享的,见该文件头的说明)
 
 using namespace w7;
+using namespace w7test;   // stripComments / readSource(共享的测试工具)
 
 // ============================================================
 // 极简断言(与其余套件同一套风格)
@@ -104,7 +106,7 @@ static QJsonObject out(const QString& imagePath,
 }
 
 // ============================================================
-// 剥掉注释,只留代码
+// 剥掉注释再查源码
 // ============================================================
 //
 // ⚠ 2026-10-25:这是**被变异逼出来**的。
@@ -120,43 +122,11 @@ static QJsonObject out(const QString& imagePath,
 //   原来那句只说到了断言,没想到**源码守卫也会被注释骗**。
 //   于是:查源码之前**先剥掉注释**。
 //
+//   ⚠ 工具住在**共享的** tests/source_scan.h 里 ——
+//     第二个套件也要用它的时候,抄一份就是**第十一份抄副本**。
+//
 //   ⚠ 字符串里的 // 和 /* 不算注释 —— 剥错了同样会骗人。
 // ============================================================
-static QString stripComments(const QString& src) {
-    QString out;
-    out.reserve(src.size());
-    enum State { Code, LineComment, BlockComment, Str, Chr } st = Code;
-    for (int i = 0; i < src.size(); ++i) {
-        const QChar c = src.at(i);
-        const QChar n = (i + 1 < src.size()) ? src.at(i + 1) : QChar();
-        switch (st) {
-        case Code:
-            if (c == QLatin1Char('/') && n == QLatin1Char('/')) { st = LineComment; ++i; }
-            else if (c == QLatin1Char('/') && n == QLatin1Char('*')) { st = BlockComment; ++i; }
-            else if (c == QLatin1Char('"')) { st = Str; out += c; }
-            else if (c == QLatin1Char('\'')) { st = Chr; out += c; }
-            else out += c;
-            break;
-        case LineComment:
-            if (c == QLatin1Char('\n')) { st = Code; out += c; }
-            break;
-        case BlockComment:
-            if (c == QLatin1Char('*') && n == QLatin1Char('/')) { st = Code; ++i; }
-            break;
-        case Str:
-            out += c;
-            if (c == QLatin1Char('\\') && i + 1 < src.size()) out += src.at(++i);
-            else if (c == QLatin1Char('"')) st = Code;
-            break;
-        case Chr:
-            out += c;
-            if (c == QLatin1Char('\\') && i + 1 < src.size()) out += src.at(++i);
-            else if (c == QLatin1Char('\'')) st = Code;
-            break;
-        }
-    }
-    return out;
-}
 
 // ============================================================
 // 用例 1:候选列表的优先级
