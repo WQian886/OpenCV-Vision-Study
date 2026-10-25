@@ -51,6 +51,7 @@
 #include <QVector>
 #include <QString>
 #include <QStringList>
+#include <QSet>
 #include <functional>
 
 namespace w7 {
@@ -338,6 +339,30 @@ inline bool graphFromJson(const QJsonDocument& doc,
     logFn(QString("[Load] 完成: 创建 %1 个节点(其中 %2 个算子没装),连线 %3 条(断掉 %4)")
         .arg(created).arg(unknown).arg(linked).arg(edgeSkip));
     return true;
+}
+
+// ============================================================
+// missingOperatorNames —— 收拢「没装的算子名」
+// ============================================================
+//
+// ⚠ 2026-10-25 第六笔(P0-2):
+//   「算子没装」这条规则当时有**两份实现**
+//   (headless 一份、GUI 一份,消息还不一样)。
+//   现在收成一份(missing_operator.h),
+//   这里只负责**把名字收拢出来** ——
+//   纯层不能 new 算子,所以「装没装」这个事实是解析层给的。
+//
+// ⚠ 为什么按**算子名**收,而不是按节点:
+//   `known` 本来就是**按算子名**判的(同一个算子装没装,跟节点无关),
+//   所以两个节点用同一个算子,结论一定一样。
+//   执行层的 runner 回调只拿到**算子名**,拿不到节点 ——
+//   这正是这里要收成名字集合的原因。
+inline QSet<QString> missingOperatorNames(const QVector<GraphNode>& nodes) {
+    QSet<QString> names;
+    for (const auto& n : nodes) {
+        if (!n.known) names.insert(n.op);
+    }
+    return names;
 }
 
 // ============================================================

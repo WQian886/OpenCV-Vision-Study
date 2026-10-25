@@ -1,6 +1,7 @@
 #include "headless_runner.h"
 #include "run_limits.h"         // clampFrameCount / kMaxRunFrames(纯算术,零 QtWidgets)
 #include "frame_verdict.h"      // 帧判定与整批结论(和主程序**共用**这一份)
+#include "missing_operator.h"   // 「算子没装」→ 那一步失败(纯层,GUI 和 headless 共用一份)
 
 #include <QJsonArray>
 #include <QSet>
@@ -133,16 +134,18 @@ bool runPipelineJson(const QJsonDocument& doc,
     //
     //   规则住在**解析层和执行层之间** ——
     //   解析层已经知道答案了,没理由再去猜。
-    QSet<QString> missingOps;
-    for (const GraphNode& gn : g.nodes)
-        if (!gn.known) missingOps.insert(gn.op);
+    //
+    // ⚠⚠ 2026-10-25 第六笔(P0-2):判据搬进了**纯层**
+    //   (missing_operator.h),因为这条规则当时有**两份实现** ——
+    //   GUI 那边内联了一份,消息还写的是「跳过」(而它并没有跳过)。
+    //   这里现在只问纯层那一份。
+    const QSet<QString> missingOps = w7::missingOperatorNames(g.nodes);
 
     const EngineRunner guardedRunner =
         [&missingOps, &runner](const QString& opName, const QJsonObject& params,
                                const QJsonObject& inputs, QJsonObject* out,
                                QString* err) -> bool {
-        if (missingOps.contains(opName)) {
-            if (err) *err = QStringLiteral("算子 %1 未注册,这一步跑不了").arg(opName);
+        if (w7::rejectMissingOperator(opName, missingOps, err)) {
             if (out) *out = QJsonObject();
             return false;
         }

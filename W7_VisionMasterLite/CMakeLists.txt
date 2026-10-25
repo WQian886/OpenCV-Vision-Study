@@ -265,8 +265,10 @@ add_custom_command(TARGET w7_core_test POST_BUILD
 w7_add_test(pcb_core w7_core_test)
 
 # === 源码 ===
+# main.cpp 单独拎出去:它是 **GUI 外壳**(QApplication + main),
+# 而 mainwindow.cpp 和算子那一坨是**实现**,两个外壳都要用。
+# 见下面 w7_app_core 那段。
 set(SOURCES
-    main.cpp
     mainwindow.cpp
     pipeline_view.cpp
     operator_node.cpp
@@ -274,6 +276,7 @@ set(SOURCES
     pipeline_serialize.cpp # 存盘/读盘:边要记两端方向,否则竖线存一次就躺了
     pipeline_serialize.h
     pipeline_graph.h       # 读盘的**纯解析层**(JSON -> 图):headless 和 GUI 共用一份
+    missing_operator.h     # 「算子没装」-> 那一步失败(纯层):headless 和 GUI 共用一份
     run_limits.h           # 帧数封顶(纯算术):headless 那层是纯 QtCore,拖不了 QtWidgets
     run_engine.h           # 流水线执行引擎(拓扑序/合并/逐节点执行):headless 和 GUI 共用一份
     headless_runner.cpp    # 无头跑一条流水线:JSON -> 图 -> 引擎 -> 结果 JSON
@@ -353,14 +356,38 @@ set(HEADERS
     operators/angle.h
 )
 
-qt_add_executable(w7_vm_lite WIN32 ${SOURCES} ${HEADERS})
+# ============================================================
+# === 主程序源码 → 静态库
+#
+# 为什么要拆这一层:
+#   mainwindow.cpp 一直**不在任何测试目标里** —— 于是主窗口的「接线」
+#   一次都没被测过(欠账 17 的最后一块)。
+#   要把它拉进测试目标,就得让「GUI 外壳」和「测试外壳」
+#   共用**同一份实现**,否则两份会各自漂。
+#
+#   w7_app_core   mainwindow.cpp + 算子 + 画布 + Command 层(实现)
+#   w7_vm_lite        main.cpp + w7_app_core        (GUI 外壳)
+#   w7_mainwindow_test 测试 + w7_app_core           (测试外壳)
+#
+#   顺带的好处:mainwindow.cpp 和那一堆 OpenCV 算子**只编一次**。
+#   (把它们列进两个目标的话,整个 OpenCV 那一坨要编两遍,
+#     而本机内存只有 15.7 GB —— 连续编七次就会 OOM。)
+#
+# ⚠ 静态库 + AUTOMOC:
+#   moc 出来的 moc_mainwindow.cpp 进的是静态库,
+#   链接时靠「mainwindow.o 引用了 MainWindow::staticMetaObject」
+#   把 moc_mainwindow.o 拉进来 —— 静态库的惰性链接不会把它丢掉。
+#   (真丢掉的现象是链接期报 " unresolved external symbol" ,
+#     报在 moc 出来的符号上,一眼看不出来。)
+# ============================================================
+qt_add_library(w7_app_core STATIC ${SOURCES} ${HEADERS})
 
-target_include_directories(w7_vm_lite PRIVATE
+target_include_directories(w7_app_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${OpenCV_INCLUDE_DIRS}
 )
 
-target_link_libraries(w7_vm_lite PRIVATE
+target_link_libraries(w7_app_core PUBLIC
     Qt6::Core Qt6::Gui Qt6::Widgets
     ${OpenCV_LIBS}
     w7_pcb_core
@@ -368,7 +395,7 @@ target_link_libraries(w7_vm_lite PRIVATE
 )
 
 if(MSVC)
-    target_compile_options(w7_vm_lite PRIVATE /utf-8)
+    target_compile_options(w7_app_core PRIVATE /utf-8)
 endif()
 
 # --- 把探测结果接给编译器 + 链接器 ---
@@ -392,7 +419,14 @@ function(w7_attach_external_sdks target)
     endif()
 endfunction()
 
-w7_attach_external_sdks(w7_vm_lite)
+w7_attach_external_sdks(w7_app_core)
+
+# ============================================================
+# === GUI 外壳 ===
+# ============================================================
+qt_add_executable(w7_vm_lite WIN32 main.cpp)
+
+target_link_libraries(w7_vm_lite PRIVATE w7_app_core)
 
 set_target_properties(w7_vm_lite PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -1428,6 +1462,52 @@ endif()
 w7_add_test(pipeline_graph w7_pipeline_graph_test)
 
 # ============================================================
+# === 主窗口接线 回归测试 (headless, offscreen)
+#
+# ⚠ 2026-10-25 第六笔(P0-2):
+#   mainwindow.cpp 以前**不在任何测试目标里** ——
+#   于是主窗口的「接线」一次都没被测过(欠账 17 的最后一块)。
+#
+#   这个目标**第一次**把它拉进测试:
+#     · 用真的 QApplication(offscreen 平台,不需要显示器)
+#     · 链 w7_app_core —— 和主程序**同一份实现**,不会各自漂
+#
+# ⚠ 依赖面比别的套件重(整个 GUI + OpenCV):
+#   那是必然的 —— 主窗口本来就把整个 GUI 拖进来了。
+#   换来的好处是:主窗口的接线**第一次**能测。
+#
+# ⚠ 这个套件测的是「接线」,判据是「**错了用户会不会自己发现**」:
+#   画面明显画错的,用户自己看得见,不必测;
+#   画面正常但数字和画面对不上的,**必须测**。
+# ============================================================
+qt_add_executable(w7_mainwindow_test
+    tests/test_mainwindow_wiring.cpp
+)
+
+target_link_libraries(w7_mainwindow_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+    ${OpenCV_LIBS}
+    w7_app_core
+)
+
+# 源码守卫要读 mainwindow.cpp / headless_runner.cpp
+target_compile_definitions(w7_mainwindow_test PRIVATE
+    W7_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
+if(MSVC)
+    target_compile_options(w7_mainwindow_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w7_mainwindow_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${OpenCV_BIN_DIR}
+        $<TARGET_FILE_DIR:w7_mainwindow_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+w7_add_test(mainwindow_wiring w7_mainwindow_test)
+
+# ============================================================
 # 让测试失败时能看到是哪条断言挂了
 #
 # Qt 6 在 Windows 上默认把 qInfo/qDebug 送到 Windows 调试通道而不是 stderr,
@@ -1441,6 +1521,7 @@ set_tests_properties(
     undo_redo pcb_operators dl_postprocess image_sources
     step_result pin_and_recent line_fit measurement run_policy detection_operators
     template_match operator_library operator_knobs pure_layer pipeline_graph
+    mainwindow_wiring
     PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1"
 )
 

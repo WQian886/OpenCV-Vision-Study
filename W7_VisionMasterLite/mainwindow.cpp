@@ -9,6 +9,7 @@
 #include "run_engine.h"  // 拓扑序 + 前驱输出合并(纯逻辑,可行为测试)
 #include "frame_verdict.h" // 帧判定与整批结论(纯逻辑,**和 headless 共用**这一份)
 #include "result_render_plan.h" // 结果面板"显示哪张图"(纯逻辑,**和存在性判据共用**这一份)
+#include "missing_operator.h"   // 「算子没装」→ 那一步失败(纯逻辑,**和 headless 共用**这一份)
 #include "log_view.h"          // 日志控件配置(**唯一**和 QPlainTextEdit 有关系的地方)
 
 #include <QDockWidget>
@@ -148,6 +149,85 @@ MainWindow::~MainWindow() {
     clearUndoRedoStacks();
     // OperatorInfo 是值类型,无需手动释放
     m_operatorInfo.clear();
+}
+
+// ============================================================
+// wiringSnapshot —— 主窗口的可观测面(只读)
+// ============================================================
+//
+// ⚠ 2026-10-25 第六笔(P0-2)。理由见 mainwindow.h 里那个结构的说明。
+//
+// ⚠ 这个函数**不许有任何副作用**:
+//   它会被测试反复调用,一次副作用就够把状态搅乱,
+//   而"测试自己把状态搅乱了"是最难查的一类假失败。
+//
+MainWindowWiring MainWindow::wiringSnapshot() const {
+    MainWindowWiring s;
+
+    // --- 画布 ---
+    if (m_canvas) {
+        s.nodeCount = m_canvas->nodes().size();
+        s.connectionCount = m_canvas->connections().size();
+        for (const auto* n : m_canvas->nodes()) {
+            if (n && n->isOperatorMissing()) ++s.missingOperatorNodeCount;
+        }
+    }
+
+    // --- 参数面板 ---
+    if (m_paramPanel) {
+        s.paramPageIndex = m_paramPanel->currentIndex();
+        s.paramPanelPages = m_paramPanel->count();
+        // ⚠ 当前页是不是**真表单**:占位页也是一个 widget,
+        //   光看 currentIndex 不足以区分"显示了表单"和"显示了占位页"。
+        s.paramShowsForm =
+            (qobject_cast<w7::ParamForm*>(m_currentParamWidget.data()) != nullptr);
+    }
+    if (m_paramPlaceholder) s.paramPlaceholderText = m_paramPlaceholder->text();
+
+    // --- 日志区 ---
+    if (m_logView) s.logText = m_logView->toPlainText();
+
+    // --- 结果区 ---
+    if (m_resultTitle) s.resultTitle = m_resultTitle->text();
+    if (m_stepDetail) s.resultDetail = m_stepDetail->toPlainText();
+
+    // --- 工具栏 ---
+    if (m_undoAction) s.undoEnabled = m_undoAction->isEnabled();
+    if (m_redoAction) s.redoEnabled = m_redoAction->isEnabled();
+    if (m_stopBtn)   s.stopEnabled  = m_stopBtn->isEnabled();
+
+    // --- 每步结果缓存 ---
+    s.cachedNodeIds = m_stepCache.cachedNodeIds();
+
+    return s;
+}
+
+// ============================================================
+// dropParamForm —— 把当前那一页的参数表单拆掉
+// ============================================================
+//
+// ⚠ 2026-10-25 第六笔(P0-2):
+//   以前「算子没装」和「没选中节点」这两条分支只是把指针置空,
+//   **没有把那个表单从堆栈里拿掉**。后果有两个:
+//
+//     1. 那个表单成了**孤儿** —— 还在参数面板的堆栈里,却没人指着它。
+//        每选一次「算子没装」的节点就多一个死表单,面板越点越胖。
+//     2. 主窗口的**状态和画面对不上** —— 面板上明明是占位页,
+//        而 `m_currentParamWidget` 还指着上一个表单。
+//        「用户自己发现不了」的那一类:界面看着正常,内部已经错了。
+//
+// ⚠ 为什么用 deleteLater 而不是 delete:
+//   表单可能正在处理 focusOut —— 直接 delete 会在它自己的调用栈里
+//   把它自己删掉。Qt 的规矩是延后删。
+//
+void MainWindow::dropParamForm() {
+    QPointer<QWidget> w = m_currentParamWidget;
+    m_currentParamWidget = nullptr;
+    m_currentParamNode = nullptr;
+    if (!w) return;
+    w->hide();
+    if (m_paramPanel) m_paramPanel->removeWidget(w);
+    w->deleteLater();
 }
 
 void MainWindow::setupUi() {
@@ -576,8 +656,13 @@ void MainWindow::updateParamPanelForNode(w7::OperatorNode* node) {
 
     if (!node) {
         qDebug() << "[UPN] null node, set placeholder";
+        // ⚠ 2026-10-25 第六笔(P0-2):面板要切回占位页了,
+        //   那**上一个表单就得拆掉**。
+        //   以前这里只切页,表单还留在堆栈里,指针也还指着它 ——
+        //   于是主窗口以为"当前显示的是那个表单",而面板上明明是占位页。
+        //   状态和画面对不上,是「用户自己发现不了」的那一类。
+        dropParamForm();
         m_paramPanel->setCurrentIndex(0);  // 切到 placeholder
-        m_currentParamNode = nullptr;
         if (m_paramPlaceholder)
             m_paramPlaceholder->setText(tr("(选中一个节点查看参数)\n\n"
                                           "本 MVP 简化:\n"
@@ -596,9 +681,13 @@ void MainWindow::updateParamPanelForNode(w7::OperatorNode* node) {
         //   以前这里直接 return,面板上留着的是**上一个节点**的参数表单 ——
         //   用户以为在看这个节点的参数,其实看的是别人的。
         //   面板**不会说谎**是这一层的底线:宁可什么都不显示。
+        //
+        // ⚠ 2026-10-25 第六笔(P0-2):那个上一个表单得**真的拆掉**,
+        //   不能只是把指针置空 ——
+        //   留在堆栈里就成了孤儿(每选一次没装的节点就多一个死表单),
+        //   而指针还指着它的话,主窗口和面板就对不上了。
         qDebug() << "[UPN] op is null (operator not installed) -- show a message";
-        m_currentParamWidget = nullptr;
-        m_currentParamNode = nullptr;
+        dropParamForm();
         m_paramPanel->setCurrentIndex(0);
         if (m_paramPlaceholder)
             m_paramPlaceholder->setText(
@@ -1174,12 +1263,36 @@ void MainWindow::runPipeline(OperatorNode* target) {
                 defaultsCache.insert(opName, d);
                 return d;
             };
+            //
+            // ⚠⚠ 2026-10-25 第六笔(P0-2):「算子没装」这条规则
+            //   以前在 GUI 侧**内联**了一份,和 headless 那份**行为一致、
+            //   消息不一致** —— GUI 说「未注册,**跳过**」,
+            //   而它**并没有跳过**:那一步返回了 false,引擎记成失败,
+            //   整批判 ERROR。
+            //   用户读到「跳过」会以为后面照跑了。
+            //   现在两边都问**纯层那一份**(missing_operator.h)。
+            //
+            //   判据是**节点上的标记**(isOperatorMissing)——
+            //   那是解析层给的判定(known=false),不是这里重新猜的。
+            //   以前这里是问 createOperatorByName 返回空,
+            //   那是**另一个事实来源**:碰巧一致,但没人保证。
+            QSet<QString> missingOps;
+            for (const auto& n : order) {
+                if (n && n->isOperatorMissing()) missingOps.insert(n->opName());
+            }
             auto runner = [&](const QString& opName, const QJsonObject& params,
                               const QJsonObject& inputs, QJsonObject* out,
                               QString* err) -> bool {
+                if (w7::rejectMissingOperator(opName, missingOps, err)) {
+                    if (out) *out = QJsonObject();
+                    return false;
+                }
                 OperatorBase* op = w7::createOperatorByName(opName);
                 if (!op) {
-                    *err = tr("算子 %1 未注册,跳过").arg(opName);
+                    // ⚠ 走到这里说明**节点没标「未安装」,但工厂里也没有这个算子**
+                    //   —— 两种事实来源对不上。宁可失败,也不许跑成。
+                    if (err) *err = tr("算子 %1 未注册,这一步跑不了").arg(opName);
+                    if (out) *out = QJsonObject();
                     return false;
                 }
                 *out = op->run(params, inputs);

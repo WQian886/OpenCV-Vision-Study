@@ -108,6 +108,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <QString>
+#include <QStringList>
 #include <algorithm>
 #include <functional>
 
@@ -303,6 +304,16 @@ public:
     }
 
     int nodeCount() const { return m_byNode.size(); }
+
+    // 缓存里还有结果的节点(uuid)。
+    //
+    // ⚠ 2026-10-25 第六笔(P0-2)加的:
+    //   主窗口以前**没法**回答"缓存里还有哪些节点"——
+    //   它只有 nodeCount(),而"某���个特定的节点"有没有缓存,
+    //   只能靠 nodeCount 猜(去掉一个再看一次,太蠢)。
+    //   测试要断言"改完参数,这个节点的缓存被清了",
+    //   就得能点名问。
+    QStringList cachedNodeIds() const { return m_byNode.keys(); }
     int entryCount() const {
         int n = 0;
         for (auto it = m_byNode.constBegin(); it != m_byNode.constEnd(); ++it)

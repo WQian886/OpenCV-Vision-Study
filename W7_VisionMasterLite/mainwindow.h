@@ -60,11 +60,66 @@ struct OperatorInfo {
     QString description;
 };
 
+// ============================================================
+// MainWindowWiring —— 主窗口的**可观测面**
+// ============================================================
+//
+// ⚠ 2026-10-25 第六笔(P0-2):
+//   主窗口的接线以前**一条断言都没有** ——
+//   mainwindow.cpp 不在任何测试目标里(欠账 17 的最后一块)。
+//
+//   「可观测面」只回答「**现在是什么状态**」,
+//   不回答「怎么变成这个状态」:
+//     · 「怎么变」要么在纯层里(可测),
+//       要么靠**公开动作**驱动(真的点一下按钮、真的加载一个工程)。
+//     · 暴露**写**接口的测试可以「先改再断言」,
+//       把 bug 藏进自己的设置里 —— 所以这里**只有读**。
+//
+// ⚠ 为什么不全用「按类型找控件」(findChild<QPlainTextEdit*>):
+//   窗口里同类控件有好几个(两个 QPlainTextEdit、好几个 QLabel),
+//   按类型找就得靠「第几个」,而顺序一改断言就错位 ——
+//   那样的测试测的是「顺序」,不是「接线」。
+//   这里按**角色**给,角色和控件是一一对应的。
+//
+// ⚠ 这个结构体**不含任何指针**:
+//   拷贝一次就够,测试拿着它去断言,不会牵扯到窗口的生命周期。
+//
+struct MainWindowWiring {
+    // --- 画布 ---
+    int  nodeCount = 0;                  // 画布上的节点数
+    int  connectionCount = 0;            // 连线数
+    int  missingOperatorNodeCount = 0;   // 标着「未安装」的节点数
+
+    // --- 参数面板 ---
+    int     paramPageIndex = -1;         // 当前显示第几页(0 = 占位页)
+    int     paramPanelPages = 0;         // 堆栈里一共几页
+    bool    paramShowsForm = false;      // 当前页是**真表单**(不是占位页)
+    QString paramPlaceholderText;        // 占位页上那一行字
+
+    // --- 日志区 ---
+    QString logText;                     // 日志全文
+
+    // --- 结果区 ---
+    QString resultTitle;                 // 结果区标题(显示的是哪一步)
+    QString resultDetail;                // 结果区详情(该步的全部字段)
+
+    // --- 工具栏 ---
+    bool undoEnabled = false;
+    bool redoEnabled = false;
+    bool stopEnabled = false;            // Stop 只在跑批时可用
+
+    // --- 每步结果缓存 ---
+    QStringList cachedNodeIds;           // 缓存里还有结果的节点(uuid)
+};
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
+
+    // 读当前状态(见上面 MainWindowWiring 的说明)
+    MainWindowWiring wiringSnapshot() const;
 
 private slots:
     void onRunClicked();
@@ -85,6 +140,17 @@ private slots:
     void onNodeMoved(w7::OperatorNode* node, const QPointF& oldPos,
                      const QPointF& newPos);              // === M6 ===
     void onViewStepResultRequested(w7::OperatorNode* node);  // === 每步结果查看 ===
+    // 从一个文件加载流水线。
+    //
+    // ⚠ 2026-10-25 第六笔(P0-2):它以前是**私有方法**,于是
+    //   「加载工程」这条路径**没法测** —— 主窗口的接线一条断言都没有。
+    //   改成 **private slot** 之后,测试可以用
+    //   QMetaObject::invokeMethod(&w, "loadProjectFrom", Q_ARG(QString, path))
+    //   走**和真程序一模一样的那条路**(而不是自己再读一遍文件)。
+    //
+    //   ⚠ 为什么不直接开成 public:
+    //   private slot 也能按名字 invoke,而且**不扩大公开面**。
+    void loadProjectFrom(const QString& path);
 
 protected:
     // === 修复 2: Delete 键删除 ===
@@ -104,6 +170,12 @@ private:
 
     // === S3 ===
     void updateParamPanelForNode(w7::OperatorNode* node);
+    // 把当前那一页的参数表单拆掉(见 .cpp 里的说明)。
+    //
+    // ⚠ 2026-10-25 第六笔(P0-2)加的:
+    //   「没选中节点」和「算子没装」这两条分支以前只是把指针置空,
+    //   表单还留在堆栈里 —— 孤儿 + 状态和画面对不上。
+    void dropParamForm();
 
     // ============================================================
     // === 每步结果查看 ===
@@ -184,7 +256,7 @@ private:
     // 缓存一份反而要多一套同步逻辑,不值当。
     // ============================================================
     void rebuildRecentMenu();
-    void loadProjectFrom(const QString& path);
+    // ⚠ loadProjectFrom 现在是 **private slot**(见上面的声明)
     // 文件对话框的起始目录:上次用过的目录,没有就用工程目录
     QString lastUsedDir() const;
 
