@@ -86,3 +86,158 @@ GUI 跑得好好的，CI 四种退出码全对。
 参见 `notes/notes_W7_Verdict_2026-10.md`（第六次的完整记录）、
 `notes/notes_W7_Knob_Audit_2026-10.md`、
 `notes/atomic/at-four-copies-of-one-number.md`。
+
+## 第七次：2026-10-25，抽走了「分类」，却把「判据」留在外面
+
+第六次抽 `frame_verdict.h` 的时候，只抽走了**分类**
+（`classifyFrame` / `classifyBatch` / `finalResultOf`）。
+「**哪一步算坏**」这个**判据**当时还留在外面：
+
+```cpp
+// mainwindow.cpp
+if (info.output.contains(QStringLiteral("error"))) ++frameErrors;
+// headless_runner.cpp
+if (info.output.contains(QStringLiteral("error"))) { ++frameErrors; ++res.errorCount; }
+```
+
+两份一模一样 —— 而这是**刚建好的架构里的裂缝**：
+说「规则只有一份」，而规则还有半份在外面。
+
+而且那句判据**只认一种坏法**：算子返回 `false`（压根没跑成）时，
+引擎把输出**置空**，失败原因写在 `info.error` 里 ——
+「输出里带 error」**数都数不到**。
+
+> **教训**：「抽成一份」要抽**整条规则**，不是抽它的一半。
+> 分类抽走了、判据没抽走，等于把「两份」从「两份完整的规则」
+> 变成了「一份完整的规则 + 两份半截的规则」——
+> 看起来更整齐，实际更容易漂。
+
+收法：判据和采集**一起**收（`w7::isBadStep` / `w7::FrameErrorCounter`）。
+
+## 第八次：2026-10-25，「这一步显示哪张图」抄了两份
+
+- `step_frame_cache.h` 的 `stepPrimaryImagePath` —— 决定「**图还在不在**」查哪个文件
+- `mainwindow.cpp` 的 `renderOutputToResultPanel` —— 决定「**显示哪张**」
+
+### 这一次特别的地方：作者**早就写下了警告**
+
+`step_frame_cache.h` 里那段注释：
+
+> 「优先级必须和 `renderOutputToResultPanel` 的显示顺序对齐 ——
+> 两份各写一份的话，加一种新输出类型就只改一处，于是
+> "图还在不在"的判据和"显示哪张"会跑偏，
+> 而**跑偏的方向恰恰是那个会撒谎的方向**。」
+
+**警告就写在代码里，然后它们真的跑偏了。**
+
+### 跑偏成什么样
+
+| | 查的是 | 显示的是 |
+|---|---|---|
+| 判据 | `marked_path`（缺陷标注图） | `image_path` \|\| **工具栏那张静态图** |
+
+`pcb_defect_judge` 的输出**根本没有 `image_path`** ——
+于是回看「缺陷判定」看到的是**用户手填的那张静态图 + PASS/FAIL 大字**，
+而它自己产出的**缺陷标注图一张都没显示过**。
+
+多帧流水线里，那张静态图和第 7 帧根本不是同一张。
+
+### 这一次多出来的一条教训
+
+> **「两份靠人工对齐」这个安排，本身就是 bug。**
+>
+> 哪怕你**在注释里写下**「这两份必须对齐」——
+> 那也只是把「靠纪律」换成了「靠读注释」，
+> 而**注释不会红**。
+
+### 收法
+
+规则收成**一份**（`result_render_plan.h`），
+**判据和显示都用它** —— 而且**顺序写成一张表**（数据），不是三段 `if`（代码顺序）：
+
+```cpp
+static const KeySource kTable[] = {
+    { "marked_path", ImageSource::Marked  },
+    { "mask_path",   ImageSource::Mask    },
+    { "image_path",  ImageSource::Source  },
+};
+```
+
+> 顺序写成代码,就又变成了「藏在代码顺序里的规则」：
+> 读的人得逐行读下去才知道谁优先，
+> 而改的人只要动一行就能悄悄改掉顺序。
+> 写成表,顺序是**数据**:一眼看得见,也能被一条变异单独打乱。
+
+## 第九次：2026-10-25，**收成一半**也是抄副本
+
+第八次那条规则（候选列表）确实收成了一份。但——
+
+**「从候选里挑哪个」还是两份。**
+
+| | 挑法 |
+|---|---|
+| 判据侧 `step_frame_cache.h :: imageState()` | 只看**第一**候选（不降级） |
+| 显示侧 `mainwindow.cpp` 的候选循环 | 取第一个**存在的**（降级） |
+
+两份靠什么对齐？靠「`Dropped` 那道闸在候选循环**之前**」——
+**代码顺序**。
+
+### 这次多出来的一条教训
+
+> **「收成一半」和「没收」是同一件事。**
+>
+> 候选列表只有一份了，但「取哪张」还是两份 ——
+> 那份规则**只是换了个地方长**，没被删掉。
+>
+> 而且它长的地方更隐蔽：
+> 第八次的两份是**同名函数**，一眼能看出是一对；
+> 这一次的两份藏在**两个不同的概念**底下
+> （一个叫「存在性判据」，一个叫「显示顺序」），
+> 读代码的人根本不会把它们放在一起看。
+
+### 而且它还在撒谎
+
+面板那份**会降级**。于是：
+
+> 「最终结果」那次调用**没有判据**（`imgState` 默认 `Available`），
+> 判定节点的 `marked_path` 不在时，
+> 面板会一路退到**工具栏那张静态图** ——
+> **一张和这一帧无关的图，配着这一帧的判定。**
+
+又一次「对应关系是假的」。而这次是**收成一半**之后**新长出来**的。
+
+### 收法
+
+抽一个**两边都调**的函数：
+
+```cpp
+inline const ImageCandidate* pickBaseImage(const QVector<ImageCandidate>& cands,
+                                           const ExistsFn& exists);
+```
+
+于是「判据说图在 ⟹ 面板显示的就是它」
+不是靠对齐，是**同一份代码算出来的**。
+
+> **「同一份代码」比「同一份规则」强一个量级。**
+> 同一份规则还要人去对齐；同一份代码没有对齐这个环节。
+
+### 顺带一条：谓词也跟着规则搬
+
+`ExistsFn` / `fileExists` 原来住在 `step_frame_cache.h`，
+现在「取哪张图」也要用同一个口径，
+所以它们**搬到了规则旁边**（`result_render_plan.h`）。
+
+> 规则搬到哪儿，**能证明它的那把尺子**也得在哪儿。
+> 尺子留在原地，下一个人就可能给它配一把新的。
+
+### 配套
+
+`notes/atomic/at-the-criterion-and-the-reality-must-be-the-same-thing.md`
+（判据和它要检验的现实必须是同一件事）、
+`notes/atomic/at-the-guard-can-be-fed-by-a-comment.md`
+（源码守卫会被注释喂饱）。
+
+参见 `notes/notes_W7_RenderPlan_2026-10.md`、
+`notes/notes_W7_BadStep_2026-10.md`（第七次）、
+`notes/notes_W7_Verdict_2026-10.md`（第六次）、
+`notes/notes_W7_Knob_Audit_2026-10.md`。

@@ -8,6 +8,7 @@
 #include "frame_record.h" // 帧循环"记一笔" + 序号→帧号换算(可行为测试)
 #include "run_engine.h"  // 拓扑序 + 前驱输出合并(纯逻辑,可行为测试)
 #include "frame_verdict.h" // 帧判定与整批结论(纯逻辑,**和 headless 共用**这一份)
+#include "result_render_plan.h" // 结果面板"显示哪张图"(纯逻辑,**和存在性判据共用**这一份)
 
 #include <QDockWidget>
 #include <QToolBar>
@@ -1502,8 +1503,12 @@ void MainWindow::showStepFrame(const QString& nodeId, int frameIndex) {
     // 图在不在**现场查磁盘**,不用 put 时存下来的标志:
     // 标志会在文件被人删掉/被下一轮覆盖之后继续说"有",
     // 于是界面显示一张早就没了的图。
+    //
+    // ⚠ fallbackPath 必须一起传:候选列表的最后一项就是它,
+    //   不传的话判据和面板显示用的就不是同一份候选列表了。
     const w7::FrameImageState st =
-        m_stepCache.imageState(nodeId, frameIndex, &w7::fileExists);
+        m_stepCache.imageState(nodeId, frameIndex,
+                               m_imagePathEdit->text(), &w7::fileExists);
 
     renderOutputToResultPanel(rec.output, m_imagePathEdit->text(), title, st);
     appendLog(tr("[每步] 查看 %1").arg(title));
@@ -1569,12 +1574,32 @@ bool MainWindow::renderOutputToResultPanel(const QJsonObject& out,
     m_lastImgFallback = fallbackPath;
     m_lastImgState    = imgState;
 
+    // ============================================================
+    // === 计划:「显示哪张图、上面画什么」—— **只有一份规则** ===
+    // ============================================================
+    //
+    // ⚠ 2026-10-25 改的。以前这里是四条 if 分支(mask / 模板框 /
+    //   PASS-FAIL 大字 / 原图),那个「优先级」藏在**代码顺序**里,
+    //   注释写得还像是有序的。
+    //
+    //   而「图还在不在」那个判据在 step_frame_cache.h 里,
+    //   用的是**另一份**优先级(mask -> marked -> image),
+    //   面板那份**压根不认 marked_path**。
+    //   两份靠人工对齐 —— 然后真的跑偏了:
+    //     判据查 marked_path(缺陷标注图),
+    //     面板显示 image_path || 工具栏那张静态图。
+    //   **两个说的不是同一张图。**
+    //
+    //   现在两边都用 w7::planResultRender / w7::resultImageCandidates,
+    //   **必然一致**。详见 result_render_plan.h 开头。
+    const w7::RenderPlan plan = w7::planResultRender(out, fallbackPath);
+
     // 算子自己报错了 —— 结果图没有意义,直接把错误摆出来。
     // (以前这种情况会掉到最后的 fallback 分支,显示一张原图,
     //  看上去"图出来了、挺正常",但其实这一步压根没跑成。)
-    if (out.contains("error")) {
+    if (plan.hasError) {
         m_resultImg->setPixmap(QPixmap());
-        m_resultImg->setText(tr("⚠️ 该步执行失败\n\n%1").arg(out.value("error").toString()));
+        m_resultImg->setText(tr("⚠️ 该步执行失败\n\n%1").arg(plan.errorText));
         return false;
     }
 
@@ -1597,100 +1622,98 @@ bool MainWindow::renderOutputToResultPanel(const QJsonObject& out,
     // 所以这里宁可空着,并把原因写出来。用户看到"图没了"会去看日志;
     // 看到一张别的帧的图,他只会得出一个错的结论。
     // ============================================================
-    if (imgState == w7::FrameImageState::Dropped) {
+    // ============================================================
+    // === 「图没了」这道闸 —— 现在由**取图那一步**统一判 ===
+    // ============================================================
+    //
+    // ⚠ 2026-10-25:以前这里有一道**独立的闸**
+    //   (imgState == Dropped -> 直接返回),
+    //   后面还有一个**自己的**候选循环(取第一个*存在的*候选)。
+    //   两份实现,靠「闸在循环之前」这个**代码顺序**对齐 ——
+    //   而「藏在代码顺序里的规则」正是这个项目认定的病。
+    //
+    //   面板那份还带着一次撒谎:
+    //   「最终结果」那次调用**没有判据**(imgState 默认 Available),
+    //   于是判定节点的 marked_path 不在时,面板会一路退到工具栏
+    //   那张静态图 —— **一张和这一帧无关的图,配着这一帧的判定**。
+    //
+    //   现在只剩**一个**判断:共享的 w7::pickBaseImage。
+    //   判据那边也调它 —— 所以「判据说图在」和「面板显示哪张」
+    //   必然是同一句话,**不是靠两边对齐**。
+    //
+    //   (imgState 还在用,但只当**重画判据**的一部分 ——
+    //    文件被人删掉之后,那道重画闸才会重新打开。)
+    //
+    // ⚠ 有意改掉的行为:以前是"先画 mask,再无条件用大字图盖掉",
+    //   而大字图的基底是 image_path || 工具栏静态图 ——
+    //   pcb_defect_judge(它**没有** image_path)于是回看到的是
+    //   **用户手填的那张静态图 + PASS/FAIL 大字**,
+    //   而它自己产出的缺陷标注图(marked_path)**一张都没显示过**。
+    //   现在基底图按 marked -> mask -> source -> fallback 取 ——
+    //   缺陷标注图终于露脸,而且它和存在性判据说的是同一张。
+    const w7::ImageCandidate* base =
+        w7::pickBaseImage(plan.candidates, &w7::fileExists);
+
+    if (!base) {
+        // 候选列表空的 = 这一步压根不产图(纯数值算子);
+        // 有候选、但第一个不在 = 「图没了」。
+        // 这两种**必须分开说** —— 混成一句就是在撒谎:
+        // 「图被覆盖了」和「压根没产过图」是两回事。
         m_resultImg->setPixmap(QPixmap());
-        // 这里用"这一帧"而不是具体帧号:标题里已经写了第几帧,
-        // 图区再重复一遍反而挤。而 Dropped 那句的重点是"图没了"。
-        m_resultImg->setText(w7::StepFrameCache::describeImageState(
-            imgState, QStringLiteral("这一帧")));
+        if (plan.candidates.isEmpty()) {
+            // 字段照常显示在详情框里,不要用占位文字把图区盖住 ——
+            // 数值才是这类算子的全部产出
+            m_resultImg->setText(tr("(该步不产生图像,见下方输出字段)"));
+        } else {
+            m_resultImg->setText(w7::StepFrameCache::describeImageState(
+                w7::FrameImageState::Dropped, QStringLiteral("这一帧")));
+        }
         return false;
     }
 
-    QPixmap pix;
-    bool rendered = false;
-
-    // 优先级说明 —— 这里写的是代码的实际行为,不是理想行为:
-    //   1) mask_path        color_segment 的分割图
-    //   2) 模板框            template_match
-    //   3) image_path + PASS/FAIL 大字
-    // 判定结果有大字图时会盖掉前两张,这是有意的:
-    // 结果面板首先回答"判没判废",其次才是"为什么"。
-    // 以前这段是"先画 mask,再无条件用大字图盖掉",而日志只在
-    // 没画过时记一行 —— 于是日志写着 mask、屏幕上却是大字图,对不上。
-
-    // 1) mask 图
-    const QString maskPath = out.value("mask_path").toString();
-    if (!maskPath.isEmpty() && QFile::exists(maskPath)) {
-        pix.load(maskPath);
-        if (!pix.isNull()) rendered = true;
+    QImage srcImg(base->path);
+    if (srcImg.isNull()) {
+        // 文件在,但**不是一张能读的图** —— 同样当"图没了"。
+        // 绝不悄悄换一张显示:那又是一次对应关系造假。
+        m_resultImg->setPixmap(QPixmap());
+        m_resultImg->setText(w7::StepFrameCache::describeImageState(
+            w7::FrameImageState::Dropped, QStringLiteral("这一帧")));
+        return false;
     }
 
-    // 2) 模板位置红框
-    if (!rendered && out.contains("position_x") && out.contains("template_w")) {
-        QString imgPath = out.value("image_path").toString();
-        if (imgPath.isEmpty()) imgPath = fallbackPath;
-        QImage srcImg(imgPath);
-        if (!srcImg.isNull()) {
-            QPainter painter(&srcImg);
-            painter.setPen(QPen(QColor(0, 0, 255), 3));  // 蓝框
-            int x = out.value("position_x").toInt();
-            int y = out.value("position_y").toInt();
-            int w = out.value("template_w").toInt();
-            int h = out.value("template_h").toInt();
-            painter.drawRect(x, y, w, h);
-            double score = out.value("score").toDouble();
-            painter.setPen(Qt::red);
-            painter.setFont(QFont("Arial", 14, QFont::Bold));
-            painter.drawText(x, qMax(0, y - 8),
-                QString("score=%1").arg(score, 0, 'f', 3));
-            painter.end();
-            pix = QPixmap::fromImage(srcImg);
-            rendered = true;
-        }
+    // ---- 叠加:画在基底图上的东西 ----
+    //
+    // 大字**优先于**框:结果面板首先回答"判没判废",其次才是"为什么"。
+    // (这也是以前代码的实际行为 —— 大字那条无条件执行。)
+    if (plan.overlay == w7::RenderOverlay::Verdict) {
+        QPainter painter(&srcImg);
+        const QColor c = (plan.verdict == QStringLiteral("PASS"))
+                       ? QColor(0, 200, 0) : QColor(255, 0, 0);
+        painter.setPen(QPen(c, 6));
+        painter.setFont(QFont("Arial", 120, QFont::Bold));
+        painter.drawText(50, 200, plan.verdict);
+        painter.setFont(QFont("Arial", 28));
+        painter.drawText(50, 250, plan.description);
+        painter.end();
+    } else if (plan.overlay == w7::RenderOverlay::TemplateBox) {
+        QPainter painter(&srcImg);
+        painter.setPen(QPen(QColor(0, 0, 255), 3));  // 蓝框
+        painter.drawRect(plan.boxX, plan.boxY, plan.boxW, plan.boxH);
+        painter.setPen(Qt::red);
+        painter.setFont(QFont("Arial", 14, QFont::Bold));
+        painter.drawText(plan.boxX, qMax(0, plan.boxY - 8),
+            QString("score=%1").arg(plan.score, 0, 'f', 3));
+        painter.end();
     }
 
-    // 3) 原图 + PASS/FAIL 大字
-    const QString verdict = out.value("result").toString();
-    if (verdict == "PASS" || verdict == "FAIL") {
-        QString imgPath = out.value("image_path").toString();
-        if (imgPath.isEmpty()) imgPath = fallbackPath;
-        QImage srcImg(imgPath);
-        if (!srcImg.isNull()) {
-            QPainter painter(&srcImg);
-            QColor c = (verdict == "PASS") ? QColor(0, 200, 0) : QColor(255, 0, 0);
-            painter.setPen(QPen(c, 6));
-            painter.setFont(QFont("Arial", 120, QFont::Bold));
-            painter.drawText(50, 200, verdict);
-            painter.setFont(QFont("Arial", 28));
-            painter.drawText(50, 250, out.value("description").toString());
-            painter.end();
-            pix = QPixmap::fromImage(srcImg);
-            rendered = true;
-        }
-    }
+    QPixmap pix = QPixmap::fromImage(srcImg);
 
-    // 4) fallback 原图(源算子 / 中间算子大多走这里)
-    if (!rendered) {
-        QString imgPath = out.value("image_path").toString();
-        if (imgPath.isEmpty()) imgPath = fallbackPath;
-        pix.load(imgPath);
-        rendered = !pix.isNull();
-        if (!rendered) {
-            // 这一步没有图可显示(纯数值算子),但字段照常显示在详情框里,
-            // 不要用占位文字把图区盖住 —— 数值才是这类算子的全部产出
-            m_resultImg->setPixmap(QPixmap());
-            m_resultImg->setText(tr("(该步不产生图像,见下方输出字段)"));
-        }
-    }
-
-    if (rendered) {
-        m_resultImg->setText(QString());
-        m_resultImg->setPixmap(pix.scaled(m_resultImg->width(),
-                                          m_resultImg->height(),
-                                          Qt::KeepAspectRatio,
-                                          Qt::SmoothTransformation));
-    }
-    return rendered;
+    m_resultImg->setText(QString());
+    m_resultImg->setPixmap(pix.scaled(m_resultImg->width(),
+                                      m_resultImg->height(),
+                                      Qt::KeepAspectRatio,
+                                      Qt::SmoothTransformation));
+    return true;
 }
 
 void MainWindow::showStepDetail(const QString& title, const QJsonObject& out) {

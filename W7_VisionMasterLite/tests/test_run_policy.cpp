@@ -684,13 +684,13 @@ static void test_cache_reports_missing_image() {
         return p.endsWith("_f0000.png");
     };
 
-    check(cache.imageState(node, 0, onDisk) == FrameImageState::Available,
+    check(cache.imageState(node, 0, QString(), onDisk) == FrameImageState::Available,
           "帧 0:文件在 -> Available");
-    check(cache.imageState(node, 1, onDisk) == FrameImageState::Dropped,
+    check(cache.imageState(node, 1, QString(), onDisk) == FrameImageState::Dropped,
           "帧 1:文件不在 -> Dropped(不许显示别的帧的图)");
-    check(cache.imageState(node, 2, onDisk) == FrameImageState::NoImage,
+    check(cache.imageState(node, 2, QString(), onDisk) == FrameImageState::NoImage,
           "帧 2:本来就不产图 -> NoImage(不是 Dropped)");
-    check(cache.imageState(node, 99, onDisk) == FrameImageState::Dropped,
+    check(cache.imageState(node, 99, QString(), onDisk) == FrameImageState::Dropped,
           "帧 99:数字都没了 -> Dropped");
 
     // 三种状态给用户看的话必须**不一样**,尤其 Dropped 那句
@@ -722,37 +722,84 @@ static void test_cache_reports_missing_image() {
     // 判据必须**每次现场问**,不能是 put 时存下来的标志。
     // 这一条专门钉住:如果哪天改成 put 时算一次存进 StepFrameResult,
     // 下面这两行会立刻分出胜负(第一次查时文件还在,第二次被删)。
-    check(cache.imageState(node, 0, onDisk) == FrameImageState::Available,
+    check(cache.imageState(node, 0, QString(), onDisk) == FrameImageState::Available,
           "第一次查:帧 0 文件在");
     const ExistsFn gone = [](const QString&) { return false; };
-    check(cache.imageState(node, 0, gone) == FrameImageState::Dropped,
+    check(cache.imageState(node, 0, QString(), gone) == FrameImageState::Dropped,
           "同一帧换个 exists 就报 Dropped -> 判据是现场的,不是缓存的");
 }
 
 // ------------------------------------------------------------
-// 用例:主图路径的优先级
+// 用例:存在性判据和「显示哪张」走**同一份**规则
 //
-// 和 renderOutputToResultPanel 的显示顺序必须一致。两份各写一份的话,
-// 会出现"判据说 A 图在、界面显示 B 图",而 B 可能已经被覆盖了 ——
-// 于是图没了却不报。这正是要防的方向。
+// ⚠ 2026-10-25:以前这里测的是 stepPrimaryImagePath ——
+//   一份**和面板那份各写一遍**的"主图优先级"。
+//   step_frame_cache.h 里那段注释自己写着「优先级必须和
+//   renderOutputToResultPanel 的显示顺序对齐」,然后两份还是各写了一份,
+//   然后它们真的跑偏了:
+//     判据查 marked_path(缺陷标注图),
+//     面板显示 image_path || 工具栏那张静态图
+//   —— **两个说的不是同一张图。**
+//
+//   现在规则只有一份(result_render_plan.h 的候选列表),
+//   判据和面板都用它。这条用例钉住「判据按候选列表判」。
 // ------------------------------------------------------------
 static void test_primary_image_path_priority() {
-    beginCase("多帧缓存:主图路径优先级");
+    beginCase("多帧缓存:存在性判据和显示走同一份规则");
 
-    check(stepPrimaryImagePath(fakeOutput("images/x.png", "images/m.png"))
-              == "images/m.png",
-          "mask_path 优先于 image_path(颜色分割)");
+    StepFrameCache cache;
+    const QString node = "aaaaaaaa-0000-0000-0000-0000000000aa";
 
-    QJsonObject marked;
-    marked["marked_path"] = "images/marked.png";
-    marked["image_path"]  = "images/raw.png";
-    check(stepPrimaryImagePath(marked) == "images/marked.png",
-          "marked_path 优先于 image_path(pcb/dl 的标注图)");
+    // 一个输出里同时有标注图和原图 —— pcb_inspect / pcb_defect_judge
+    // 就是这个形状(它们**没有** image_path;这里两种都放上,
+    // 好把"判据看哪张"钉死)。
+    QJsonObject out;
+    out["marked_path"] = "images/marked.png";
+    out["image_path"]  = "images/raw.png";
+    cache.put(node, 0, out, QString("第 1 步 · PCB 检查"));
 
-    check(stepPrimaryImagePath(fakeOutput("images/x.png")) == "images/x.png",
-          "只有 image_path 时用它");
-    check(stepPrimaryImagePath(QJsonObject()).isEmpty(),
-          "什么都没有 -> 空串(= NoImage,不是 Available)");
+    // 只让标注图在磁盘上 —— 原图"没了"
+    const ExistsFn onlyMarked = [](const QString& p) {
+        return p.endsWith("marked.png");
+    };
+
+    // ⚠ 关键:判据必须按**候选列表的第一项**判 = marked_path。
+    //   判据查 image_path 的话,这里会报 Dropped,
+    //   而面板显示的正是标注图 —— 判据和显示说的不是同一张图。
+    check(cache.imageState(node, 0, QString(), onlyMarked)
+              == FrameImageState::Available,
+          "标注图在 -> Available(判据看候选列表第一项,不是 image_path)");
+
+    // 换成"只有原图在" —— 判据必须说 Dropped:
+    // 面板要显示的是标注图(它排在前面),而它不在。
+    const ExistsFn onlyRaw = [](const QString& p) {
+        return p.endsWith("raw.png");
+    };
+    check(cache.imageState(node, 0, QString(), onlyRaw)
+              == FrameImageState::Dropped,
+          "标注图不在 -> Dropped(哪怕原图还在 —— 面板要显示的是标注图)");
+
+    // 候选列表本身:marked -> mask -> source -> fallback
+    const QVector<w7::ImageCandidate> c =
+        w7::resultImageCandidates(out, QStringLiteral("images/toolbar.png"));
+    check(c.size() == 3,
+          QString("候选有三个(标注/原图/兜底),实际 %1").arg(c.size()));
+    if (c.size() == 3) {
+        check(c.at(0).source == w7::ImageSource::Marked,  "第一项是标注图");
+        check(c.at(1).source == w7::ImageSource::Source,  "第二项是原图");
+        check(c.at(2).source == w7::ImageSource::Fallback,"第三项是工具栏兜底");
+        check(c.at(2).isFallback,
+              "兜底那项标了 isFallback —— 它和这一帧可能无关");
+    }
+
+    // mask 排在原图前面
+    {
+        const QVector<w7::ImageCandidate> c2 =
+            w7::resultImageCandidates(fakeOutput("images/raw.png", "images/mask.png"),
+                                      QString());
+        check(c2.size() == 2 && c2.at(0).source == w7::ImageSource::Mask,
+              "mask 排在原图前面(颜色分割的分割图)");
+    }
 }
 
 // ------------------------------------------------------------

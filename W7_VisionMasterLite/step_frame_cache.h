@@ -111,6 +111,11 @@
 #include <algorithm>
 #include <functional>
 
+// ⚠ 2026-10-25:「这一步显示哪张图」的规则**只有一份**,在这里。
+//   以前这一份和 mainwindow.cpp 里那份各写一遍,靠人工对齐 ——
+//   然后真的跑偏了(判据查 A 图、显示 B 图)。
+#include "result_render_plan.h"
+
 namespace w7 {
 
 // ============================================================
@@ -138,37 +143,44 @@ enum class FrameImageState {
 };
 
 // 存在性谓词:生产传 &w7::fileExists,单测传假的。
-using ExistsFn = std::function<bool(const QString&)>;
-
-inline bool fileExists(const QString& path) {
-    if (path.isEmpty()) return false;
-    return QFile::exists(path);
-}
+//
+// ⚠ 2026-10-25:`ExistsFn` 和 `fileExists` **搬到 result_render_plan.h**。
+//
+//   以前它们只服务本文件的判据;现在「取哪张图」也要用同一个口径
+//   (pickBaseImage),谓词得跟着规则一起搬 ——
+//   规则搬到哪儿,能证明它的那把尺子也得在哪儿。
+//
+//   这里**不再重复定义**:重复定义 = 第二份 = 会漂。
+//   (w7::ExistsFn / w7::fileExists 还能用,是因为本文件 include 了
+//    result_render_plan.h。)
 
 // ============================================================
 // 这一步的「主图」是哪个字段
 //
-// 优先级必须和 renderOutputToResultPanel 的显示顺序对齐 ——
-// 两份各写一份的话,加一种新输出类型就只改一处,于是"图还在不在"
-// 的判据和"显示哪张"会跑偏,而跑偏的方向恰恰是那个会撒谎的方向。
+// ⚠ 2026-10-25:这一份**删掉了**,规则搬到 result_render_plan.h。
 //
-//   mask_path    color_segment 的分割图
-//   marked_path  pcb_inspect / pcb_defect_judge / dl_infer 的标注图
-//   image_path   源算子的原图、中间算子的落盘图
+//   以前这里写着:
 //
-// 注意 image_path 有两种角色:源算子的它是**用户自己的输入文件**
-// (永远不会被我们覆盖),中间算子的它是**我们生成的中间产物**
-// (会被覆盖)。两者在这里不做区分 —— 判据是"文件在不在",
-// 不在就是不在,原因由 describeImageState 之外的地方去查。
+//     「优先级必须和 renderOutputToResultPanel 的显示顺序对齐 ——
+//       两份各写一份的话,加一种新输出类型就只改一处,于是"图还在不在"
+//       的判据和"显示哪张"会跑偏,而跑偏的方向恰恰是那个会撒谎的方向。」
+//
+//   ——**作者自己写下了这条警告,然后两份还是各写了一份**,
+//   然后它们真的跑偏了:
+//
+//     · 这一份的优先级:mask_path -> marked_path -> image_path
+//     · 面板那份的显示顺序:mask -> 模板框 -> PASS/FAIL 大字 -> 原图
+//         (面板**压根不认 marked_path**)
+//
+//   而 pcb_defect_judge 的输出**没有 image_path**,只有 marked_path ——
+//   于是面板会落到 fallback(工具栏那张用户手填的静态图),
+//   判据却查 marked_path(逐帧的缺陷标注图)。
+//   **两个说的不是同一张图。**
+//
+//   收法:两份都改成用 result_render_plan.h 的**同一份候选列表**,
+//   「图还在不在」和「显示哪张」从此必然一致。
+//   详见 result_render_plan.h 开头。
 // ============================================================
-inline QString stepPrimaryImagePath(const QJsonObject& out) {
-    static const char* const kKeys[] = {"mask_path", "marked_path", "image_path"};
-    for (const char* k : kKeys) {
-        const QString p = out.value(QLatin1String(k)).toString();
-        if (!p.isEmpty()) return p;
-    }
-    return {};
-}
 
 // ============================================================
 // 一条缓存记录
@@ -179,7 +191,12 @@ inline QString stepPrimaryImagePath(const QJsonObject& out) {
 struct StepFrameResult {
     QJsonObject output;      // 数字,全帧留
     QString     label;       // "第 3 步 · 颜色分割"(与帧无关,但跟着存一份最省心)
-    QString     imagePath;   // 主图路径;空 = 这一步不产图
+    // ⚠ 2026-10-25:原来的 `QString imagePath` 字段**删掉了**。
+    //   它存的是「主图路径」—— 而「主图是哪个」这件事以前有**两份**规则
+    //   (这里一份、mainwindow.cpp 里一份),而且真的跑偏了。
+    //   现在「主图」由 result_render_plan.h 的候选列表决定,
+    //   需要哪张图时**现场算**(连同 fallbackPath),不缓存 ——
+    //   缓存一份就等于又埋了一份会过期的副本。
 };
 
 // ============================================================
@@ -300,14 +317,49 @@ public:
     // --------------------------------------------------------
     // 图在不在 —— 现场问磁盘,不查存下来的标志(理由见文件开头 ②)
     // --------------------------------------------------------
+    //
+    // ⚠ 2026-10-25:判据改成用**共享的候选列表**,
+    //   而候选列表和 mainwindow.cpp 里「显示哪张图」用的是**同一份**
+    //   (result_render_plan.h :: resultImageCandidates)。
+    //
+    //   以前这里查的是 `e->imagePath`(一份单独的"主图"规则),
+    //   而面板显示的是另一套顺序 —— **两个说的不是同一张图**。
+    //   后果是:判据说「图在」(标注图还在),面板显示的却是
+    //   工具栏那张用户手填的静态图 —— 对应关系是假的。
+    //
+    // ⚠ 判据只看**第一候选**,**不降级**:
+    //   候选列表第一项 = 「最能说明这一步干了什么」的那张图。
+    //   它不在了,就说「图没了」,**不拿低一级的图顶上** ——
+    //   顶上来的那张可能早就被下一轮覆盖了,
+    //   而用户会以为那就是这一帧的图。
+    //
+    //   这也是以前的行为(主图不在 -> Dropped -> 面板那道闸把图关掉),
+    //   只是现在「主图是谁」由**一份**规则说了算。
+    //
+    //   不降级还带来一个好处:
+    //   判据说 Available ⟹ 第一候选**真的在**
+    //   ⟹ 面板显示的**就是它**。
+    //   两个说的永远是同一张图 —— 而且这**不是靠两边对齐**,
+    //   是因为下面这一行和面板那一边调的是**同一个函数**。
     FrameImageState imageState(const QString& nodeId,
                                int frameIndex,
+                               const QString& fallbackPath,
                                const ExistsFn& exists) const {
         const StepFrameResult* e = frameOf(nodeId, frameIndex);
         if (!e) return FrameImageState::Dropped;   // 数字都没了,图更谈不上
-        if (e->imagePath.isEmpty()) return FrameImageState::NoImage;
-        return exists(e->imagePath) ? FrameImageState::Available
-                                    : FrameImageState::Dropped;
+        const QVector<w7::ImageCandidate> cands =
+            w7::resultImageCandidates(e->output, fallbackPath);
+        if (cands.isEmpty()) return FrameImageState::NoImage;   // 这一步压根不产图
+        // ⚠ 取哪张图:**同一个函数**(result_render_plan.h :: pickBaseImage),
+        //   面板显示时也调它。
+        //   以前这里是 exists(cands.first().path),面板那边是「取第一个存在的」——
+        //   两份实现,靠「Dropped 那道闸在候选循环之前」这个代码顺序对齐。
+        //   那是**第三份**抄副本(本项目栽过八遍的那种病),
+        //   而且面板那份还会撒谎:「最终结果」那次调用没有判据,
+        //   于是判定图不在时,面板会退到工具栏那张静态图 ——
+        //   一张和这一帧无关的图,配着这一帧的判定。
+        return w7::pickBaseImage(cands, exists) ? FrameImageState::Available
+                                                 : FrameImageState::Dropped;
     }
 
     // --------------------------------------------------------
@@ -344,9 +396,13 @@ public:
 private:
     static StepFrameResult makeEntry(const QJsonObject& out, const QString& label) {
         StepFrameResult e;
-        e.output    = out;
-        e.label     = label;
-        e.imagePath = stepPrimaryImagePath(out);
+        e.output = out;
+        e.label  = label;
+        // ⚠ 2026-10-25:不再在这里算「主图路径」。
+        //   「主图是哪个」由 result_render_plan.h 说了算,
+        //   需要时**现场算**(它依赖 fallbackPath,而 fallbackPath 是
+        //   界面的状态,不属于缓存)。
+        //   在这里存一份 = 又埋一份会过期的副本。
         return e;
     }
 

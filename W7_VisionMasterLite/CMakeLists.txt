@@ -828,6 +828,47 @@ target_link_libraries(w7_frame_verdict_test PRIVATE Qt6::Core)
 target_compile_definitions(w7_frame_verdict_test PRIVATE
     W7_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
+# ============================================================
+# 依赖面:result_render_plan.h —— **纯 QtCore**,零 OpenCV、零 QtWidgets。
+#
+# 为什么要有这个套件:
+#   "结果面板该显示哪张图"这件事以前有**两份**:
+#     · step_frame_cache.h 的 stepPrimaryImagePath —— 决定「图还在不在」
+#     · mainwindow.cpp 的 renderOutputToResultPanel —— 决定「显示哪张」
+#   两份**靠人工对齐**(那段注释自己写着「优先级必须和…对齐」),
+#   然后真的跑偏了:
+#     判据查 marked_path(缺陷标注图),
+#     面板显示 image_path || 工具栏那张用户手填的静态图。
+#   **两个说的不是同一张图。**
+#
+#   后果:pcb_defect_judge 的回看显示的是**静态图 + PASS/FAIL 大字**,
+#   而它自己产出的缺陷标注图**一张都没显示过**;
+#   多帧时那张静态图和当前帧根本不是同一张。
+#
+#   现在规则抽成**一份**(result_render_plan.h),
+#   「判据」和「显示」都用它,这个套件直接测它,
+#   外加一条源码守卫守住「只有这一份」。
+# ============================================================
+qt_add_executable(w7_result_render_plan_test
+    tests/test_result_render_plan.cpp
+)
+
+target_include_directories(w7_result_render_plan_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(w7_result_render_plan_test PRIVATE Qt6::Core)
+
+# 源码守卫要读 mainwindow.cpp 和 step_frame_cache.h
+target_compile_definitions(w7_result_render_plan_test PRIVATE
+    W7_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
+if(MSVC)
+    target_compile_options(w7_result_render_plan_test PRIVATE /utf-8)
+endif()
+
+w7_add_test(result_render_plan w7_result_render_plan_test)
+
 if(MSVC)
     target_compile_options(w7_frame_verdict_test PRIVATE /utf-8)
 endif()

@@ -78,9 +78,78 @@ M42/M43 证明规则**抓得到**；M44 证明规则**不乱抓**。
 > 一条规则刚补上时，它的价值不在于现在抓到了几个，
 > 而在于**它抓不抓得到**这件事被验过了。
 
+## 又一次：2026-10-25，规则写在**用例名字**里，也不等于它被测过
+
+W7 还欠账 17 的第二半时，新增了一个套件（结果面板「显示哪张图」）。
+里面有个用例，标题是：
+
+> `2. 叠加:大字优先于框`
+
+**大字优先于框** —— 这是一条明写在规则里的判定。
+但翻遍那个用例，**没有一条断言**让 `result` 和 `position_x` **同时**出现：
+
+- 测「有 PASS → 大字」的输出里**只有** `result`
+- 测「有位置 → 框」的输出里**只有** `position_x`
+
+于是「优先」这两个字，**从来没被验证过**。
+
+变异验证直接把它逮住：
+
+> **M148**：把 `decideOverlay` 改成「框赢过大字」
+> （在 PASS/FAIL 判断**前面**插一行「有 position_x 就返回框」）
+
+实测：**SURVIVED**。43 条断言一条没红。
+
+## 为什么这次比「零违规」更隐蔽
+
+「零违规」至少有**一个数**（扫了 41 个初值，0 处违规），
+看的人能问一句「41 是不是真的」。
+
+而这一条是：
+
+- 用例**名字**写着「大字优先于框」
+- 断言**红字**写着「有 PASS → 大字」
+- 规则**注释**也写着「大字**优先于**框」
+
+**三处都在说这条规则存在。**
+而实际上没有任何一个输出让两种叠加**打架**。
+
+> 这比「零违规」还糟一格：
+> 零违规至少承认「我没找到违规」，
+> 而这一条**看起来**像「我验证过了」。
+
+## 修法：让两种可能性在**同一个输入**上相遇
+
+```cpp
+QJsonObject o = out("images/raw.png");
+o["result"]      = "FAIL";
+o["position_x"]  = 12;  o["template_w"] = 56;   // ⚠ 框也在
+...
+check(ov == RenderOverlay::Verdict, "result 和框**同时**有 -> 大字赢");
+```
+
+补上这一条之后，M148 **红了 5 条**。
+
+## 教训
+
+> **一条规则要成立，得有一个输入能让它**的两个分支**同时成立。**
+>
+> 只有「各测各的」不够 ——
+> 那测的是两个**独立**的分支，不是它们的**优先级**。
+
+推论：**凡是写着「优先」「先」「后」「覆盖」的规则，
+都必须有一个「两者都在」的输入。**
+否则测的只是「A 能出」「B 能出」，不是「A 先于 B」。
+
+配套：`notes/atomic/at-the-guard-can-be-fed-by-a-comment.md`
+（守卫查的是文本，注释也是文本）——
+两条都是「看着有保护，其实没有」。
+
 参见 `notes/atomic/at-a-lint-that-finds-nothing-looks-green.md`
 （扫到 0 个对象，样子和通过一模一样）、
 `notes/atomic/at-mutation-ruler-broken.md`（变异活下来先怀疑尺子）、
-`notes/atomic/at-cannot-be-tested-is-a-conclusion-not-a-reason.md`。
+`notes/atomic/at-cannot-be-tested-is-a-conclusion-not-a-reason.md`、
+`notes/atomic/at-the-message-is-not-the-assertion.md`。
 
-参见 `notes/notes_W7_Knob_Audit_2026-10.md` 第十二节。
+参见 `notes/notes_W7_Knob_Audit_2026-10.md` 第十二节、
+`notes/notes_W7_RenderPlan_2026-10.md`。
