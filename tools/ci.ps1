@@ -13,7 +13,13 @@
       1. Preflight. Every tool and every third-party path must exist.
          A missing dependency FAILS HERE, loudly. It never "skips".
       2. All 7 projects configure and build (Release).
-      3. W6 (3 suites) and W7 (16 suites) run and pass.
+      3. W6 and W7 suites run and pass.
+      3b. The assertion count is counted FROM THIS BUILD TREE and
+          printed (plus written to build/ci/assertions.txt).
+          The number quoted in the README and in the notes must come
+          from here -- never from a hand count against a tree that
+          might be stale. (That mistake cost two rounds a wrong
+          number; see the notes.)
       4. W5's executable still runs. W5 has no test suite of its own,
          so this smoke check is the only thing CI says about W5.
          It asserts a serial number was actually decoded, using the
@@ -298,6 +304,85 @@ foreach ($p in @('W6_PCB_DefectProject', 'W7_VisionMasterLite')) {
 }
 
 # ------------------------------------------------------------------
+# Step 3b/6: count the assertions, from THIS build tree only
+# ------------------------------------------------------------------
+#
+# Why this step exists (2026-10-25):
+#
+#   The assertion count in the README and in the notes used to be
+#   measured BY HAND, against a build tree that was not always
+#   current. The local tree had a stale w7_engine_test.exe (99
+#   assertions instead of 111) because an earlier session only
+#   rebuilt SOME of the targets. Every number taken from that tree
+#   was 12 too low -- for two rounds, and nobody noticed.
+#
+#   The number was wrong because:
+#     * it was measured by hand, and
+#     * it was measured against a tree that could be stale.
+#
+#   So now CI prints it, from a tree it just built. If the tree is
+#   stale, CI cannot be -- it rebuilds everything in step 2.
+#
+#   NOTE: this step does NOT hardcode an expected number. A hardcoded
+#   expectation is a number that drifts silently, which is the very
+#   disease this step exists to cure. It PRINTS the number and writes
+#   it to build/ci/assertions.txt, so the docs can be checked against
+#   a value that came from a fresh build.
+#
+#   (Turning "printed" into "enforced" is debt 11; see
+#    notes/notes_W7_Knob_Audit_2026-10.md, section 10.)
+# ------------------------------------------------------------------
+Say "Step 3b/6  assertion count"
+
+$AssertionTotal = 0
+$AssertionReport = @()
+foreach ($p in @('W6_PCB_DefectProject', 'W7_VisionMasterLite')) {
+    $bld = Join-Path $BuildRoot $p
+    # A second ctest run, this time verbose, so that each suite's
+    # "pass=N" line is in the captured text. --output-on-failure only
+    # prints the output of FAILING tests, which is exactly the output
+    # we need when the count is wrong.
+    $verbose = RunCapture $Ctest @('--test-dir', $bld, '-C', 'Release', '-V')
+    $lines = $verbose -split "`r?`n"
+    $perSuite = @{}
+    foreach ($l in $lines) {
+        # Two shapes exist:
+        #   "12: SUMMARY: pass= 90  fail= 0   RESULT=PASS"
+        #   "19: pass=166  fail=0"
+        # Both are anchored to the start of the line (after the ctest
+        # test-number prefix), so a "[PASS] ... (actual pass=1)" line
+        # can never be mistaken for a count.
+        $m = [regex]::Match($l, '^\s*(\d+):\s*SUMMARY:\s*pass=\s*(\d+)')
+        if (-not $m.Success) {
+            $m = [regex]::Match($l, '^\s*(\d+):\s*pass=\s*(\d+)\s+fail=')
+        }
+        if ($m.Success) {
+            $idx = [int]$m.Groups[1].Value
+            $n = [int]$m.Groups[2].Value
+            if (-not $perSuite.ContainsKey($idx)) { $perSuite[$idx] = 0 }
+            if ($n -gt $perSuite[$idx]) { $perSuite[$idx] = $n }
+        }
+    }
+    if ($perSuite.Count -eq 0) {
+        Fail ("could not find a single 'pass=' count in the ctest output for $p." +
+              "`n   If the suites changed their summary line, fix the counter here." +
+              "`n   A count of zero would be worse than no count at all.")
+    }
+    $sub = ($perSuite.Values | Measure-Object -Sum).Sum
+    $AssertionTotal += $sub
+    $AssertionReport += ("{0,-24} {1,3} suites / {2,6} assertions" -f $p, $perSuite.Count, $sub)
+    Write-Host ("   {0,-24} {1,3} suites / {2,6} assertions" -f $p, $perSuite.Count, $sub)
+}
+$AssertionReport += ("{0,-24} {1,3} suites / {2,6} assertions" -f 'TOTAL', $SuiteCount, $AssertionTotal)
+Write-Host ("   {0,-24} {1,3} suites / {2,6} assertions" -f 'TOTAL', $SuiteCount, $AssertionTotal)
+
+# Machine-readable: the docs quote these numbers, so they must be
+# quotable from a file that came out of a fresh build.
+$assertFile = Join-Path $BuildRoot 'assertions.txt'
+$AssertionReport | Set-Content -Encoding ASCII -LiteralPath $assertFile
+Write-Host "   written to $assertFile"
+
+# ------------------------------------------------------------------
 # Step 4: W5 smoke check
 # ------------------------------------------------------------------
 # W5 has no test suite. The shared common/qr_ocr suite covers the QR and
@@ -390,7 +475,7 @@ $global:LASTEXITCODE = 0
 $ErrorActionPreference = 'Continue'
 Push-Location $w7bin
 try {
-    # ⚠ Start-Process -Wait, NOT "& $w7exe ...".
+    # WARNING: Start-Process -Wait, NOT "& $w7exe ...".
     #   w7_vm_lite.exe is a WIN32 (GUI subsystem) program, and PowerShell
     #   does NOT wait for GUI programs: "&" returns in a few ms while the
     #   program is still running. Measured: the result file did not exist
@@ -412,7 +497,7 @@ if (-not (Test-Path $w7result)) {
     Get-Content $w7out -Encoding UTF8 | Write-Host
     Fail "W7 headless smoke wrote no result file"
 }
-# ⚠ -Encoding UTF8, not the default.
+# WARNING: -Encoding UTF8, not the default.
 #   PowerShell 5.1 reads a file without -Encoding as ANSI (GBK here).
 #   The result JSON is UTF-8 with Chinese text in it, so the GBK read
 #   turns it into mojibake -- and mojibake can break the JSON itself
@@ -542,6 +627,7 @@ Write-Host "   source tree unchanged by the tests: OK"
 Say "summary"
 Write-Host "   built   : $($Projects.Count) projects (Release)"
 Write-Host "   tested  : $SuiteCount ctest suites (W6 + W7)"
+Write-Host "   asserts : $AssertionTotal assertions (counted from this build)"
 Write-Host "   smoke   : W5 qr --no-gui + W7 headless pipeline"
 Write-Host "   clean   : tests added nothing to the source tree"
 Write-Host ""

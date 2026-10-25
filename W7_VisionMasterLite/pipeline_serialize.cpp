@@ -114,6 +114,12 @@ bool pipelineFromJson(PipelineView* canvas, const QJsonDocument& doc,
         if (!gn.params.isEmpty()) n->setParams(gn.params);
         const QUuid id = QUuid::fromString(gn.uuid);
         if (!id.isNull()) n->setUuid(id);   // 文件里没有 uuid 就保留自动生成的
+        // ⚠ 算子没装(读盘时认不出来的):节点**留在画布上**,但要标出来。
+        //   以前解析层直接把它丢了 —— 画布上什么都不剩,
+        //   用户存的什么,画布上就**不是**什么(画布不忠实),
+        //   而且指向它的边也跟着断,整条链断成两截,最后静默判 PASS。
+        //   现在:方块在、线也在、而且**一眼看得出这个算子没装**。
+        if (!gn.known) n->setOperatorMissing(true);
         byIndex.append(n);
     }
 

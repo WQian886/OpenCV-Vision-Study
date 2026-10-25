@@ -67,6 +67,21 @@ public:
     void setParams(const QJsonObject& p) { m_params = p; }
     QJsonObject params() const { return m_params; }
 
+    // === 算子没装(读盘时认不出来的算子) ===
+    //
+    // ⚠ 2026-10-25 加的。欠账 18 加载期 / 欠账 19:
+    //   以前解析层**直接丢弃**认不出来的算子,于是画布上什么都没有 ——
+    //   用户存的什么,画布上就**不是**什么(画布不忠实)。
+    //   现在节点**留在画布上**,但必须**看得出门道**:
+    //   一个灰掉、虚线框、写着「未安装」的方块,
+    //   和一个正常的算子节点**一眼能分开**。
+    //
+    //   为什么光靠"跑起来会红"不够:
+    //   用户可能**根本没跑**就存盘走了 —— 那时候画布上那个方块
+    //   在他眼里就是一个正常的节点。
+    void setOperatorMissing(bool m) { m_operatorMissing = m; update(); }
+    bool isOperatorMissing() const { return m_operatorMissing; }
+
     // === 端口拖拽期间:锁住"节点移动" ===
     //
     // 这两个函数存在的唯一理由是**可测**:真正的拖线走 QDrag::exec(),
@@ -183,6 +198,10 @@ private:
     // === 每步结果查看 ===
     StepStatus m_stepStatus = StepStatus::None;
     bool       m_hasCachedResult = false;
+
+    // === 算子没装(读盘时认不出来的算子) ===
+    // 节点留在画布上,但要**看得出门道**(见 setOperatorMissing 那段注释)。
+    bool       m_operatorMissing = false;
 
     static constexpr int W = 140;
     static constexpr int H = 60;

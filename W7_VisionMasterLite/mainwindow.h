@@ -214,6 +214,11 @@ private:
     PipelineView*    m_canvas    = nullptr;
     QTreeWidget*     m_opLib     = nullptr;
     QStackedWidget*  m_paramPanel= nullptr;
+    // 占位页上那行字。选中一个**算子没装**的节点时要改它 ——
+    // 不改的话,面板上留着的是**上一个节点**的参数表单,
+    // 用户以为自己在看这个节点的参数,其实看的是别人的。
+    // (这种谎比"什么都不显示"更难查。)
+    QLabel*          m_paramPlaceholder = nullptr;
     // 日志用 QPlainTextEdit 而不是 QTextEdit:Run 批量时每写一行都会
     // 被 processEvents 逼出一次整篇重绘,实测两者差 2 倍(785 vs 1545 us/行)。
     // 理由和实测数据见 setupResultPanel() 里的注释。

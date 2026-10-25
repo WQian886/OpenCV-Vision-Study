@@ -341,9 +341,43 @@ void OperatorNode::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
                    : m_execHighlight ? QColor(220, 255, 220)
                    : QColor(245, 245, 245);
 
+    // === 算子没装(读盘时认不出来的算子) ===
+    //
+    // ⚠ 2026-10-25(欠账 18 加载期 / 欠账 19):
+    //   节点以前**压根不在画布上** —— 解析层把它丢了。
+    //   现在留着了,但光"留着"不够:一个灰扑扑的方块
+    //   在用户眼里就是一个正常的节点。
+    //   所以这里画成:**灰底 + 虚线框 + 顶上一行「未安装」**。
+    //
+    //   为什么不用"跑起来会红"代替标记:
+    //   用户可能**根本没跑**就存盘走了 —— 那时候画布上那个方块
+    //   在他眼里就是个正常节点。而"用户存了什么"必须**当场**看得见。
+    if (m_operatorMissing) {
+        fillColor = QColor(228, 228, 228);
+        borderColor = QColor(150, 150, 150);
+    }
+
     p->setBrush(QBrush(fillColor));
-    p->setPen(QPen(borderColor, isSelected() ? 3 : 2));
+    if (m_operatorMissing) {
+        // 虚线框:和正常节点**一眼**分得开
+        QPen pen(borderColor, isSelected() ? 3 : 2);
+        pen.setStyle(Qt::DashLine);
+        p->setPen(pen);
+    } else {
+        p->setPen(QPen(borderColor, isSelected() ? 3 : 2));
+    }
     p->drawRoundedRect(bodyRect(), 6, 6);
+
+    // 「未安装」标签 —— 画在框**外面**上方,不吃节点内部的空间
+    if (m_operatorMissing) {
+        QFont f = p->font();
+        f.setPointSize(7);
+        f.setBold(true);
+        p->setFont(f);
+        p->setPen(QColor(190, 60, 60));
+        p->drawText(QRectF(-W/2.0, -H/2.0 - 14, W, 13),
+                    Qt::AlignCenter, QStringLiteral("未安装"));
+    }
 
     // 中文显示名
     p->setPen(QColor(30, 30, 30));

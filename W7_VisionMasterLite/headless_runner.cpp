@@ -3,6 +3,7 @@
 #include "frame_verdict.h"      // 帧判定与整批结论(和主程序**共用**这一份)
 
 #include <QJsonArray>
+#include <QSet>
 
 namespace w7 {
 
@@ -35,6 +36,14 @@ QJsonObject HeadlessResult::toJson() const {
     o["fail"]         = failCount;
     o["errors"]       = errorCount;
     o["outputs"]      = outputs;
+
+    // === 读盘时的三个异常计数(机器可读) ===
+    //
+    // ⚠ 以前这三个数只写不读。现在进 JSON,
+    //   CI 能问「这批为什么是 ERROR」而不只是得到一个结论。
+    o["unknown_operators"] = unknownNodes;
+    o["broken_edges"]      = brokenEdges;
+    o["defaulted_sides"]   = defaultedSides;
 
     QJsonArray stepArr;
     for (const HeadlessStep& s : steps) stepArr.append(s.toJson());
@@ -76,6 +85,16 @@ bool runPipelineJson(const QJsonDocument& doc,
         return false;
     }
 
+    // ---- 1b. 读盘时的三个异常计数(机器可读) ----
+    //
+    // ⚠ 2026-10-25:这三个数以前只写不读。现在搬进结果,
+    //   CI/调用方能查「为什么这批是 ERROR」。
+    //   unknownNodes > 0 意味着**一定**有一步会失败(算子没注册),
+    //   于是整批是 ERROR —— 不会是静默 PASS。
+    res.unknownNodes  = g.unknownNodes;
+    res.brokenEdges   = g.brokenEdges;
+    res.defaultedSides = g.defaultedSides;
+
     // ---- 2. 图 -> 引擎的数据 ----
     //
     // 节点先按**图里的顺序**放,边按**图里的下标**引用。
@@ -93,6 +112,42 @@ bool runPipelineJson(const QJsonDocument& doc,
     rawEdges.reserve(g.edges.size());
     for (const GraphEdge& ge : g.edges)
         rawEdges.append(EngineEdge{ge.fromIndex, ge.toIndex});
+
+    // ---- 2b. 「这个算子没装」由**解析层**说了算 ----
+    //
+    // ⚠ 2026-10-25(欠账 18 加载期 / 欠账 19):
+    //   解析层已经知道哪些算子没装(factoryFn 说的),
+    //   那一步**必须失败** —— 不许跑成。
+    //
+    //   为什么不能指望调用方的 runner 自己失败:
+    //     runner 是「跑一个算子」的回调,它**不知道**哪些算子装了。
+    //     真程序里两处都问 createOperatorByName,所以碰巧一致;
+    //     但那只是**碰巧** —— 换个调用方(比如测试里的假算子),
+    //     runner 会对**任何**名字都返回成功,
+    //     于是又变回静默 PASS。
+    //
+    //   ⚠ 以前这条规则**根本不存在** ——
+    //     解析层把没装的算子**直接丢掉**,于是链断成两截,
+    //     下游拿空输出兜底,数字看着正常,最后判 PASS。
+    //     「少一个算子」伤的是它**后面所有算子**。
+    //
+    //   规则住在**解析层和执行层之间** ——
+    //   解析层已经知道答案了,没理由再去猜。
+    QSet<QString> missingOps;
+    for (const GraphNode& gn : g.nodes)
+        if (!gn.known) missingOps.insert(gn.op);
+
+    const EngineRunner guardedRunner =
+        [&missingOps, &runner](const QString& opName, const QJsonObject& params,
+                               const QJsonObject& inputs, QJsonObject* out,
+                               QString* err) -> bool {
+        if (missingOps.contains(opName)) {
+            if (err) *err = QStringLiteral("算子 %1 未注册,这一步跑不了").arg(opName);
+            if (out) *out = QJsonObject();
+            return false;
+        }
+        return runner ? runner(opName, params, inputs, out, err) : false;
+    };
 
     // ---- 3. 执行序 ----
     bool hasCycle = false;
@@ -163,8 +218,10 @@ bool runPipelineJson(const QJsonDocument& doc,
         };
 
         // headless 的画布不会变 —— 没有节点会被删,所以不用传 alive 回调。
+        // ⚠ 传的是 guardedRunner,不是原始的 runner ——
+        //   「这个算子没装」由解析层说了算(见上面 2b)。
         const EngineFrame ef = runFrame(ordered, edges, fallbackInputs, frame, -1,
-                                        defaultsFn, runner, {}, hook);
+                                        defaultsFn, guardedRunner, {}, hook);
         if (!ef.ok) {
             errOut = ef.error;
             res.error = ef.error;

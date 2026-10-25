@@ -335,10 +335,11 @@ void MainWindow::setupParamPanel() {
     // 默认占位页
     auto* placeholder = new QWidget;
     auto* phLayout = new QVBoxLayout(placeholder);
-    phLayout->addWidget(new QLabel(tr("(选中一个节点查看参数)\n\n"
+    m_paramPlaceholder = new QLabel(tr("(选中一个节点查看参数)\n\n"
                                        "本 MVP 简化:\n"
                                        "所有算子参数在 Run 时用默认值。\n"
-                                       "完整版会按算子类型动态生成表单。")));
+                                       "完整版会按算子类型动态生成表单。"));
+    phLayout->addWidget(m_paramPlaceholder);
     phLayout->addStretch();
     m_paramPanel->addWidget(placeholder);
 
@@ -577,6 +578,11 @@ void MainWindow::updateParamPanelForNode(w7::OperatorNode* node) {
         qDebug() << "[UPN] null node, set placeholder";
         m_paramPanel->setCurrentIndex(0);  // 切到 placeholder
         m_currentParamNode = nullptr;
+        if (m_paramPlaceholder)
+            m_paramPlaceholder->setText(tr("(选中一个节点查看参数)\n\n"
+                                          "本 MVP 简化:\n"
+                                          "所有算子参数在 Run 时用默认值。\n"
+                                          "完整版会按算子类型动态生成表单。"));
         return;
     }
     qDebug() << "[UPN] step 1: setSelectedNode";
@@ -584,7 +590,27 @@ void MainWindow::updateParamPanelForNode(w7::OperatorNode* node) {
 
     qDebug() << "[UPN] step 2: createOperator for" << node->opName();
     w7::OperatorBase* op = w7::createOperatorByName(node->opName());
-    if (!op) { qDebug() << "[UPN] op is null, return"; return; }
+    if (!op) {
+        // ⚠ 2026-10-25(欠账 18 加载期 / 欠账 19):算子**没装**的节点
+        //   现在会留在画布上(以前解析层直接丢了),于是用户**点得到**它。
+        //   以前这里直接 return,面板上留着的是**上一个节点**的参数表单 ——
+        //   用户以为在看这个节点的参数,其实看的是别人的。
+        //   面板**不会说谎**是这一层的底线:宁可什么都不显示。
+        qDebug() << "[UPN] op is null (operator not installed) -- show a message";
+        m_currentParamWidget = nullptr;
+        m_currentParamNode = nullptr;
+        m_paramPanel->setCurrentIndex(0);
+        if (m_paramPlaceholder)
+            m_paramPlaceholder->setText(
+                tr("⚠️ 算子「%1」未安装\n\n"
+                   "这个节点是从工程文件里读出来的，\n"
+                   "但当前这台机器上没有这个算子。\n\n"
+                   "它**保留在画布上**，运行到这一步会失败，\n"
+                   "整条流水线会被判为 ERROR。\n\n"
+                   "装上这个算子，或者把它删掉。")
+                    .arg(node->opName()));
+        return;
+    }
 
     // 用 node 已存的参数初始化表单(没有就用 default)
     qDebug() << "[UPN] step 3: getDefaultParams";
@@ -726,6 +752,25 @@ void MainWindow::loadProjectFrom(const QString& path) {
     // ⚠ 图是从解析层拿的,不是自己再读一遍根对象 ——
     //   字段名只该有一个地方知道。
     if (!loadedGraph.imagePath.isEmpty()) m_imagePathEdit->setText(loadedGraph.imagePath);
+
+    // === 画布忠实度:有算子没装,必须**说清楚** ===
+    //
+    // ⚠ 2026-10-25(欠账 18 加载期 / 欠账 19):
+    //   以前解析层把认不出来的算子**直接丢掉** ——
+    //   画布上什么都不剩,用户存的什么,画布上就**不是**什么;
+    //   指向它的边也跟着断,整条链断成两截,
+    //   下游拿空输出兜底,数字看着正常,最后**静默判 PASS**。
+    //
+    //   现在:节点**留在画布上**(还标了「未安装」),
+    //   边接得上,链不断,而运行到那一步会失败 -> 整批判 ERROR。
+    //
+    // ⚠ 这段话由**纯层**生成(w7::describeLoadAnomalies)——
+    //   话只有**一份**,而且**能直接测**:
+    //   喂一张图进去,看它说没说对、说的数对不对。
+    //   (以前它住在 mainwindow.cpp 里,只能靠源码守卫看着,
+    //    而守卫会被硬编码骗过 —— 变异 M179 就是这么活的。)
+    const QString anomalies = w7::describeLoadAnomalies(loadedGraph);
+    if (!anomalies.isEmpty()) appendLog(anomalies);
 
     // 调整 sceneRect 适配新节点
     m_canvas->scene()->setSceneRect(

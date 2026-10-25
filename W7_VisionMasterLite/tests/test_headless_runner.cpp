@@ -240,20 +240,50 @@ static void test_skipped_are_reported() {
     QString err;
 
     // 未知算子
+    //
+    // ⚠ 2026-10-25:这条用例的断言**整个翻过来了**。
+    //   以前它写的是:
+    //       check(ok, "有未知算子 -> 其余的照跑");
+    //       check(!rec->opOrder.contains("不认识的算子"), "不认识的算子**没有**被跑");
+    //   —— 也就是说,这条用例**断言的正是那个 bug**:
+    //   没装的算子被丢掉 -> 链断成两截 -> 下游拿空输出兜底
+    //   -> 数字看着正常 -> **静默判 PASS**。
+    //
+    //   一条**绿着**的用例,给 bug 发了通行证。
+    //   现在它断言的是**该有的样子**:
+    //     · 节点留在图上(那一栏由 pipeline_graph 套件钉)
+    //     · 那一步**失败**(不是"悄悄跳过")
+    //     · 整批判 ERROR(不是 PASS)
     {
         const QJsonDocument doc = mkDoc(
             QJsonArray{ mkNode("src", "u-src"), mkNode("不认识的算子", "u-x"),
                         mkNode("judge", "u-judge") },
             QJsonArray{ mkEdge("u-src", "u-judge") });
         const bool ok = runPipelineJson(doc, {}, fakeFactory, fakeDefaults, ops, &res, err);
-        check(ok, "有未知算子 -> 其余的照跑");
+        check(ok, "有未知算子 -> 整条流水线**跑得起来**(只是那一步会失败)");
         check(rec->opOrder.contains(QStringLiteral("src")),
               "认识的算子照跑");
-        check(!rec->opOrder.contains(QStringLiteral("不认识的算子")),
-              "不认识的算子**没有**被跑");
+
+        // ---- 关键断言:那一步**必须失败** ----
+        bool failedUnknown = false;
+        for (const HeadlessStep& s : res.steps)
+            if (s.failed && s.opName == QStringLiteral("不认识的算子"))
+                failedUnknown = true;
+        check(failedUnknown,
+              "没装的算子那一步**失败了**(不是悄悄跳过 —— "
+              "悄悄跳过就是断链,断链就是静默 PASS)");
+        check(res.errorCount > 0,
+              QString("它被算成坏步(实际 %1)").arg(res.errorCount));
+
+        // ---- 关键断言:整批**不许**判 PASS ----
+        check(res.batchVerdict == BatchVerdict::Errored,
+              QString("整批判 %1(以前是 PASS —— 那就是漏检)")
+                  .arg(batchVerdictName(res.batchVerdict)));
+
+        // ---- 而且必须**报出来** ----
         bool reported = false;
         for (const QString& l : res.logs)
-            if (l.contains(QStringLiteral("跳过未知算子"))) reported = true;
+            if (l.contains(QStringLiteral("不认识的算子"))) reported = true;
         check(reported, "未知算子被**报出来**了(静默失效比崩溃更难查)");
     }
 
@@ -1115,12 +1145,12 @@ static void test_shipped_pipeline_file() {
     check(ok, QString("smoke.json 解析得了(实际 \"%1\")").arg(err));
     check(g.nodes.size() == 2,
           QString("两个节点都在(实际 %1)").arg(g.nodes.size()));
-    check(g.skippedNodes == 0,
-          QString("没有节点被跳过(实际 %1)").arg(g.skippedNodes));
+    check(g.unknownNodes == 0,
+          QString("没有算子没装(实际 %1)").arg(g.unknownNodes));
     check(g.edges.size() == 1,
           QString("一条边接上了(实际 %1 条)").arg(g.edges.size()));
-    check(g.skippedEdges == 0,
-          QString("没有边被跳过(实际 %1)").arg(g.skippedEdges));
+    check(g.brokenEdges == 0,
+          QString("没有断边(实际 %1)").arg(g.brokenEdges));
 
     // ⚠ 最要紧的一条:边的两端必须是**真 UUID**。
     //   不是的话,这条边会被当成旧格式去按算子名兜底 ——

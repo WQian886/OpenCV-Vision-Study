@@ -170,6 +170,88 @@ run_policy.h(41,10): error C1083: 无法打开包括文件: "QPlainTextEdit": No
 
 详见 `notes/atomic/at-the-compiler-can-guard-what-a-lint-cannot.md`。
 
+## 2026-10-25 再补：守卫还会被**硬编码**骗过
+
+这一张卡讲的是「注释喂饱守卫」。
+同一族的另一个漏法，在这一轮又栽了一次 —— 而且这次**骗的不是注释，是硬编码**。
+
+### 现场
+
+新写的守卫是这么写的：
+
+```cpp
+check(code.contains("loadedGraph.unknownNodes"),
+      "mainwindow.cpp 读了 unknownNodes(不然它又是死字段)");
+```
+
+然后变异 M179 来了：
+
+> 把 `mainwindow.cpp` 里的
+> `.arg(loadedGraph.unknownNodes)` 换成 `.arg(0)`。
+
+也就是说：**那个数被写死成 0 了**，画布上会显示
+「有 0 个算子没装」—— 一句**假话**。
+
+实测：**SURVIVED**。一条没红。
+
+### 为什么没红
+
+因为 `mainwindow.cpp` 里 `loadedGraph.unknownNodes` **还出现着** ——
+在那个 `if` 条件里：
+
+```cpp
+if (loadedGraph.unknownNodes > 0) {                   // ← 名字还在这里
+    appendLog(tr("...").arg(loadedGraph.unknownNodes)); // ← 这里被换成 0
+}
+```
+
+守卫查的是「**这个名字在不在**」。
+它要量的却是「**这个值有没有被用上**」。
+
+> 又一次是**「守卫查的东西」和「守卫要量的东西」不是一回事**：
+> - 它要量的是：**值被用上了**
+> - 它量的是：**文本里出现过那个词**
+>
+> 差一个字，差的就是「硬编码」。
+
+### 修法：把逻辑**搬进纯层**，让守卫问「可测入口」
+
+这次没有去加强 lint，而是**换了问法**：
+
+| | 以前 | 现在 |
+|---|---|---|
+| 那段人话住在哪 | `mainwindow.cpp`（GUI 里） | `pipeline_graph.h :: describeLoadAnomalies`（**纯层**） |
+| 能不能直接测 | 不能（GUI 造不出来） | **能** —— 喂一张图进去，看它说没说对 |
+| GUI 那侧的守卫问什么 | 「`loadedGraph.unknownNodes` 在不在」（**文本**） | 「有没有调 `w7::describeLoadAnomalies`」（**可测入口**） |
+| 硬编码骗得过吗 | **骗得过**（M179） | 骗不过 —— 纯层那条断言直接看**数对不对** |
+
+纯层那条断言长这样：
+
+```cpp
+PipelineGraph g;
+g.unknownNodes = 3;
+const QString msg = describeLoadAnomalies(g);
+check(msg.contains("3"), "消息里写的是 3");
+check(!msg.contains("0 个算子"), "不是硬编码的 0");
+```
+
+> **这才是「守卫问对了问题」的样子**：
+> 不是问「代码里有没有这个词」，是问「**用出来的数对不对**」。
+
+### 三层判据的分工（这一轮又验证了一遍）
+
+| 层 | 量什么 | 强度 |
+|---|---|---|
+| 纯层断言 | **值对不对** | 强 |
+| 可测入口守卫 | GUI 有没有**用**那份共享实现 | 中（等价改写能骗） |
+| 编译期约束 | 依赖有没有越界 | 强（骗不了） |
+
+### 一句话
+
+> **守卫量「值有没有被用上」，就不能只查「名字在不在」。**
+> 而只要那段逻辑**能搬进纯层**，就别在 GUI 里守着它 ——
+> 搬进去，它就变成一条**断言**，而不是一条**文本检查**。
+
 ## 配套
 
 - `notes/atomic/at-the-message-is-not-the-assertion.md` —— 断言声称的对象 vs 实际读的对象
@@ -179,4 +261,5 @@ run_policy.h(41,10): error C1083: 无法打开包括文件: "QPlainTextEdit": No
 - `notes/atomic/at-the-compiler-can-guard-what-a-lint-cannot.md` —— **本卡的补充**
 
 参见 `notes/notes_W7_RenderPlan_2026-10.md`、
-`notes/notes_W7_FrameProtocol_2026-10.md`。
+`notes/notes_W7_FrameProtocol_2026-10.md`、
+`notes/notes_W7_ParseLayer_2026-10.md`。

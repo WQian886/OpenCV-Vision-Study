@@ -1396,6 +1396,38 @@ endif()
 w7_add_test(pure_layer w7_pure_test)
 
 # ============================================================
+# 解析层(pipeline_graph.h)的回归测试
+# ============================================================
+#
+# 测的是欠账 18 的**加载期**形状 + 欠账 19:
+#   认不出来的算子**留在图上**并标 known=false,
+#   指向它的边**接得上**(链不断),
+#   运行时那一步会失败 -> 整批判 ERROR,而不是静默 PASS。
+#
+# ⚠ 这个目标也**只链 Qt6::Core** ——
+#   pipeline_graph.h 是纯解析层,拖 OpenCV/QtWidgets 都是倒退。
+qt_add_executable(w7_pipeline_graph_test
+    tests/test_pipeline_graph.cpp
+)
+
+target_include_directories(w7_pipeline_graph_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(w7_pipeline_graph_test PRIVATE Qt6::Core)
+
+# 源码守卫要读 mainwindow.cpp / headless_runner.cpp / pipeline_graph.h /
+# pipeline_serialize.cpp
+target_compile_definitions(w7_pipeline_graph_test PRIVATE
+    W7_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
+if(MSVC)
+    target_compile_options(w7_pipeline_graph_test PRIVATE /utf-8)
+endif()
+
+w7_add_test(pipeline_graph w7_pipeline_graph_test)
+
+# ============================================================
 # 让测试失败时能看到是哪条断言挂了
 #
 # Qt 6 在 Windows 上默认把 qInfo/qDebug 送到 Windows 调试通道而不是 stderr,
@@ -1408,7 +1440,7 @@ w7_add_test(pure_layer w7_pure_test)
 set_tests_properties(
     undo_redo pcb_operators dl_postprocess image_sources
     step_result pin_and_recent line_fit measurement run_policy detection_operators
-    template_match operator_library operator_knobs pure_layer
+    template_match operator_library operator_knobs pure_layer pipeline_graph
     PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1"
 )
 

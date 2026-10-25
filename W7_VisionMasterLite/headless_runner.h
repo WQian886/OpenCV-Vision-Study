@@ -124,6 +124,26 @@ struct HeadlessResult {
     int errorCount = 0;          // 输出里带 error 的步骤数(跨所有帧)
     QStringList logs;            // 过程中的日志(跳过/端点缺失/截断…))
 
+    // === 读盘时的三个异常计数(机器可读) ===
+    //
+    // ⚠ 2026-10-25(欠账 18 加载期 / 欠账 19):
+    //   这三个计数以前**只写不读** —— 生产代码里一处都不读,
+    //   只有测试断言它们是 0(那等于「证明了它们一直是 0」,
+    //   不是「证明了有人在看」)。
+    //
+    //   现在它们进结果 JSON,CI 和别的调用方**能查**:
+    //     unknown_operators  算子没装的节点数(**节点仍在图上**)
+    //     broken_edges       端点真不存在的连线数
+    //     defaulted_sides    缺方向字段、按默认重画的连线数
+    //
+    //   为什么 unknown_operators 要能被机器查:
+    //   有算子没装 -> 那一步会失败 -> 整批判 ERROR。
+    //   「ERROR」是**结论**,「因为哪个算子没装」才是**原因** ——
+    //   CI 报 ERROR 时得能说出**为什么**。
+    int unknownNodes = 0;
+    int brokenEdges = 0;
+    int defaultedSides = 0;
+
     QJsonObject toJson() const;
 };
 

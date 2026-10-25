@@ -733,7 +733,7 @@ static w7::OpDefaults fakeFactory(const QString& name) {
     for (const auto& r : table)
         if (name == QLatin1String(r.n))
             return {true, QString::fromUtf8(r.d), QString::fromUtf8(r.c)};
-    return {};   // 不认识 → known=false → 该节点被跳过
+    return {};   // 不认识 → known=false → 该节点**留在画布上**但标成「未安装」
 }
 
 static QStringList g_loadLog;   // 收集 pipelineFromJson 打的日志
@@ -918,7 +918,7 @@ static void test_parse_side_edges() {
 // ------------------------------------------------------------
 // 这次为了能无头测,把 pipelineToJson / pipelineFromJson 从 mainwindow.cpp
 // 搬到了独立文件。搬文件本身是有风险的 —— 顺手把"读盘没退化"
-// 一起钉住:老格式(按 op 名 FIFO 匹配)、未知算子跳过、参数/UUID/位置还原。
+// 一起钉住:老格式(按 op 名 FIFO 匹配)、未知算子**留在画布上**、参数/UUID/位置还原。
 // ------------------------------------------------------------
 static void test_load_still_full_featured() {
     beginCase("19. 搬出 mainwindow 之后,读盘没退化");
@@ -953,7 +953,19 @@ static void test_load_still_full_featured() {
     check(backA && backA->params().value("threshold").toInt() == 42,
           "参数原样还原");
 
-    // --- 未知算子:跳过,不能整个读盘失败 ---
+    // --- 未知算子:**留在画布上**,而且**标出来** ---
+    //
+    // ⚠ 2026-10-25 改了行为(欠账 18 加载期 / 欠账 19)。
+    //   以前这里是:
+    //       checkEq(cv3.nodes().size(), 2, "未知算子被跳过,只留下 2 个真节点");
+    //   —— 画布上那个节点**直接没了**。
+    //   后果:
+    //     · 用户存的什么,画布上就**不是**什么(画布不忠实)
+    //     · 指向它的边也跟着没 -> 链断成两截
+    //     · 下游拿空输出 -> 默认值兜底 -> 数字正常 -> **静默判 PASS**
+    //   一条**绿着**的用例,给 bug 发了通行证。
+    //
+    //   现在:节点**留着**(画布忠实度),而且**一眼看得出**它没装。
     QJsonObject root = doc.object();
     QJsonArray nodes = root["nodes"].toArray();
     QJsonObject ghost = nodes.first().toObject();
@@ -965,10 +977,20 @@ static void test_load_still_full_featured() {
     QString err3;
     check(fakeLoad(&cv3, QJsonDocument(root), err3),
           "含未知算子的文件仍能读(不是整个失败)");
-    checkEq(cv3.nodes().size(), 2, "未知算子被跳过,只留下 2 个真节点");
+    checkEq(cv3.nodes().size(), 3,
+            "三个节点都在画布上(那个没装的**也在** —— 以前它是 2)");
+
+    // 留着的还不够,**得看得出**它没装:
+    // 一个灰扑扑的方块,用户会当成正常节点。
+    bool markedMissing = false;
+    for (OperatorNode* n : cv3.nodes())
+        if (n && n->opName() == "no_such_operator_xyz" && n->isOperatorMissing())
+            markedMissing = true;
+    check(markedMissing, "那个节点被标成「未安装」(用户一眼看得出少了什么)");
+
     bool logged = false;
     for (const QString& s : g_loadLog) if (s.contains("no_such_operator_xyz")) logged = true;
-    check(logged, "跳过的那个算子在日志里留了名字(不是静默丢弃)");
+    check(logged, "日志里点了那个算子的名字(不是静默丢弃)");
 
     // --- v1.0 老格式:from/to 存的是 op 名,没有 uuid 字段 ---
     QJsonObject legacy;
