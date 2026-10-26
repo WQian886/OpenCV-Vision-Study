@@ -50,6 +50,39 @@ check(hi <= lo * 2, "放大端不爆炸");
 
 > 要么钉**逐档黄金值**，要么找一个变异改不到的独立基准。
 
+### 4. 量的是库，测的不是你（2026-10-26 补）
+
+```cpp
+cv::Mat sg, sb;
+cv::GaussianBlur(step, sg, cv::Size(9, 9), 0);     // <- 直接调 OpenCV
+cv::bilateralFilter(step, sb, 9, 75, 75);           // <- 直接调 OpenCV
+check(bandB <= 1, "双边保住阶跃边缘");
+```
+
+这条断言量的是 **`cv::bilateralFilter` 的输出**，
+而被测的是 **`w2::bilateralDenoise`** —— 我们的函数。
+
+把 `w2::bilateralDenoise` 的**整个实现**换成高斯，
+**这条断言照样绿**。
+
+> 它证明的是「OpenCV 的双边滤波保边缘」，
+> 它要证明的是「**我们的**双边滤波保边缘」。
+>
+> 这两件事**长得一模一样**，但**根本不是一件事**。
+
+**这一条最阴**：它**永远绿**，
+而且测的偏偏是**这个项目最核心的那条性质**。
+⇒ 一个永远绿的断言比没有断言更坏：
+**没有断言你知道那里没测；永远绿的断言你会以为那里测过了。**
+
+**修法**：**造输入**可以用库函数，**量输出**必须走被测的那一层：
+
+```cpp
+const cv::Mat sb = w2::bilateralDenoise(step, 9, 75, 75);
+```
+
+完整记录：`notes/atomic/at-the-assertion-measures-the-library-not-you.md`。
+
 ## 推论：基准不能来自被测对象
 
 同一轮发现的更隐蔽的一种：

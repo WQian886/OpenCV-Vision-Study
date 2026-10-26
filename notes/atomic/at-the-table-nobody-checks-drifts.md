@@ -85,6 +85,8 @@ $SuiteProjects = @(
 
 - [at-the-total-can-hide-a-wrong-part.md](./at-the-total-can-hide-a-wrong-part.md)
   —— 总数对得上，分部可以对不上
+- [at-a-branch-nobody-compiles-is-not-tested.md](./at-a-branch-nobody-compiles-is-not-tested.md)
+  —— 同一个形状的另一个对象：**没人编译过的那一半，不算存在过**
 - [at-unverified-number-in-comment.md](./at-unverified-number-in-comment.md)
 - [at-four-copies-of-one-number.md](./at-four-copies-of-one-number.md)
 

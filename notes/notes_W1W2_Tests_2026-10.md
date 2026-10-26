@@ -264,11 +264,28 @@ foreach ($pt in $SuiteProjects) {
 (Get-Item $file).LastWriteTime = Get-Date
 ```
 
-⇒ 详见 [atomic/the-restored-file-kept-the-old-timestamp.md](./atomic/the-restored-file-kept-the-old-timestamp.md)。
+⇒ 详见 [atomic/at-ninja-mtime-stale-binary.md](./atomic/at-ninja-mtime-stale-binary.md)
+（那张卡已经记了**五次**复发，这次是第五次）。
 
-这个坑本仓库**栽过**：memory 里那条「旧二进制伪装成假红」。
-它不是新坑，是**同一个坑第二次遇到** ——
-所以这次写进了 atomic 卡。
+这个坑本仓库**栽过很多次**：
+memory 里那条「旧二进制伪装成假红」，
+以及 [atomic/at-ninja-mtime-stale-binary.md](./atomic/at-ninja-mtime-stale-binary.md)
+（那张卡记了**五次**复发，这次是**第五次**）。
+
+**同一个坑第二次遇到**说明「知道这个坑」和「不会再踩这个坑」是两件事 ——
+所以这次**记进那张已有的卡**，而不是另开一张。
+
+> ⚠ 一开始我**另写了一张新卡**
+> （「恢复文件没改时间戳」）。
+> 入库前拉全量标题查重时才发现：
+> 那张新卡的**根因、现象、修法**
+> 已经被现有那张卡**一字不差地记过了**。
+> ⇒ **写卡之前先查重**，
+> 重复的卡**收进旧卡当一节「复发 N 次」**，而不是新增一张。
+>
+> 这个仓库的规矩是**一卡一概念**——
+> 两张卡讲同一个概念，等于**同一个概念有了两个版本**，
+> 而其中一个版本一定会开始漂。
 
 ---
 
@@ -281,7 +298,7 @@ foreach ($pt in $SuiteProjects) {
 | C++ 文件 | 133 | **139** |
 | C++ 行 | 42,050 | **43,157** |
 | 变更日志 | 29 份 | **30 份** |
-| atomic 卡 | 77 张 | **82 张** |
+| atomic 卡 | 77 张 | **81 张** |
 
 分项目：**W7 26 / 2371，W6 3 / 482，W2 1 / 54，W1 1 / 29**。
 
