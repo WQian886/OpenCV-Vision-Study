@@ -20,6 +20,11 @@
           from here -- never from a hand count against a tree that
           might be stale. (That mistake cost two rounds a wrong
           number; see the notes.)
+      3c. Every CURRENT number quoted in the documentation is compared
+          against what was just measured. The expected values are READ
+          FROM the docs, never hardcoded here -- a hardcoded expectation
+          is a second copy, and a second copy is what drifts.
+          This is debt 11 (see the knob audit, section 10).
       4. W5's executable still runs. W5 has no test suite of its own,
          so this smoke check is the only thing CI says about W5.
          It asserts a serial number was actually decoded, using the
@@ -336,6 +341,7 @@ Say "Step 3b/6  assertion count"
 
 $AssertionTotal = 0
 $AssertionReport = @()
+$PerSuiteLines = @()
 foreach ($p in @('W6_PCB_DefectProject', 'W7_VisionMasterLite')) {
     $bld = Join-Path $BuildRoot $p
     # A second ctest run, this time verbose, so that each suite's
@@ -345,6 +351,16 @@ foreach ($p in @('W6_PCB_DefectProject', 'W7_VisionMasterLite')) {
     $verbose = RunCapture $Ctest @('--test-dir', $bld, '-C', 'Release', '-V')
     $lines = $verbose -split "`r?`n"
     $perSuite = @{}
+    # The suite NAMES come from the same output:
+    #   " 1/26 Test  #1: qr_ocr ............ Passed  0.41 sec"
+    # They are needed because the docs quote a per-suite table, and a
+    # table of counts without names cannot be checked -- only the total
+    # would be, and a total can be right while the distribution is wrong.
+    $suiteNames = @{}
+    foreach ($l in $lines) {
+        $m = [regex]::Match($l, '^\s*\d+/\d+\s+Test\s+#(\d+):\s+(\S+)')
+        if ($m.Success) { $suiteNames[[int]$m.Groups[1].Value] = $m.Groups[2].Value }
+    }
     foreach ($l in $lines) {
         # Two shapes exist:
         #   "12: SUMMARY: pass= 90  fail= 0   RESULT=PASS"
@@ -368,6 +384,13 @@ foreach ($p in @('W6_PCB_DefectProject', 'W7_VisionMasterLite')) {
               "`n   If the suites changed their summary line, fix the counter here." +
               "`n   A count of zero would be worse than no count at all.")
     }
+    foreach ($idx in ($perSuite.Keys | Sort-Object)) {
+        if (-not $suiteNames.ContainsKey($idx)) {
+            Fail ("could not find the NAME of suite #$idx in the ctest output for $p." +
+                  "`n   A count without a name cannot be checked against a table.")
+        }
+        $PerSuiteLines += ("{0}|{1}|{2}" -f $p, $suiteNames[$idx], $perSuite[$idx])
+    }
     $sub = ($perSuite.Values | Measure-Object -Sum).Sum
     $AssertionTotal += $sub
     $AssertionReport += ("{0,-24} {1,3} suites / {2,6} assertions" -f $p, $perSuite.Count, $sub)
@@ -381,6 +404,47 @@ Write-Host ("   {0,-24} {1,3} suites / {2,6} assertions" -f 'TOTAL', $SuiteCount
 $assertFile = Join-Path $BuildRoot 'assertions.txt'
 $AssertionReport | Set-Content -Encoding ASCII -LiteralPath $assertFile
 Write-Host "   written to $assertFile"
+
+# The same numbers, but per suite and WITH NAMES. Step 3c compares them
+# with the per-suite table in W7_VisionMasterLite/README.md.
+$perSuiteFile = Join-Path $BuildRoot 'assertions_by_suite.txt'
+$PerSuiteLines | Set-Content -Encoding ASCII -LiteralPath $perSuiteFile
+Write-Host "   written to $perSuiteFile"
+
+# ------------------------------------------------------------------
+# Step 3c/6: the numbers quoted in the docs must match reality
+# ------------------------------------------------------------------
+#
+# Why this step exists (debt 11):
+#
+#   Step 3b prints the assertion count. Printing is not enforcing.
+#   The README and the notes quote that count in a dozen places, and
+#   those quotes had already drifted twice (and a third copy was found
+#   stale in the very same round this step was written).
+#
+#   The obvious way to enforce it would be to hardcode 2371 in this
+#   script. That is exactly the disease: a hardcoded expectation is a
+#   SECOND copy of the number, and the second copy is what drifts.
+#
+#   So the expected value is READ FROM the documentation and compared
+#   with what was just measured. The docs stay the single source of
+#   truth; this step only checks that the truth has not moved under
+#   them.
+#
+#   The checker also verifies the per-suite table, not just the totals:
+#   a total can be right while the distribution is wrong.
+Say "Step 3c/6  documentation numbers"
+
+$checker = Join-Path $RepoRoot 'tools\check-doc-numbers.ps1'
+if (-not (Test-Path $checker)) {
+    Fail "doc number checker not found: $checker"
+}
+# Run it in a separate powershell process: its `exit 1` must fail THIS
+# script, and a child script called with `&` would exit the child only.
+$psExe = (Get-Process -Id $PID).Path
+Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $checker,
+             '-RepoRoot', $RepoRoot, '-PerSuiteFile', $perSuiteFile)
+Write-Host "   documentation numbers agree with the measured build: OK"
 
 # ------------------------------------------------------------------
 # Step 4: W5 smoke check
@@ -628,6 +692,7 @@ Say "summary"
 Write-Host "   built   : $($Projects.Count) projects (Release)"
 Write-Host "   tested  : $SuiteCount ctest suites (W6 + W7)"
 Write-Host "   asserts : $AssertionTotal assertions (counted from this build)"
+Write-Host "   docs    : every number quoted in the docs matches the build"
 Write-Host "   smoke   : W5 qr --no-gui + W7 headless pipeline"
 Write-Host "   clean   : tests added nothing to the source tree"
 Write-Host ""

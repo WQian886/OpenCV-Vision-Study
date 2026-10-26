@@ -60,7 +60,7 @@ tesseract 没装时必须**明说**原因，不能悄悄返回空串。
 | W6 深度联动 | `pcb_inspect` + `pcb_defect_judge` 把 PCB 算法挂进画布，7 类缺陷 7 个阈值可调（极性反那条不再是阈值判据 —— 期望侧由配方给）|
 | DL 算子 | `dl_infer`（ONNX Runtime，条件编译）；配套的 `dl_postprocess`（letterbox/NMS/YOLOv5-v8 解析）是它的**辅助库**，不是独立算子 |
 | 没装 SDK 的 DL 分支也能测 | `dl_infer` 的 `#ifdef` / `#else` **两半各有测试**（44 / 10 条断言）—— 前半用一套 header-only 的**假 ONNX Runtime**（只在测试目标里，绝不进发货二进制）。第一次真把它编起来就抓到 3 个 bug（NCHW 张量喂了 HWC 数据 / 名字指针悬空 / 输出维度不检查）|
-| 没装 SDK 的相机分支也能测 | `image_source_camera` 的 `#ifdef` / `#else` **两半各有测试**（90 / 15 条断言）—— 前半用一套 header-only 的**假 MVS SDK**。第一次真把它编起来就发现：那半边引用了一个**真 SDK 里根本不存在的常量**（`MV_TRIGGER_MODE_SOFT`）——也就是说**装上 SDK 的机器上它编不过**，而没人知道。另有 6 个静默失效（IP 对不上也照样连 / Bayer 一律按 BG 解 / 改了 IP 不重连 / 句柄只开不关 / SDK 返回值全不看 / 缓冲区多大都不看）|
+| 没装 SDK 的相机分支也能测 | `image_source_camera` 的 `#ifdef` / `#else` **两半各有测试**（93 / 15 条断言）—— 前半用一套 header-only 的**假 MVS SDK**。第一次真把它编起来就发现：那半边引用了一个**真 SDK 里根本不存在的常量**（`MV_TRIGGER_MODE_SOFT`）——也就是说**装上 SDK 的机器上它编不过**，而没人知道。另有 6 个静默失效（IP 对不上也照样连 / Bayer 一律按 BG 解 / 改了 IP 不重连 / 句柄只开不关 / SDK 返回值全不看 / 缓冲区多大都不看）|
 | 测量类 | `line_fit`（长度+角度）/ `circle_fit`（圆心+半径+圆度）/ `caliper_dist`（点到线距离），补齐 VM 四大模块最后一块 |
 | 每步结果查看 | 节点状态点 + 右键回看任意一步的图和全部字段（数字**全帧留**，图只留最近 N 帧；图没了明说，绝不拿别的帧顶替）+ 标题条上的**帧选择器** `[◀][spin][▶]` |
 | pin 类型检查 | 算子声明吃/吐什么，连错时立刻说明原因 |
@@ -104,11 +104,19 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 ```
 
 一条命令跑完：**7 个工程全部编译（Release）→ W6 3 套件 + W7 26 套件
-全部跑通 → W5 的 exe 冒烟 → W7 真跑一条完整流水线（headless）
+全部跑通 → 数断言并**核对文档里引用的每一个数**
+→ W5 的 exe 冒烟 → W7 真跑一条完整流水线（headless）
 → 检查源码树没被写脏**。
 
 最后一条是重点：测试产物必须落进 `build/`，源码树必须一个字节都不变。
 这条以前靠 `.gitignore` 藏，现在是**断言**——CI 会在产物写进源码树时直接红。
+
+还有一条是新的：**文档里引用的每一个「当前事实」的数，都必须和刚测出来的数一样**
+（`tools/check-doc-numbers.ps1`，CI 的 Step 3c）。
+期望值**从文档读**，不**抄**一份到 CI 里——抄的那份就是下一个会漂的东西；
+而且**逐套件**表逐行查，不只查总数（**总数对得上，分部可以对得上不对**）。
+它当场逮到三处真漂移，其中一处是根 README 说 `camera` 是 90、实测 93。
+详见 [notes_W7_DocNumbers_2026-10.md](./notes/notes_W7_DocNumbers_2026-10.md)。
 
 `.github/workflows/ci.yml` 在 GitHub Actions 上跑同一套步骤
 （Windows runner + `tools/ci-deps.ps1` 装 tesseract / Qt 6.8.3 / 官方预编译 OpenCV 4.13.0）。
@@ -129,7 +137,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 26 份 + 67 张 atomic 卡，~893 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 27 份 + 70 张 atomic 卡，~921 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -149,16 +157,17 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_PCB_Short_2026-10.md` (19 KB) — 短路判据重做：从「量标记圈」到「量两个端子之间」（附：陈旧数据副本）
 - `notes_PCB_Insufficient_2026-10.md` (16 KB) — 焊少判据重做：从「量 ROI 里的金」到「量这个焊盘自己的铜」
 - `notes_W7_RunEngine_2026-10.md` (60 KB) — 执行引擎抽离（第十轮）+ headless runner（片 3）+ 假 ONNX Runtime（片 4）+ 假 MVS SDK（片 5）
-- `notes_W7_Close_2026-10.md` (43 KB) — **W7 结项报告**：欠账总账（结项 17 条 → 现在 19 条）、每条债的边界与重开条件、明确不覆盖的范围、怎么复现这份结项
+- `notes_W7_Close_2026-10.md` (48 KB) — **W7 结项报告**：欠账总账（结项 17 条 → 现在 19 条）、每条债的边界与重开条件、明确不覆盖的范围、怎么复现这份结项
 - `notes_W7_Verdict_2026-10.md` (18 KB) — 结项之后还的第一笔：把「结论怎么说」收成**一份**规则（GUI 和 CI 共用），顺带抓到 CI 的一个**漏检**
 - `notes_W7_BadStep_2026-10.md` (15 KB) — 结项之后还的第二笔：让「跑坏了」真的算进判定（引擎把输出置空 → 旧判据数不到它）
 - `notes_W7_RenderPlan_2026-10.md` (16 KB) — 结项之后还的第三笔：结果面板「显示哪张图」收成**一份**规则，顺带抓到本轮自己的两个洞
 - `notes_W7_FrameProtocol_2026-10.md` (19 KB) — 结项之后还的第四笔：「源怎么报帧数」收成**一份**（第十份抄副本）+ 纯层瘦身 + **本项目第一条编译期约束**（只链 `Qt6::Core` 的目标往纯层塞 widget 就编不过）
 - `notes_W7_ParseLayer_2026-10.md` (20 KB) — 结项之后还的第五笔：**解析层别丢节点**（未知算子留在画布上标「未安装」→ 链不断 → 那一步强制失败）+ 三个「写了没人读」的字段改名并搬进纯层，顺带抓到**两个旧用例正在断言 bug**
-- `notes_W7_MainWindow_2026-10.md` (18 KB) — 结项之后还的第六笔：**主窗口第一次进测试**（主程序源码编成静态库 + offscreen 起真窗口），按「错了用户会不会自己发现」划线，顺带抓到**第十一遍抄副本**和一个**状态和画面对不上**的真 bug
-- `notes_W7_Knob_Audit_2026-10.md` (121 KB) — **旋钮审计**：欠账的**唯一登记处**（第十节）。19 条账、每条的边界与重开条件、每笔的证据在哪
+- `notes_W7_MainWindow_2026-10.md` (19 KB) — 结项之后还的第六笔：**主窗口第一次进测试**（主程序源码编成静态库 + offscreen 起真窗口），按「错了用户会不会自己发现」划线，顺带抓到**第十一遍抄副本**和一个**状态和画面对不上**的真 bug
+- `notes_W7_Knob_Audit_2026-10.md` (124 KB) — **旋钮审计**：欠账的**唯一登记处**（第十节）。19 条账、每条的边界与重开条件、每笔的证据在哪
+- `notes_W7_DocNumbers_2026-10.md` (12 KB) — 结项之后还的第七笔：**把「数字对不对得上」变成机器可查的一步**（欠账 11 的强制那半步）——期望值**读**出来不**抄**一份、逐套件表强查、当场逮到三处真漂移
 
-`notes/atomic/` 里是**单条教训卡片**（67 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（70 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -185,6 +194,9 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `at-the-state-and-the-screen-must-agree.md` — 界面看着正常，但**内部状态**和画面对不上
 - `at-programmatic-calls-are-not-user-actions.md` — 程序化调 API ≠ 用户操作（差的那部分就是测试和产品的差距）
 - `at-ninja-mtime-stale-binary.md` — 过期二进制给出**看着正常的错数**
+- `at-the-expected-value-must-be-read-not-copied.md` — 期望值要**读**出来，不要**抄**一份（在检查器里写死 = 抄副本）
+- `at-the-total-can-hide-a-wrong-part.md` — 总数对得上，**分部**可以对不上
+- `at-a-historical-snapshot-looks-like-a-current-claim.md` — 历史快照长得和当前声明一模一样，得划作用域
 
 W7 收官期的改动（PCB/DL 算子、视频源、帧循环、每步结果查看、pin 检查、最近工程）
 逐条记在 git 提交信息里，每条都写清了"为什么"和"测试抓到了什么"。
@@ -212,9 +224,10 @@ OpenCV/
 ├── common/pcb_core/       # W6/W7 共用的判定核心(无 Qt 依赖)
 ├── common/qr_ocr/         # W5/W6/W7 共用的 QR/OCR 核心
 ├── common/cmake/          # 三方依赖路径(本机默认值 + CI 覆盖)
-├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 检查源码树没被写脏
+├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 核对文档里的数 + 检查源码树没被写脏
+├── tools/check-doc-numbers.ps1  # 文档里每个「当前事实」的数 ↔ 实测（期望值从文档读）
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（26 份 + 67 张 atomic 卡）
+├── notes/                 # 变更日志（27 份 + 70 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -239,7 +252,7 @@ OpenCV/
   > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
   > 连最接近的 ANSI 口径（33,368）也对不上。
   > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
-- 26 份变更日志 + 67 张 atomic 卡 / ~852 KB
+- 27 份变更日志 + 70 张 atomic 卡 / ~921 KB
 - **29 个无头回归测试 / 2848 条断言**（W7 26 个 / 2371，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
