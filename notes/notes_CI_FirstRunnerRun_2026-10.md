@@ -394,9 +394,50 @@ emoji  (GBK没有) : THREW: No mapping for the Unicode character exists in the t
 
 ---
 
+## 结局：四件事修完，再推一次，绿了
+
+| run | 结果 |
+|---|---|
+| `40293214498`（第一次真跑）| ❌ W6 的 `w6_cli` 红 1 条 —— 就是本文那件 ACP 的事 |
+| `40315236950`（四件事修完后再推）| ✅ **绿**：4 步全 `success`，整条 job 8m0s |
+
+runner 上 `tools/ci.ps1` **自己**打的 summary（原文）：
+
+```
+== summary
+   built   : 7 projects (Release)
+   tested  : 29 ctest suites (W6 + W7)
+   asserts : 2853 assertions (counted from this build)
+   docs    : every number quoted in the docs matches the build
+   smoke   : W5 qr --no-gui + W7 headless pipeline
+   clean   : tests added nothing to the source tree
+
+ALL CHECKS PASSED
+```
+
+**和本机一个字不差** ——
+而且 `2853` 是 runner **自己数出来的**，不是抄本机的。
+
+⇒ 「本机能过」和「仓库能过」真正对上，是**这个样子**：
+不是「两边都绿」，是**两边的数对得上**。
+
+⚠ 顺带记一笔：**依赖准备那三步**（choco 装 tesseract、aqt 装 Qt、
+官方 OpenCV world 包）**也是第一次在真机器上执行** —— 它们也过了：
+
+```
+[ci-deps] tesseract installed: C:\Program Files\Tesseract-OCR\tesseract.exe
+[ci-deps] QT_ROOT=D:\a\_temp\Qt\6.8.3\msvc2022_64
+[ci-deps] opencv libs  : D:\a\_temp\opencv\build\x64\vc16\lib  [opencv_world4130.lib]
+```
+
+⇒ 欠账 9 到这里结清（台账的唯一登记处：
+`notes/notes_W7_Knob_Audit_2026-10.md` 第十节）。
+
+---
+
 ## 参见
 
-- `notes/notes_CI_2026-10.md` —— CI 这条线的完整记录（第四章：依赖准备；第十章：一句话带走）
+- `notes/notes_CI_2026-10.md` —— CI 这条线的完整记录（第四章：依赖准备；**第十章：第一次在真 runner 上跑**）
 - `notes/notes_W7_Knob_Audit_2026-10.md` §十 —— 欠账台账（欠账 9 在此结清）
 - `tools/probe-acp.cpp` —— ACP 探针（可复现；输出块是粘贴的真实输出）
 - `common/utf8_path/utf8_path.h` —— 路径 ↔ UTF-8 文本的**唯一**一处定义 + 窄串守卫
