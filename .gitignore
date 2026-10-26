@@ -51,6 +51,19 @@ __pycache__/
 *.pyc
 *.pyo
 
+# ===== 二进制构建产物（曾被误提交）=====
+#
+# 2026-10-26:探针编译留下的 W6_PCB_DefectProject/probe.obj 被提交进了
+# 仓库（2026-09-15 的第一个 commit 就带着它）。二进制进源码仓库，
+# 没有第二个来源、也没人能 review 它 —— 跟"抄副本"一样是负担。
+# 已 git rm --cached，文件留在磁盘上。
+*.obj
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+
 # ===== 操作系统噪声 =====
 Thumbs.db
 .DS_Store

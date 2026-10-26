@@ -175,6 +175,83 @@ function Install-Tesseract {
 # Qt
 # ================================================================
 
+# Is a python module importable?
+#
+# The import check, NOT "aqt version": aqt writes its version banner to
+# stderr, and a native command writing to stderr under PowerShell 5.1
+# raises NativeCommandError.  "import <name>" says what we actually need
+# (can python run it) and nothing else.
+#
+# The ErrorActionPreference dance below is NOT decoration -- it was a bug
+# found by the harness on 2026-10-26:
+#   · a missing module makes python print a traceback on stderr
+#   · "2>$null" CAPTURES that stderr, and captured stderr becomes an
+#     ErrorRecord
+#   · this script runs with $ErrorActionPreference = 'Stop'
+#   => the check for "is the module there" DIED on the module not being
+#      there.  The detector killed the thing it was supposed to detect.
+# Turning it off for the duration of the call is the fix.
+function Test-PythonModule([string]$module) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $null = & python -c "import $module" 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
+# Make a python module available.
+#
+# WHY THIS EXISTS (2026-10-26, before the first real runner run):
+# this script calls "python -m aqt" but never installed aqtinstall, and
+# aqt needs 7z to unpack the Qt archives.  The local rehearsal passed
+# ONLY because this machine happens to have aqtinstall 3.3.0 AND 7z
+# preinstalled (measured 2026-10-26).  Those are facts of THIS machine,
+# not of the runner image -- a fresh windows-2022 runner has Python but
+# no aqtinstall.  So the job would have died at the Qt step with
+# "No module named aqt", and the dry run (the step that is supposed to
+# turn a 2 GB download into a precise error) would have been the thing
+# that died.
+#
+# => The bootstrap goes BEFORE the dry run, not after it.
+function Ensure-PythonModule([string]$module, [string]$pipName) {
+    if (Test-PythonModule $module) {
+        Say "python module '$module' is importable"
+        return
+    }
+    if ($VerifyOnly) {
+        throw ("the python module '$module' is not importable (pip install $pipName)" +
+               " and -VerifyOnly forbids installing it")
+    }
+    Say "installing $pipName ..."
+    & python -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) { throw "pip install --upgrade pip failed with $LASTEXITCODE" }
+    & python -m pip install $pipName
+    if ($LASTEXITCODE -ne 0) { throw "pip install $pipName failed with $LASTEXITCODE" }
+    if (-not (Test-PythonModule $module)) {
+        throw ("pip install $pipName reported success but '$module' is still" +
+               " not importable -- python is not looking where pip put it")
+    }
+    Say "python module '$module' is ready"
+}
+
+# aqt installs Qt; py7zr is what lets it unpack the archives without an
+# external 7z program.
+#
+# Without py7zr, aqt prints
+#     WARNING : The py7zr module failed to load. Falling back to '7z'
+#     ERROR   : Fallback 7zip command executable does not exist: '7z'
+# and the Qt step dies.  Measured 2026-10-26 on this machine, which has
+# NEITHER 7z NOR py7zr -- so "the runner image ships 7-Zip" would have
+# been the only thing keeping the job alive, and that is a fact about an
+# image, not about the script.
+function Ensure-Aqt {
+    Ensure-PythonModule 'aqt' 'aqtinstall'
+    Ensure-PythonModule 'py7zr' 'py7zr'
+}
+
 function Install-Qt {
     $qtRoot = Join-Path $WorkDir 'Qt'
     # aqt lays it out as <version>/<arch>, where <arch> is the short
@@ -182,6 +259,8 @@ function Install-Qt {
     $qtDir = Join-Path $qtRoot ("$QtVersion\msvc2022_64")
 
     if (-not (Test-Path (Join-Path $qtDir 'lib\cmake\Qt6'))) {
+        # The aqt module has to exist before the dry run below.
+        Ensure-Aqt
         Say "Qt is not installed under $qtDir -- asking aqt what it would do ..."
         # The dry run is cheap and turns a 2 GB download into an
         # instant, precise error when the package name is wrong.
@@ -199,7 +278,6 @@ function Install-Qt {
         }
 
         Say "installing Qt $QtVersion ($QtArch) -- this pulls a few GB ..."
-        & python -m pip install --upgrade pip
         & python -m aqt install-qt windows desktop $QtVersion $QtArch --outputdir $qtRoot
         if ($LASTEXITCODE -ne 0) { throw "aqt install-qt failed with $LASTEXITCODE" }
     }

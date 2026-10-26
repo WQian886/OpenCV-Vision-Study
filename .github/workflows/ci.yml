@@ -16,7 +16,7 @@
 #
 # What the job guarantees:
 #   · 7 projects compile (Release)
-#   · 18 ctest suites pass (W6 3 + W7 15)
+#   · 29 ctest suites pass (W6 3 + W7 26)
 #   · W5's executable still decodes a QR
 #   · the source tree is byte-identical after all of that
 #     (test products must land in build/, never in the source tree)
