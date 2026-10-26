@@ -140,14 +140,18 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 > tesseract 的 PATH 只写在 YAML 里（本地彩排根本没做这件事）、
 > **ACP 把同一份代码判成两回事**（`.string()` 严格窄化：本机 GBK 有中文所以绿，
 > runner 的 Latin-1 没有中文就抛 1113）。
-> 四件都修掉了，详见
+> 四件都修掉了；**修完再推一次，绿了** ——
+> run [`40315236950`](https://github.com/WQian886/OpenCV-Vision-Study/actions/runs/40315236950)，
+> 整条 job 8m0s，`ALL CHECKS PASSED`，
+> 而且 runner 报出来的数（**29 套件 / 2853 断言**）**和本机一个字不差**。
+> 详见
 > [notes_CI_FirstRunnerRun_2026-10.md](./notes/notes_CI_FirstRunnerRun_2026-10.md)；
 > CI 这条线的完整记录在
 > [notes_CI_2026-10.md](./notes/notes_CI_2026-10.md)。
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 29 份 + 76 张 atomic 卡，~997 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 29 份 + 76 张 atomic 卡，~1003 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -269,7 +273,7 @@ OpenCV/
   > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
   > 连最接近的 ANSI 口径（33,368）也对不上。
   > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
-- 29 份变更日志 + 76 张 atomic 卡 / ~997 KB
+- 29 份变更日志 + 76 张 atomic 卡 / ~1003 KB
 - **29 个无头回归测试 / 2853 条断言**（W7 26 个 / 2371，W6 3 个 / 482；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

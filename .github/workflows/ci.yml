@@ -21,14 +21,21 @@
 #   · the source tree is byte-identical after all of that
 #     (test products must land in build/, never in the source tree)
 #
-# ⚠ STILL NOT VERIFIED END TO END on a GitHub runner.
-#   The dependency provisioning is verified locally against the real
-#   packages (see notes/notes_CI_2026-10.md for what that proved and
-#   what only a real runner can still prove). What remains runner
-#   specific: choco being available and admin-capable, aqtinstall
-#   running on the runner image, and the download bandwidth.
-#   The steps that matter -- configure, build, test, clean-tree
-#   check -- ARE verified: they run unchanged locally via tools/ci.ps1.
+# ✅ VERIFIED END TO END on a GitHub runner (2026-10-26, run 40315236950).
+#   The whole job ran on windows-2022 and came back green: 7 projects
+#   built, 29 ctest suites / 2853 assertions passed, W5 smoke ok, W7
+#   headless pipeline ok, source tree byte-identical afterwards.
+#
+#   The provisioning step -- choco installing tesseract, aqtinstall
+#   fetching Qt 6.8.3, the official OpenCV *world* package -- ran on
+#   the real runner image for the first time and worked.
+#
+#   That first real run also dug up four things that were invisible
+#   locally: an empty dir is not in git / Qt's DLLs are not on PATH /
+#   tesseract's PATH was only in the YAML / and the ACP made the very
+#   same code two different things on two machines. See
+#   notes/notes_CI_FirstRunnerRun_2026-10.md, and chapter 10 of
+#   notes/notes_CI_2026-10.md.
 # ============================================================
 
 name: CI

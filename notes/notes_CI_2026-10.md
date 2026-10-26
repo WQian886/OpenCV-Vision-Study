@@ -266,7 +266,10 @@ $dll = Get-ChildItem $pkg -Recurse -Filter 'opencv_core*.dll' -File | Select-Obj
 一个"OCR 那条路根本没被测过"的绿色 CI，比一个红的 CI 更危险 ——
 所以 workflow 里装 tesseract 失败 = job 失败，不允许静默跳过。
 
-### 3.3 【未验证】这件事的诚实说法
+### 3.3 【未验证】这件事的诚实说法（2026-10-20 写下，2026-10-26 作废）
+
+> ⚠ **这一节是当时的快照，现在过期了 —— 原文保留，因为「过期」本身就是证据。**
+> 真跑结果见**第十章**。
 
 **本地能验证的都验证了**（脚本五步、路径覆盖、两个 bug 的修复、变异），
 **没法验证的是"GitHub 的 Windows runner 上，Qt/OpenCV/tesseract 能不能装上"** ——
@@ -276,6 +279,11 @@ $dll = Get-ChildItem $pkg -Recurse -Filter 'opencv_core*.dll' -File | Select-Obj
 （aqtinstall 的参数、OpenCV 包的目录名、tesseract 的装法），
 **而要改的具体是哪一行，取决于 runner 上的实际情况** ——
 这一条在 workflow 顶部的注释里也写清楚了。
+
+> **后来（2026-10-26）：**
+> 三步**全都要改**，而且**不是改一行** ——
+> aqtinstall 的参数、world 包的目录名、tesseract 的装法，**三处各错各的**。
+> 改完真跑一次，8m0s 全绿（run `40315236950`）。
 
 ---
 
@@ -586,19 +594,20 @@ return "D:\\Program Files\\Tesseract-OCR\\tesseract.exe";
 | **workflow 的编排、变量交接** | ✅ **本机实测**（彩排 F：解析 `ci.yml` 执行它的 `run:` 块，`ALL WORKFLOW STEPS PASSED`）|
 | **runner 镜像上有没有 choco / 7z / python / VS** | ✅ **查了官方镜像清单**（4.5.2）|
 | **runner 的 cmake 配它的 VS 能不能用** | ✅ 版本对得上（4.5.5）|
-| **choco 装 tesseract 这一步本身** | ❌ 仍需真 runner（本机没 choco；路径已查过包，安装动作没跑过）|
-| **GitHub 的调度器 / runner 镜像 / 网络** | ❌ 环境本身 |
+| **choco 装 tesseract 这一步本身** | ✅ **真 runner 验过**（2026-10-26，run `40315236950`：21 秒装完，路径与包内脚本一致）|
+| **GitHub 的调度器 / runner 镜像 / 网络** | ✅ **真 runner 验过**（整条 job 8m0s 全绿）|
 
-> ⚠ 剩下那两行**为什么不能在本机消掉**：
+> ⚠ 这一节原本写着「剩下那两行**为什么不能在本机消掉**」——
 > 它们不是"知识缺口"，是**环境本身**——
 > 只有真的在 GitHub 的机器上跑一次，才知道 GitHub 的网络给不给力、
 > choco 那个安装动作会不会成功。
 > 硬说"本机也能验"，那就是拿"验过命令"冒充"验过环境"——
 > 那是本项目记过的第 11 条教训：**别把两件事混成一件**。
 >
-> 但反过来也要说清楚：**该验的都验了**。
-> 剩下的两条里没有一条是"代码写错了"——
-> 都是"这个环境到底长什么样"。
+> ✅ **2026-10-26：这两行现在都有答案了**（第十章）。
+> 补一句当时没想到的：真跑**不是**只验证了环境 ——
+> 它还挖出了**四件本地看不见的东西**，
+> 其中一件（ACP）在本地**永远看不见**，因为本机恰好有中文。
 >
 > 而且现在**整条链已经能在本机端到端跑**（彩排 F）：
 > 从依赖准备到 7 个工程编译、18 个套件、W5 冒烟、源码树洁净检查，
@@ -839,9 +848,111 @@ CI 的构建产物落在 `<仓库>/build/ci/<工程名>/`（`build/` 在 `.gitig
 | **`GITHUB_ENV` 交接真的通了** | 彩排 F 的第 2 步收到的 `-DOpenCV_DIR` / `-DOpenCV_BIN_DIR` / `-DCMAKE_PREFIX_PATH` 正是第 1 步写进去的值 |
 | **模拟器的 shell 和 runner 一致** | 拉便携版 pwsh **7.6.6**（runner 镜像清单上的版本），默认编码 UTF-8 与 runner 相同 |
 
+### 2026-10-26 新增（第十章）
+
+| 论断 | 核实方式 |
+|---|---|
+| **整条 CI 在真 runner 上绿了** | run `40315236950`：4 个 step 全 `success`，整条 job **8m0s**，日志尾部 `ALL CHECKS PASSED` |
+| runner 上的数和本机**一个不差** | runner 的 `== summary` 原文：`29 ctest suites` / `2853 assertions` / `docs: every number quoted in the docs matches the build` |
+| choco 装 tesseract 在真 runner 上成功 | 日志：`[ci-deps] tesseract installed: C:\Program Files\Tesseract-OCR\tesseract.exe`（21 秒）|
+| aqtinstall 在真 runner 上成功 | 日志：`[ci-deps] QT_ROOT=D:\a\_temp\Qt\6.8.3\msvc2022_64`（aqt v3.3.0 / Python 3.12.10，51 秒）|
+| 官方 world 包在真 runner 上能编译链接 | 日志：`opencv_world4130.lib` / `opencv_world4130.dll` 就位；7 个工程全编过；W6 3 套件 + W7 26 套件全绿 |
+| ACP 那条修复在真 runner 上**真的成立** | 同一个 `w6_cli` 套件：上一次真跑 `pass=20 fail=1`（异常打断进程，后面的用例没跑），这一次 `pass=167 fail=0` |
+| 「本机和 runner 的数一样」不是抄的 | `2853` 是 runner **自己数出来**的（`counted from this build`），本机与 runner 各自独立数出同一个数 |
+
 ---
 
-## 十、一句话带走
+## 十、★ CI 第一次在真 runner 上跑（2026-10-26）
+
+### 10.1 一句话
+
+> **2026-10-26 11:27，run `40315236950` 绿了。**
+>
+> 7 个工程编译、29 个 ctest 套件、**2853** 条断言、W5 冒烟、
+> W7 无头跑通一条流水线、源码树零污染 ——
+> 全部在 GitHub 的 Windows runner 上跑完，`ALL CHECKS PASSED`。
+>
+> **本机和 runner 报出来的数，一个都不差。**
+
+### 10.2 三次真跑，三种死法
+
+| run | 死在哪 | 那是什么性质的问题 |
+|---|---|---|
+| `40288478649` | job **没起来** | YAML 里的错：变量没交接、路径写死 |
+| `40293214498` | W6 的 `w6_cli` **红 1 条** | 机器事实：ACP 把同一份代码判成两回事 |
+| `40315236950` | —— | ✅ **全绿**（8m0s）|
+
+⇒ 前两次**不是**「环境不行」，是**代码里的东西从没在真环境里活过**。
+
+### 10.3 原来标着「没法验证」的那几条，现在有答案了
+
+| 原来标的 | 现在 | 真跑给出的证据 |
+|---|---|---|
+| **choco 装 tesseract 这一步本身** | ✅ 验过 | `tesseract installed: C:\Program Files\Tesseract-OCR\tesseract.exe`（21 秒）|
+| **aqtinstall 在 runner 上跑不跑得动** | ✅ 验过 | `QT_ROOT=D:\a\_temp\Qt\6.8.3\msvc2022_64`（aqt v3.3.0 / Python 3.12.10，51 秒）|
+| **官方 OpenCV world 包能不能编译链接** | ✅ 验过 | `opencv_world4130.lib` / `.dll` 就位，7 个工程全编过 |
+| **runner 的调度器 / 镜像 / 网络** | ✅ 验过 | 整条 job 8m0s 全绿 |
+
+⇒ §3.3 那句「没法验证的是 GitHub 的 Windows runner 上能不能装上」——
+**今天这句话已经过期了**。它当时是真的。
+>
+> ⚠ **一句结论的保质期，就是它被推翻为止。**
+> 所以 §3.3 当时写的是「大概率要改那三步，**要改的是哪一行取决于 runner 上的实际情况**」——
+> 现在知道**要改的是三处、不是一行**，而且每一处改法都不一样。
+
+### 10.4 本机和 runner 的数必须**一样**，不是「两边都绿」
+
+runner 上 `tools/ci.ps1` 自己打的 summary（原文）：
+
+```
+== summary
+   built   : 7 projects (Release)
+   tested  : 29 ctest suites (W6 + W7)
+   asserts : 2853 assertions (counted from this build)
+   docs    : every number quoted in the docs matches the build
+   smoke   : W5 qr --no-gui + W7 headless pipeline
+   clean   : tests added nothing to the source tree
+
+ALL CHECKS PASSED
+```
+
+**和本机一个字不差。**
+
+⇒ 「本机能过」和「仓库能过」真正对上，是**这个样子**：
+不是「两边都绿」，是**两边的数对得上**。
+`2853` 这个数是 runner **自己数出来的**，不是抄本机的。
+
+### 10.5 真跑挖出来的四件事
+
+（完整记录见 `notes/notes_CI_FirstRunnerRun_2026-10.md`）
+
+| # | 是什么 | 本机为什么看不见 |
+|---|---|---|
+| ① | 空目录不在 git 里 | 本机那目录**在**（有别的文件）|
+| ② | Qt 的 DLL 不在 PATH 上 | 本机 Qt 装在 PATH 里 |
+| ③ | tesseract 的 PATH 只写在 YAML 里 | 本机环境变量早就有 |
+| ④ | **ACP 把同一份代码判成两回事** | 本机 ACP=936（GBK）**有中文** ⇒ `.string()` 不抛 |
+
+前三条是**纯环境性**的；第四条是**代码本身的歧义** ——
+它在这台机器上**永远是绿的**：
+绿到写完注释、写完探针、本地门禁全过，还是绿的。
+
+⇒ ④ 的教训最贵：
+**「本机绿」不是「仓库绿」，而且这类坑专门挑「本机恰好有那个东西」的时候发威。**
+
+### 10.6 欠账 9 的账，到这里结清
+
+`notes/notes_W7_Knob_Audit_2026-10.md` 第十节里那条
+「CI 三步依赖准备没在真 runner 上验过」，
+它的重开条件是**「仓库有 remote 的那一天」**。
+那天 remote 有了，但**光有 remote 不够** —— 得真的推上去、真的跑一次。
+
+⇒ 现在两件事都成立：**有 remote**，而且**跑绿了**。
+欠账 9 收口（清单 19 条 / 已收 14 条 / 未收 5 条）。
+
+---
+
+## 十一、一句话带走
 
 > **CI 的第一批产出，通常不是"CI 跑起来了"，而是"CI 第一次跑就挖出了本地测不到的 bug"。**
 >

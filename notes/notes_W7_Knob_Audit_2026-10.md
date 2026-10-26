@@ -2227,6 +2227,9 @@ M47/M48 跑完、源码按字节还原之后，我又写了个临时脚本**单�
       > 空目录不在 git 里 / Qt 的 DLL 不在 PATH 上 / tesseract 的 PATH 只写在 YAML 里 /
       > **ACP 把同一份代码判成两回事**（`path::string()` 严格窄化，字符在 ACP 里
       > 表示不出来就抛 1113）。
+      > 四件都修掉了，**修完再推一次，绿了** ——
+      > run `40315236950`，整条 job 8m0s，`ALL CHECKS PASSED`，
+      > runner 报出来的数（**29 套件 / 2853 断言**）**和本机一个字不差**。
       > 详见 [notes_CI_FirstRunnerRun_2026-10.md](./notes_CI_FirstRunnerRun_2026-10.md)。
 - [x] **片 4 / 片 5 收口**：`dl_infer` / `image_source_camera` 两条分支各有测试
       （44+10 / 90+15 条断言），变异 M85~M115 **杀 23 活 7 + 1 编译期**
