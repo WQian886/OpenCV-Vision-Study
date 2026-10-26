@@ -66,6 +66,11 @@ endfunction()
 #
 # 这一层刻意不依赖 Qt:W6 不引 Qt,引了就是给一个学习项目加依赖。
 # ============================================================
+# 路径 <-> UTF-8 文本的**唯一一处定义**(纯头文件,没有 .cpp)。
+# 共享核心里凡是要把路径变成文本(写 CSV / 拼错误消息),
+# 或者把 UTF-8 文本变成路径,都走这一个头。
+# 约定本身写在 utf8_path.h 的注释里 —— 为什么"窄串不承载路径"。
+set(UTF8_PATH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../common/utf8_path")
 set(PCB_CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../common/pcb_core")
 
 add_library(w6_pcb_core STATIC
@@ -75,6 +80,7 @@ add_library(w6_pcb_core STATIC
 
 target_include_directories(w6_pcb_core PUBLIC
     ${PCB_CORE_DIR}
+    ${UTF8_PATH_DIR}
     ${OpenCV_INCLUDE_DIRS}
 )
 
@@ -143,6 +149,7 @@ add_library(w6_qr_ocr STATIC
 
 target_include_directories(w6_qr_ocr PUBLIC
     ${QR_OCR_DIR}
+    ${UTF8_PATH_DIR}
     ${OpenCV_INCLUDE_DIRS}
 )
 

@@ -6,6 +6,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <filesystem>
+
 namespace w7 {
 
 const QStringList& knownChecks() {
@@ -85,7 +87,15 @@ bool parseRecipe(const QJsonObject& root, BoardRecipe* out, QString* reason) {
 bool loadRecipe(const QString& path, BoardRecipe* out, QString* reason) {
     pcbcore::BoardRecipe core;
     std::string coreReason;
-    if (!pcbcore::loadRecipeFile(path.toStdString(), &core, &coreReason)) {
+    // ⚠ QString → 路径走 **toStdWString** → fs::path(宽)。
+    //   以前是 toStdString():那是 **UTF-8 窄串**,而核心原来按
+    //   **ACP** 打开文件 —— 本机 ACP=936(GBK)把它读成 12 个汉字,
+    //   runner 的 ACP=1252 读成 24 个 Latin-1 字符:
+    //   **两边都不是原来那条路径**,而且谁都不报错。
+    //   这就是"两种窄串同一个类型"的典型:同一个参数,
+    //   一边当 UTF-8 一边当 ACP —— 错的方向不一样,错**这件事**一样。
+    if (!pcbcore::loadRecipeFile(std::filesystem::path(path.toStdWString()),
+                                 &core, &coreReason)) {
         if (reason) *reason = QString::fromUtf8(coreReason.c_str());
         return false;
     }

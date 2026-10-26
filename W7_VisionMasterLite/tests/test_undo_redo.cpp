@@ -464,7 +464,7 @@ static void test_no_dangling_after_clear() {
 //     "连线后元件乱跑"。真凶在 dropEvent —— 以前按【算子名】去找源节点,
 //     算子名不唯一,画布里放两个 color_segment 时必然接到第一个身上;
 //     而 addConnection 开头会顶掉第一个节点原有的连线,
-//     于是 GUI 上看��是"被连的那个节点自己跳走",真凶隔了三层。
+//     于是 GUI 上看起来是"被连的那个节点自己跳走",真凶隔了三层。
 //
 //     编码/解码抽成纯函数(connection_payload.h)就是为了能被这里直接验。
 static void test_connection_payload_codec() {

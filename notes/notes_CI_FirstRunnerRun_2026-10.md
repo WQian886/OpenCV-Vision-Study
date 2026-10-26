@@ -5,9 +5,14 @@
 > 今天 `gh` 已登录、网也通 → 仓库建了 → 这条路开了。
 >
 > 但**这一章真正记的不是「CI 跑起来了」**，
-> 是**第一次真跑就挖出来的三件事** ——
-> 三件都**不是代码写错了**，是「**只有这台机器成立**」的东西。
-> 其中**两件本地永远看不见**。
+> 是**第一次真跑就挖出来的四件事** ——
+> 前面三件都**不是代码写错了**，是「**只有这台机器成立**」的东西；
+> 第四件**是**代码本身有歧义（拿窄串当路径），
+> 而它**在这台机器上永远是绿的**。
+>
+> 四件里有**三件本地永远看不见**；
+> 第四件本机门禁逮到过**同一类**的东西，但症状不一样
+> （本机是路径乱掉，runner 上是直接抛异常）。
 
 ---
 
@@ -226,7 +231,90 @@ FAIL: close report: number table (notes): group 2 is 944, reality says 954
 
 ---
 
-## 五、这一笔的账
+## 五、第四次真跑逮到的 Bug 4：同一份代码,两台机器判成两回事
+
+### 现象
+
+run `40293214498`：build 过了，`Run CI` 挂在 W6 的 `w6_cli` 套件。
+
+```
+[FAIL] 测试抛出异常:No mapping for the Unicode character exists in the target multi-byte code page.
+       (case: 配方目录:能找到,且不会因为一个坏目录就整个废掉)
+SUMMARY: pass=20 fail=1   RESULT=FAIL
+```
+
+同一份代码，本机 `tools/ci.ps1` **全绿**。
+
+### 根因：`.string()` 是**严格**窄化，而严格的标准是**这台机器的 ACP**
+
+炸的是 HEAD 里的第 273 行：
+
+```cpp
+const std::string d = w6::findRecipeDir((g_w6 / u8p("根本没有这个目录")).string());
+```
+
+- `u8p()` 走 `fs::u8path` ⇒ 路径里是**真的中文宽字符**；
+- `.string()` 把它按 **ANSI 代码页（ACP）** 窄化成窄串 —— 而且是**严格**的：
+  **字符在 ACP 里表示不出来就抛 1113**（`ERROR_NO_UNICODE_TRANSLATION`）。
+
+| 机器 | ACP | 中文在 ACP 里？ | `.string()` |
+|---|---|---|---|
+| 本机（中文 Windows） | **936**（GBK） | **有** | 转得出 → **绿** |
+| GitHub runner（windows-2022） | **1252**（Latin-1） | **没有** | **抛 1113** → 红 |
+
+⇒ 差别**不在代码**，在**这台机器的 ACP**。同一行代码、同一份数据、两个结果。
+
+### 证据：本机就能把 runner 那个失败**原样**复现
+
+规则是「字符在 ACP 里表示不出来就抛」。
+本机 ACP=936（GBK）**有**中文 ⇒ 中文不炸；
+但 GBK **没有** emoji（U+1F600）⇒ 拿 emoji 当路径，本机就抛**一模一样的 1113、一模一样的消息**：
+
+```
+ASCII 路径       : OK len=11
+中文路径(GBK有) : OK len=16
+emoji  (GBK没有) : THREW: No mapping for the Unicode character exists in the target multi-byte code page.
+```
+
+⇒ **规则**是同一条，机器只决定**哪个字符**踩雷。
+（可复现的探针：`tools/probe-acp.cpp`；它的输出块是**粘贴真实输出**的。）
+
+⚠ 而且这种机器事实**没法在进程里造出来**：
+试过用 `_setmbcp(1252)` 去改 CRT 的多字节代码页 —— `path::string()` 的行为**一点没变**。
+⇒ 「本机能过」证明不了「runner 能过」；这种事只能**去 runner 跑**。
+
+### ⚠ 另一半坑方向是**反的** —— 我自己第一版就搞混了
+
+| 方向 | 写法 | 结果 |
+|---|---|---|
+| 宽 → 窄 | `path::string()` | **严格**：转不了就**抛** ⇒ 本机绿 / runner 红 |
+| 窄 → 宽 | `fs::path(窄串)` | **宽松**：转不了就拆字节/换字符 ⇒ **每台机器都错**，而且一声不吭 |
+
+我第一版把这两条混成一句「窄串当路径 = 本机绿、runner 红」，**还照着它改了 `utf8_path.h` 的注释**。
+是 runner 日志里那句「**target** multi-byte code page」把它掰回来的 ——
+「target」= 往**窄**里转 ⇒ 炸的是**宽→窄**那一侧。
+
+> 教训：**推演出来的机制，必须拿原始日志对一遍。**
+>
+> 我那版探针的注释也是推的，跑起来跟写的**两处对不上**：
+> `WC_ERR_INVALID_CHARS` 在 936/1252 上是 **1004**（`ERROR_INVALID_FLAGS`）不是 1113；
+> `std::cout << const wchar_t*` 打的是**指针地址**不是字符串。
+> ⇒ **注释里的数字没人验证过，它可能是推演出来的。跑一遍。**
+
+### 修法：不修这一行，修**这一类**
+
+1. **路径一律 `std::filesystem::path`** —— 它内部是宽字符，不过任何代码页。
+2. **文本 ↔ 路径的转换只留一处**：`common/utf8_path/utf8_path.h` 的 `text()` / `fromUtf8()`。
+3. **窄串守卫**：路径参数只收 `fs::path`；传 `std::string` / 字面串**编译不过**
+   （`static_assert`，见 `utf8_path.h` 的「路径参数不许收窄串」）。
+   守卫是**验过的**：故意把一处改回裸窄串 → build 报
+   `static assertion failed: path parameter takes std::filesystem::path only` → 再改回来。
+   （不是「看着对」，是**咬了一口**。）
+4. **argv 是 ACP** ⇒ `fs::path(argv[i])`，**不要**再套 `fromUtf8()` —— 那是把对的搞坏。
+
+---
+
+## 六、这一笔的账
 
 | 项 | 数 |
 |---|---|
@@ -242,7 +330,7 @@ FAIL: close report: number table (notes): group 2 is 944, reality says 954
 
 ---
 
-## 六、教训
+## 七、教训
 
 推论一：
 
@@ -280,13 +368,40 @@ FAIL: close report: number table (notes): group 2 is 944, reality says 954
 > ⇒ 探针要能回答「**我这一步到底执行了吗**」：
 > 工具找不到 = 硬失败，产物不在 = 失败（不看退出码）。
 
+推论五：
+
+> **机器事实改不动，但它的「规则」可以在本机证成。**
+>
+> ACP 是机器事实：`_setmbcp(1252)` 试过了，进程里改不动，
+> 所以「本机模拟一下 runner」这条路是**堵死的**。
+>
+> 但**规则**能证成：「字符在 ACP 里表示不出来就抛」。
+> 换一个**本机 ACP 也没有**的字符（emoji），本机就抛出**同一条消息**。
+>
+> ⇒ **「本机复现不了」不等于「查不清」。**
+> 换**触发条件**，规则就现形了 —— 机器只决定哪个字符踩雷。
+
+推论六：
+
+> **查错方向，比查错本身更贵。**
+>
+> 我把「窄→宽」和「宽→窄」混成一句，照着错的版本改了注释、改了 API 形状，
+> 还差点把**病根留在原地**。
+>
+> ⇒ 一个方向的失败，**不能**推广到另一个方向：
+> 必须分别**各测一次**，得出两条**各自**的结论。
+> 混成一句的那一刻，两条都不可信了。
+
 ---
 
 ## 参见
 
 - `notes/notes_CI_2026-10.md` —— CI 这条线的完整记录（第四章：依赖准备；第十章：一句话带走）
 - `notes/notes_W7_Knob_Audit_2026-10.md` §十 —— 欠账台账（欠账 9 在此结清）
+- `tools/probe-acp.cpp` —— ACP 探针（可复现；输出块是粘贴的真实输出）
+- `common/utf8_path/utf8_path.h` —— 路径 ↔ UTF-8 文本的**唯一**一处定义 + 窄串守卫
 - `notes/atomic/at-a-rehearsal-can-pass-because-it-was-skipped.md` —— 被跳过的那段代码 = 还没写过的代码
 - `notes/atomic/at-the-detector-must-not-die-on-what-it-detects.md` —— 检测器不能被它要检测的东西杀死
 - `notes/atomic/at-gitignore-hides-files-not-problems.md` —— ignore 藏的是文件，不是问题
 - `notes/atomic/at-no-runner-is-not-a-reason.md` —— 「没跑过」不算理由
+- `notes/atomic/at-the-narrow-string-must-not-carry-a-path.md` —— 窄串不能扛路径（本次新增）

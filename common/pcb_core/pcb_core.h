@@ -38,10 +38,14 @@
 
 #include <opencv2/opencv.hpp>
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
 #include "pcb_color_ref.h"
+// 路径 <-> UTF-8 文本的**唯一一处定义** + 窄串守卫
+// (守卫宏 UTF8PATH_NO_NARROW_ARG 在这里)。
+#include "utf8_path.h"
 
 namespace pcbcore {
 
@@ -133,7 +137,30 @@ struct BoardRecipe {
 bool parseRecipeJson(const std::string& text, BoardRecipe* out, std::string* reason);
 
 // 从文件读配方。
-bool loadRecipeFile(const std::string& path, BoardRecipe* out, std::string* reason);
+//
+// ⚠ 参数是 **std::filesystem::path**,不是窄串。
+//   窄串承载路径必然要挑一个编码,而**挑哪个取决于它从哪来**:
+//     · 命令行 argv 是 **ACP**(操作系统的窄 main 就是这么给的);
+//     · 从 UTF-8 文件里读出来的文本是 **UTF-8**。
+//   两种窄串同一个类型 ⇒ 迟早有一次拿 ACP 的串当 UTF-8 用,
+//   或者反过来 —— 表现是"路径里有中文就找不到"。
+//   (W7 的算子以前就是拿 QString::toStdString()(UTF-8)喂给
+//    一个按 ACP 开文件的函数 —— 本机 GBK 把它读成 12 个汉字,
+//    runner 的 ACP=1252 读成 24 个 Latin-1 字符:
+//    **两边都找不到文件**,而本机"看起来是好的"。)
+//
+//   路径用 fs::path 就没这个问题:它内部是宽字符,不过任何代码页。
+//   约定见 common/utf8_path/utf8_path.h。
+bool loadRecipeFile(const std::filesystem::path& path, BoardRecipe* out, std::string* reason);
+
+// 窄串守卫:传 std::string / "字面串" 进来**编译不过**
+// (理由见 common/utf8_path/utf8_path.h —— fs::path 的窄串构造走 ACP,
+//  那条路**每台机器都走错**,而且一声不吭。)
+template <class S, std::enable_if_t<!utf8path::IsPathArg<S>::value, int> = 0>
+bool loadRecipeFile(const S& path, BoardRecipe* out, std::string* reason) {
+    static_assert(utf8path::IsPathArg<S>::value, UTF8PATH_ONLY_PATH_MSG);
+    return false;
+}
 
 // ============================================================
 // 定位

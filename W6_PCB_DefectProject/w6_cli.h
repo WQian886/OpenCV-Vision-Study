@@ -27,6 +27,9 @@
 #include <vector>
 
 #include "pcb_core.h"
+// 路径 <-> UTF-8 文本的**唯一一处定义** + 窄串守卫
+// (守卫宏 UTF8PATH_NO_NARROW_ARG 在这里)。
+#include "utf8_path.h"
 
 namespace w6 {
 
@@ -35,15 +38,33 @@ namespace fs = std::filesystem;
 // ============================================================
 // 路径 <-> 文本
 //
-// ⚠ 为什么需要这一对:
+// 这一层的路径**一律是 std::filesystem::path**,不再有"这个 std::string
+// 是一条路径"的情况。
 //
-//   C++17 的 `path::string()` 在 Windows 上按 **ANSI 代码页**转换,
-//   路径里有非 ANSI 字符时**直接抛异常**
-//   (实测:"根本没有这张图.png" -> "No mapping for the Unicode character
-//   exists in the target multi-byte code page")。
-//   同一个坑还有第二个:窄串构造路径时(`p / "中文"`),
-//   MSVC 同样按 ANSI 解释那段窄串 —— 而源文件是 UTF-8,
-//   于是**路径构造本身就抛**。
+// 理由(2026-10-26,第一次在真 CI runner 上跑出来的):
+//
+//   (1) C++17 的 `path::string()` 在 Windows 上按 **ANSI 代码页**窄化,
+//       而且是**严格**的:字符在 ACP 里表示不出来就**直接抛异常**
+//       (实测:"根本没有这个目录" -> "No mapping for the Unicode character
+//       exists in the target multi-byte code page")。
+//       本机 ACP=936(GBK)**有**中文 -> 转得出 -> 绿;
+//       GitHub runner 的 ACP=1252 **没有**中文 -> **抛**。
+//       **同一份代码,一台绿一台红**,差别不在代码,在**这台机器的 ACP**。
+//
+//   (2) 窄串构造路径时(`p / "中文"`),MSVC 同样按 ANSI 解释那段窄串。
+//       而源文件是 UTF-8 —— 于是路径从一开始就是**另一条路径**。
+//       ⚠ 这一条**不抛**:936 上 24 字节 UTF-8 变成 12 个汉字,
+//         1252 上变成 24 个 Latin-1 字符 —— **两台机器都错**,只是错得不一样。
+//         (别把它当成"本机绿、runner 红"的那种坑 —— 那是 (1)。)
+//
+//   窄串承载路径还得先挑编码,而"挑哪个"取决于它从哪来
+//   (命令行 argv 是 ACP,UTF-8 文件读出来的是 UTF-8)——
+//   两种窄串同一个类型,迟早挑错一次。
+//   路径用 fs::path 就没这个问题:它内部是宽字符,不过任何代码页。
+//
+//   要把路径变成**文本**(写进 CSV、跟 manifest.csv 比文件名),
+//   走 utf8path::text() —— 全仓库唯一的一处定义,
+//   约定见 common/utf8_path/utf8_path.h。
 //
 //   这一层统一走 UTF-8,理由不只是"别崩":
 //   仓库里的 manifest.csv 是 UTF-8,文件名要和表里的内容
@@ -51,7 +72,6 @@ namespace fs = std::filesystem;
 //   比不出来 = 查不到板型 = 这块板被**静默跳过**。
 //   在报告里,被跳过的板和合格的板长得一模一样。
 // ============================================================
-std::string pathText(const fs::path& p);
 
 // 读图。路径含非 ASCII 字符时也能读。
 //
@@ -59,6 +79,15 @@ std::string pathText(const fs::path& p);
 //   中文路径读不出来,而且**不报错**,只给你一个空 Mat。
 //   这里自己按宽路径把字节读进来,再 imdecode。
 cv::Mat loadImage(const fs::path& p);
+
+// 窄串守卫:传 std::string / "字面串" 进来**编译不过**
+// (理由见 common/utf8_path/utf8_path.h —— fs::path 的窄串构造走 ACP,
+//  那条路**每台机器都走错**,而且一声不吭。)
+template <class S, std::enable_if_t<!utf8path::IsPathArg<S>::value, int> = 0>
+cv::Mat loadImage(const S& p) {
+    static_assert(utf8path::IsPathArg<S>::value, UTF8PATH_ONLY_PATH_MSG);
+    return cv::Mat();
+}
 
 // ============================================================
 // 板型查询
@@ -73,6 +102,11 @@ cv::Mat loadImage(const fs::path& p);
 // 不能默认当成某块板。
 // ============================================================
 std::string boardKindOf(const fs::path& imgPath);
+template <class S, std::enable_if_t<!utf8path::IsPathArg<S>::value, int> = 0>
+std::string boardKindOf(const S& imgPath) {
+    static_assert(utf8path::IsPathArg<S>::value, UTF8PATH_ONLY_PATH_MSG);
+    return std::string();
+}
 
 // ============================================================
 // 板型配方目录
@@ -80,8 +114,17 @@ std::string boardKindOf(const fs::path& imgPath);
 // 配方 JSON 只有一份(在 W7_VisionMasterLite/recipes/ 里),
 // W6 不复制一份 —— 复制就是抄副本,改一边忘一边就漂了。
 // 这里按顺序试几个位置,第一个有 demo.json 的就是它。
+//
+// ⚠ 返回 / 收的都是 **fs::path**:目录路径不是"文本",
+//   拿窄串承载就得先挑编码(见 common/utf8_path/utf8_path.h)。
+//   找不到返回**空路径**。
 // ============================================================
-std::string findRecipeDir(const std::string& overrideDir);
+fs::path findRecipeDir(const fs::path& overrideDir);
+template <class S, std::enable_if_t<!utf8path::IsPathArg<S>::value, int> = 0>
+fs::path findRecipeDir(const S& overrideDir) {
+    static_assert(utf8path::IsPathArg<S>::value, UTF8PATH_ONLY_PATH_MSG);
+    return fs::path();
+}
 
 // ============================================================
 // 一块板的判定结果
@@ -103,8 +146,18 @@ struct BoardResult {
 //
 // ⚠ 失败 ≠ 合格。调用方必须把"跳过了"和"PASS"分开报 ——
 //   产线上少检一块板却报成合格,是最坏的一种结果。
-bool runBoard(const fs::path& imgPath, const std::string& recipeDir,
+bool runBoard(const fs::path& imgPath, const fs::path& recipeDir,
               BoardResult& out, std::string& errOut);
+// 守卫:两个路径参数都必须是 fs::path。
+template <class S1, class S2,
+          std::enable_if_t<!utf8path::IsPathArg<S1>::value ||
+                           !utf8path::IsPathArg<S2>::value, int> = 0>
+bool runBoard(const S1& imgPath, const S2& recipeDir,
+              BoardResult& out, std::string& errOut) {
+    static_assert(utf8path::IsPathArg<S1>::value &&
+                  utf8path::IsPathArg<S2>::value, UTF8PATH_ONLY_PATH_MSG);
+    return false;
+}
 
 // ============================================================
 // 一批板
@@ -184,7 +237,15 @@ struct BoardCodes {
 // tesseractPath 空 = 自动找。传一个不存在的路径可以确定性地
 // 触发"没读成"那条路径(给测试用)。
 BoardCodes readBoardCodes(const cv::Mat& img, bool doSilkscreen,
-                          const std::string& tesseractPath = "");
+                          const fs::path& tesseractPath = fs::path());
+// 守卫:第三个参数(路径)必须是 fs::path。
+// 前两个参数(img / doSilkscreen)照抄 —— 守卫只管**路径参数**。
+template <class S, std::enable_if_t<!utf8path::IsPathArg<S>::value, int> = 0>
+BoardCodes readBoardCodes(const cv::Mat& img, bool doSilkscreen,
+                          const S& tesseractPath) {
+    static_assert(utf8path::IsPathArg<S>::value, UTF8PATH_ONLY_PATH_MSG);
+    return BoardCodes();
+}
 
 // ============================================================
 // 把一块板的判定结果摊成 CSV 行(一个元件一行)
@@ -208,8 +269,20 @@ std::vector<ReportRow> rowsFromBoard(const std::string& relPath,
 // ⚠ tesseractPath 只给**测试**用:传一个不存在的路径,
 //   就能确定性地触发"OCR 没跑成"这条路径,不用真的卸掉 tesseract。
 //   空 = 自动找(默认安装位置 / PATH)。
-ReportResult runReport(const fs::path& dir, const std::string& recipeDir,
-                       bool readSilkscreen, const std::string& tesseractPath = "");
+ReportResult runReport(const fs::path& dir, const fs::path& recipeDir,
+                       bool readSilkscreen, const fs::path& tesseractPath = fs::path());
+// 守卫:第 1、2、4 个参数(路径)必须是 fs::path。
+template <class S1, class S2, class S3,
+          std::enable_if_t<!utf8path::IsPathArg<S1>::value ||
+                           !utf8path::IsPathArg<S2>::value ||
+                           !utf8path::IsPathArg<S3>::value, int> = 0>
+ReportResult runReport(const S1& dir, const S2& recipeDir,
+                       bool readSilkscreen, const S3& tesseractPath) {
+    static_assert(utf8path::IsPathArg<S1>::value &&
+                  utf8path::IsPathArg<S2>::value &&
+                  utf8path::IsPathArg<S3>::value, UTF8PATH_ONLY_PATH_MSG);
+    return ReportResult();
+}
 
 // ============================================================
 // CSV
@@ -224,8 +297,14 @@ std::string csvEscape(const std::string& s);
 std::string csvHeader();
 
 // 写报告。writeHeader 只在第一份报告时为 true。
-bool writeCSVReport(const std::string& outPath, const std::vector<ReportRow>& rows,
+bool writeCSVReport(const fs::path& outPath, const std::vector<ReportRow>& rows,
                     bool writeHeader);
+template <class S, std::enable_if_t<!utf8path::IsPathArg<S>::value, int> = 0>
+bool writeCSVReport(const S& outPath, const std::vector<ReportRow>& rows,
+                    bool writeHeader) {
+    static_assert(utf8path::IsPathArg<S>::value, UTF8PATH_ONLY_PATH_MSG);
+    return false;
+}
 
 // ============================================================
 // W6d: QR 串号 / 丝印 OCR

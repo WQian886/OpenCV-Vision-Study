@@ -18,7 +18,7 @@
 
 ## 🏆 两个综合项目
 
-- **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 477 条断言**
+- **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 482 条断言**
 - **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。17 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），26 个无头回归测试共 2371 条断言。**已结项**（2026-10-24），欠账 19 条已收 14 条，剩下 5 条都写清了边界和重开条件 → [结项报告](./notes/notes_W7_Close_2026-10.md)
 
 ## 🔗 两个共享核心（common/）
@@ -134,18 +134,20 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 > 结果 `ALL WORKFLOW STEPS PASSED` —— 本机跑的和 GitHub 跑的是同一批命令。
 >
 > ✅ **2026-10-26：整套 CI 在真 runner（`windows-2022`）上真的跑过了。**
-> 第一次真跑**挖出三件「只有这台机器成立」的东西** ——
+> 第一次真跑**挖出四件「只有这台机器成立」的东西** ——
 > 空目录不在 git 里（干净克隆上 build 挂）、
 > Qt 的 DLL 不在 PATH 上（链接过了但 exe 起不来）、
-> tesseract 的 PATH 只写在 YAML 里（本地彩排根本没做这件事）。
-> 三件都修掉了，详见
+> tesseract 的 PATH 只写在 YAML 里（本地彩排根本没做这件事）、
+> **ACP 把同一份代码判成两回事**（`.string()` 严格窄化：本机 GBK 有中文所以绿，
+> runner 的 Latin-1 没有中文就抛 1113）。
+> 四件都修掉了，详见
 > [notes_CI_FirstRunnerRun_2026-10.md](./notes/notes_CI_FirstRunnerRun_2026-10.md)；
 > CI 这条线的完整记录在
 > [notes_CI_2026-10.md](./notes/notes_CI_2026-10.md)。
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 29 份 + 75 张 atomic 卡，~980 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 29 份 + 76 张 atomic 卡，~997 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -175,9 +177,9 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_W7_Knob_Audit_2026-10.md` (127 KB) — **旋钮审计**：欠账的**唯一登记处**（第十节）。19 条账、每条的边界与重开条件、每笔的证据在哪
 - `notes_W7_DocNumbers_2026-10.md` (12 KB) — 结项之后还的第七笔：**把「数字对不对得上」变成机器可查的一步**（欠账 11 的强制那半步）——期望值**读**出来不**抄**一份、逐套件表强查、当场逮到三处真漂移
 - `notes_W7_SuiteList_2026-10.md` (13 KB) — 结项之后还的第八笔：**套件名单只有一份**（手抄的那份漂了 8 个名字 → 那 8 个套件的汇总行进了调试通道 → 计数器默默少算了 **567** 条断言）+ **计数的数不许比真值小而不说话**（CI 从「红」到「绿」的一笔）
-- `notes_CI_FirstRunnerRun_2026-10.md` (10 KB) — 结项之后还的第九笔：**CI 第一次在真 runner 上跑**（欠账 9 收口）——真跑挖出三件「只有这台机器成立」的东西：空目录不在 git 里 / Qt 的 DLL 不在 PATH 上 / tesseract 的 PATH 只写在 YAML 里
+- `notes_CI_FirstRunnerRun_2026-10.md` (16 KB) — 结项之后还的第九笔：**CI 第一次在真 runner 上跑**（欠账 9 收口）——真跑挖出四件「只有这台机器成立」的东西：空目录不在 git 里 / Qt 的 DLL 不在 PATH 上 / tesseract 的 PATH 只写在 YAML 里 / **ACP 把同一份代码判成两回事**（`.string()` 严格窄化：字符在 ACP 里表示不出来就抛 1113）
 
-`notes/atomic/` 里是**单条教训卡片**（75 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（76 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -242,7 +244,7 @@ OpenCV/
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 核对文档里的数 + 检查源码树没被写脏
 ├── tools/check-doc-numbers.ps1  # 文档里每个「当前事实」的数 ↔ 实测（期望值从文档读）
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（29 份 + 75 张 atomic 卡）
+├── notes/                 # 变更日志（29 份 + 76 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -252,7 +254,7 @@ OpenCV/
 ## 📊 统计
 
 - 7 个 C++ 项目 + 2 个共享核心
-- 131 个 C++ 文件 / **41,330 行**（含注释与空行）。口径是**一条能跑的完整命令**，2026-10-25 实测：
+- 133 个 C++ 文件 / **42,050 行**（含注释与空行）。口径是**一条能跑的完整命令**，2026-10-26 实测：
 
   ```powershell
   $files = git ls-files '*.cpp' '*.h'
@@ -267,7 +269,7 @@ OpenCV/
   > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
   > 连最接近的 ANSI 口径（33,368）也对不上。
   > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
-- 29 份变更日志 + 75 张 atomic 卡 / ~980 KB
-- **29 个无头回归测试 / 2848 条断言**（W7 26 个 / 2371，W6 3 个 / 477；
+- 29 份变更日志 + 76 张 atomic 卡 / ~997 KB
+- **29 个无头回归测试 / 2853 条断言**（W7 26 个 / 2371，W6 3 个 / 482；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

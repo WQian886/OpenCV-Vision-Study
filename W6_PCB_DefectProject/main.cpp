@@ -45,6 +45,8 @@
 
 #include "w6_cli.h"
 
+#include "utf8_path.h"
+
 #include <iostream>
 #include <string>
 #include <cstdlib>      // system()
@@ -65,7 +67,11 @@ namespace fs = std::filesystem;
 // 参数
 // ============================================================
 struct Options {
-    std::string recipesDir;
+    // ⚠ 目录路径是 fs::path,不是窄串。
+    //   argv 是 **ACP** 的(操作系统的窄 main 就这么给),
+    //   fs::path(窄串) 正好按 ACP 解释 —— 也就是用户敲进去的那个路径。
+    //   千万别把 argv 当 UTF-8 再转一道:那是把对的搞坏。
+    fs::path recipesDir;
     bool noGui = false;
 };
 
@@ -74,7 +80,7 @@ static Options parseOptions(int argc, char** argv) {
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--recipes" && i + 1 < argc) {
-            o.recipesDir = argv[++i];
+            o.recipesDir = fs::path(argv[++i]);
         } else if (a == "--no-gui") {
             o.noGui = true;
         }
@@ -87,7 +93,7 @@ static Options parseOptions(int argc, char** argv) {
 // ============================================================
 static void runBaseline(const Options& opt) {
     std::cout << "===== Baseline full pipeline =====\n";
-    const std::string recipeDir = w6::findRecipeDir(opt.recipesDir);
+    const fs::path recipeDir = w6::findRecipeDir(opt.recipesDir);
     if (recipeDir.empty()) {
         std::cerr << "❌ 找不到板型配方目录(试了 recipes/ 与 ../W7_VisionMasterLite/recipes/)\n"
                      "   用 --recipes <dir> 指定\n";
@@ -95,19 +101,23 @@ static void runBaseline(const Options& opt) {
     }
     w6::BoardResult br;
     std::string err;
-    if (!w6::runBoard("images/baseline.png", recipeDir, br, err)) {
+    // ⚠ 路径参数只收 fs::path —— 守卫(w6_cli.h)会让窄串**编译不过**。
+    //   纯 ASCII 的字面串写不写 fs::path(...) 都一样(ASCII 在 UTF-8 和
+    //   所有 Windows ACP 里表示同样的字符),但**写成 fs::path** 才说得清
+    //   "这是一个路径,不是一个文本"。
+    if (!w6::runBoard(fs::path("images/baseline.png"), recipeDir, br, err)) {
         std::cerr << "❌ " << err << "\n";
         return;
     }
     fs::create_directories("report");
-    cv::Mat img = w6::loadImage("images/baseline.png");
+    cv::Mat img = w6::loadImage(fs::path("images/baseline.png"));
     const w6::BoardCodes codes = w6::readBoardCodes(img, true);
     // 一个元件一行。行怎么摊由 w6_cli 说了算 ——
     // baseline 和 report 两条路径必须给出**一模一样**的行,
     // 所以这里不自己再摊一遍(那才是抄副本)。
     const std::vector<w6::ReportRow> rows =
         w6::rowsFromBoard("images/baseline.png", br, codes.silk, codes.qr);
-    w6::writeCSVReport("report/baseline.csv", rows, true);
+    w6::writeCSVReport(fs::path("report/baseline.csv"), rows, true);
 
     std::cout << "  板型:      " << br.recipeName << " (" << br.boardTitle << ")\n";
     std::cout << "  元件数:    " << br.componentCount << "\n";
@@ -140,11 +150,12 @@ static void runBaseline(const Options& opt) {
 // inspect
 // ============================================================
 static void runInspect(int argc, char** argv, const Options& opt) {
-    const std::string imgPath = (argc > 2 && std::string(argv[2])[0] != '-')
-                                    ? argv[2] : "images/baseline.png";
-    std::cout << "===== Inspect: " << imgPath << " =====\n";
+    // argv 是 ACP 的 ⇒ 直接 fs::path(窄串),MSVC 按 ACP 解释,正好是用户敲的路径。
+    const fs::path imgPath = (argc > 2 && std::string(argv[2])[0] != '-')
+                                ? fs::path(argv[2]) : fs::path("images/baseline.png");
+    std::cout << "===== Inspect: " << utf8path::text(imgPath) << " =====\n";
 
-    const std::string recipeDir = w6::findRecipeDir(opt.recipesDir);
+    const fs::path recipeDir = w6::findRecipeDir(opt.recipesDir);
     if (recipeDir.empty()) {
         std::cerr << "❌ 找不到板型配方目录,用 --recipes <dir> 指定\n";
         return;
@@ -202,16 +213,20 @@ static void runInspect(int argc, char** argv, const Options& opt) {
 static void runReport(int argc, char** argv, const Options& opt) {
     const fs::path dir = (argc > 2 && std::string(argv[2])[0] != '-')
                              ? fs::path(argv[2]) : fs::path("images");
-    std::cout << "===== Batch report: " << w6::pathText(dir) << " =====\n";
+    std::cout << "===== Batch report: " << utf8path::text(dir) << " =====\n";
 
-    const std::string recipeDir = w6::findRecipeDir(opt.recipesDir);
+    const fs::path recipeDir = w6::findRecipeDir(opt.recipesDir);
     if (recipeDir.empty()) {
         std::cerr << "❌ 找不到板型配方目录(试了 recipes/ 与 ../W7_VisionMasterLite/recipes/)\n"
                      "   用 --recipes <dir> 指定\n";
         return;
     }
     fs::create_directories("report");
-    const std::string csvPath = "report/report.csv";
+    // ⚠ 这条以前是 `const std::string csvPath = "report/report.csv";`
+    //   然后喂给 writeCSVReport() —— 窄串当路径,编译器**不拦**
+    //   (fs::path 的窄串构造按 ACP 解释)。现在是 fs::path,
+    //   而且 w6_cli.h 里的守卫会让窄串**编译不过**。
+    const fs::path csvPath = fs::path("report/report.csv");
     fs::remove(csvPath);
 
     const w6::ReportResult rep = w6::runReport(dir, recipeDir, true);
@@ -248,7 +263,7 @@ static void runReport(int argc, char** argv, const Options& opt) {
     }
     std::cout << "\n  共 " << rep.boardCount << " 张图: " << rep.passCount << " PASS / "
               << rep.failCount << " FAIL / " << rep.skipCount << " 跳过\n";
-    std::cout << "  CSV 已写: " << csvPath << "\n";
+    std::cout << "  CSV 已写: " << utf8path::text(csvPath) << "\n";
 }
 
 // ============================================================

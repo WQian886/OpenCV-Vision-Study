@@ -8,6 +8,7 @@
 #include "w6_cli.h"
 
 #include "qr_ocr.h"
+#include "utf8_path.h"
 
 #include <fstream>
 #include <sstream>
@@ -25,30 +26,6 @@
 #endif
 
 namespace w6 {
-
-// ============================================================
-// 路径 <-> 文本(UTF-8)
-// ============================================================
-std::string pathText(const fs::path& p) {
-    // generic_u8string():UTF-8 + 正斜杠。
-    // 用 generic_ 而不是 u8string_ 是因为路径要写进 CSV,
-    // 正斜杠跨平台一致,反斜杠在 CSV 里还得再转义一遍。
-    //
-    // u8string() 在 C++20 返回 std::u8string,这里统一转回 std::string,
-    // 免得哪天升了 C++ 标准就编不过。
-    try {
-#if __cplusplus >= 202002L
-        const std::u8string s = p.generic_u8string();
-        return std::string(s.begin(), s.end());
-#else
-        return p.generic_u8string();
-#endif
-    } catch (const std::exception&) {
-        // 路径里有连 UTF-8 都表示不了的字符(非法代理对之类)。
-        // 退一步用窄串,至少别崩。
-        return p.generic_string();
-    }
-}
 
 // ============================================================
 // 读图
@@ -73,7 +50,7 @@ cv::Mat loadImage(const fs::path& p) {
 // 极简 CSV 读(真值表里没有引号和逗号转义)
 //
 // ⚠ 按**原始字节**读,不做编码转换 —— 仓库里的 manifest.csv 是 UTF-8,
-//   读出来就是 UTF-8 字节,正好和 pathText() 的输出同一套编码。
+//   读出来就是 UTF-8 字节,正好和 utf8path::text() 的输出同一套编码。
 //   (要是哪天改了编码,两边的比较会一起失效 ——
 //   所以改 manifest 编码时必须同时改这里。)
 // ============================================================
@@ -97,12 +74,12 @@ static std::vector<std::vector<std::string>> readCsv(const fs::path& p) {
 std::string boardKindOf(const fs::path& imgPath) {
     const fs::path dir = imgPath.parent_path();
     // 文件名按 UTF-8 取,和 manifest.csv 里的内容同一套编码。
-    const std::string fname = pathText(imgPath.filename());
+    const std::string fname = utf8path::text(imgPath.filename());
     if (!fs::exists(dir)) return "";
     for (const auto& e : fs::directory_iterator(dir)) {
         if (!e.is_regular_file()) continue;
         if (e.path().extension() != ".csv") continue;
-        const std::string name = pathText(e.path().filename());
+        const std::string name = utf8path::text(e.path().filename());
         if (name.find("manifest") == std::string::npos) continue;
 
         const auto rows = readCsv(e.path());
@@ -153,17 +130,18 @@ static bool looksLikeRecipeDir(const fs::path& d) {
     return false;
 }
 
-std::string findRecipeDir(const std::string& overrideDir) {
+fs::path findRecipeDir(const fs::path& overrideDir) {
     if (!overrideDir.empty()) {
         // ⚠ 指定的目录不对就**返回空**,别原样返回一个坏路径。
         //   原样返回的话,每块板各报一次"配方加载失败",刷屏,
         //   而且真正的原因(目录写错了)被埋在最后一条错误里。
-        return looksLikeRecipeDir(fs::path(overrideDir)) ? overrideDir : "";
+        return looksLikeRecipeDir(overrideDir) ? overrideDir : fs::path();
     }
     for (const char* d : kRecipeDirs) {
-        if (looksLikeRecipeDir(fs::path(d))) return d;
+        const fs::path p(d);
+        if (looksLikeRecipeDir(p)) return p;
     }
-    return "";
+    return fs::path();
 }
 
 // ============================================================
@@ -194,7 +172,7 @@ std::string findRecipeDir(const std::string& overrideDir) {
 // 之前是各写一份 —— 又是抄副本,而且两份的参数已经开始漂
 // (一个 psm 11、一个 psm 6,谁也说不清哪个对)。
 BoardCodes readBoardCodes(const cv::Mat& img, bool doSilkscreen,
-                          const std::string& tesseractPath) {
+                          const fs::path& tesseractPath) {
     BoardCodes out;
     if (img.empty()) {
         out.silkError = "图像是空的,没读";
@@ -221,7 +199,10 @@ BoardCodes readBoardCodes(const cv::Mat& img, bool doSilkscreen,
     // images/ 是批量报告的输入目录,往里丢中间产物,下一次 report
     // 就会把自己的中间产物当成待检板扫一遍(而且它没有 manifest 登记,
     // 会被报成"跳过",看着像少检了一块板)。
-    opt.workDir = "out/silk";
+    // ⚠ 写成 fs::path(...),不是裸窄串 ——
+    //   成员赋值不走函数调用,编译器拦不住窄串(见 utf8_path.h 的「局限」),
+    //   所以这一处得**自己**写清楚:这是路径,不是文本。
+    opt.workDir = fs::path("out/silk");
     opt.stem = "w6_silk";
     // 显式指定时**不会**悄悄换一个 tesseract 去跑 ——
     // 拿另一个程序跑出来的结果,调用方却以为是自己指定的那个。
@@ -237,7 +218,7 @@ BoardCodes readBoardCodes(const cv::Mat& img, bool doSilkscreen,
 // ============================================================
 // 跑一块板
 // ============================================================
-bool runBoard(const fs::path& imgPath, const std::string& recipeDir,
+bool runBoard(const fs::path& imgPath, const fs::path& recipeDir,
               BoardResult& out, std::string& errOut) {
     // --- 板型 ---
     const std::string kind = boardKindOf(imgPath);
@@ -246,10 +227,15 @@ bool runBoard(const fs::path& imgPath, const std::string& recipeDir,
                  "—— 拿不到配方就没法定位元件,判定会给出错误结论";
         return false;
     }
-    const fs::path recipePath = fs::path(recipeDir) / (kind + ".json");
+    // kind 来自 manifest.csv,那是 **UTF-8** 文本 ⇒ 拼文件名要走 fromUtf8。
+    // (直接 `recipeDir / (kind + ".json")` 的话,MSVC 会按 ACP 解释
+    //  那段窄串 —— 本机 GBK 把 24 字节 UTF-8 读成 12 个汉字,
+    //  runner 的 ACP=1252 读成 24 个 Latin-1 字符:
+    //  **两边都不是原来那条路径**,而且谁都不报错。)
+    const fs::path recipePath = recipeDir / utf8path::fromUtf8(kind + ".json");
     pcbcore::BoardRecipe recipe;
     std::string reason;
-    if (!pcbcore::loadRecipeFile(pathText(recipePath), &recipe, &reason)) {
+    if (!pcbcore::loadRecipeFile(recipePath, &recipe, &reason)) {
         errOut = "板型配方加载失败:" + reason;
         return false;
     }
@@ -259,7 +245,7 @@ bool runBoard(const fs::path& imgPath, const std::string& recipeDir,
     // --- 读图 ---
     cv::Mat img = loadImage(imgPath);
     if (img.empty()) {
-        errOut = "读不出图片: " + pathText(imgPath);
+        errOut = "读不出图片: " + utf8path::text(imgPath);
         return false;
     }
 
@@ -350,8 +336,8 @@ std::vector<ReportRow> rowsFromBoard(const std::string& relPath,
 // ============================================================
 // 跑一批板
 // ============================================================
-ReportResult runReport(const fs::path& dir, const std::string& recipeDir,
-                       bool doSilkscreen, const std::string& tesseractPath) {
+ReportResult runReport(const fs::path& dir, const fs::path& recipeDir,
+                       bool doSilkscreen, const fs::path& tesseractPath) {
     ReportResult res;
 
     for (const auto& e : fs::recursive_directory_iterator(dir)) {
@@ -360,8 +346,8 @@ ReportResult runReport(const fs::path& dir, const std::string& recipeDir,
 
         // 相对 dir 的路径。用相对路径而不是文件名,是因为递归之后
         // filenames 不再唯一(complex/mcu_wrong.png 和顶层的重名也能撞)。
-        const std::string rel = pathText(fs::relative(e.path(), dir));
-        const std::string name = pathText(e.path().filename());
+        const std::string rel = utf8path::text(fs::relative(e.path(), dir));
+        const std::string name = utf8path::text(e.path().filename());
 
         // 过滤掉 inspect 生成的 marked 图(带叠加层,会污染检测)
         //
@@ -426,8 +412,9 @@ std::string csvHeader() {
     return "board_file,board_type,component,kind,defect,description,silk,qr,result\n";
 }
 
-bool writeCSVReport(const std::string& outPath, const std::vector<ReportRow>& rows,
+bool writeCSVReport(const fs::path& outPath, const std::vector<ReportRow>& rows,
                     bool writeHeader) {
+    // ofstream 收 fs::path 时走宽字符 API —— 中文路径也写得出去。
     std::ofstream f(outPath, writeHeader ? std::ios::out
                                           : (std::ios::out | std::ios::app));
     if (!f.is_open()) return false;

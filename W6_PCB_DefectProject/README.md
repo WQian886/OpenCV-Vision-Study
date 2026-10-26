@@ -119,7 +119,7 @@ W6 不复制一份配方（复制就是抄副本），但构建时会把 `W7_Vis
 
 ## 🧪 跑测试
 
-W6 有 **3 个 ctest 套件、477 条断言**（2026-10-20 之前是 **0 个**）。
+W6 有 **3 个 ctest 套件、482 条断言**（2026-10-20 之前是 **0 个**）。
 
 ```powershell
 cd E:\qianwie\00study\OpenCV\W6_PCB_DefectProject

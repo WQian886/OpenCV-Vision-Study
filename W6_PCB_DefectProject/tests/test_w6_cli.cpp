@@ -36,6 +36,8 @@
 
 #include "w6_cli.h"
 
+#include "utf8_path.h"
+
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
@@ -74,14 +76,15 @@ static void check(bool cond, const std::string& what) {
 // ============================================================
 // 路径与文件的 UTF-8 辅助
 //
-// ⚠ 为什么需要 u8p():
-//   `path / "中文"` 在 MSVC 上是**错的** —— 窄串按 ANSI 代码页解释,
-//   而本文件是 UTF-8 源文件(/utf-8 编译),于是路径构造本身就抛异常。
-//   u8path() 才是"这段窄串是 UTF-8"的正确说法。
+// ⚠ 以前这里有个 utf8path::fromUtf8()(fs::u8path 的包装),
+//   现在**删掉**了 —— 它是"UTF-8 窄串 -> 路径"的**第二份定义**,
+//   而全仓库只有一处该有这个定义:utf8path::fromUtf8()。
+//   两份定义迟早漂开(而且漂开的时候没人会想到去比)。
+//   (跟本项目栽过五遍的"抄副本"是同一族。)
+//
+//   顺带:fs::u8path 在 C++20 已废弃
+//   (u8string 变成 char8_t 之后它没法再返回 std::string)。
 // ============================================================
-static fs::path u8p(const std::string& s) {
-    return fs::u8path(s);
-}
 
 // 复制文件(按宽路径,中文名也能写)
 static bool copyFileTo(const fs::path& src, const fs::path& dst) {
@@ -181,7 +184,7 @@ static std::set<std::string> listPngRel(const fs::path& dir) {
     if (!fs::exists(dir)) return out;
     for (const auto& e : fs::recursive_directory_iterator(dir)) {
         if (e.is_regular_file() && e.path().extension() == ".png") {
-            out.insert(fs::relative(e.path(), dir).generic_string());
+            out.insert(utf8path::text(fs::relative(e.path(), dir)));
         }
     }
     return out;
@@ -229,14 +232,14 @@ static void test_board_kind() {
     // --- 查不到:目录里没有 manifest ---
     {
         const std::string kind =
-            w6::boardKindOf(g_w6 / "images" / u8p("根本没有这张图.png"));
+            w6::boardKindOf(g_w6 / "images" / utf8path::fromUtf8("根本没有这张图.png"));
         check(kind.empty(),
               "图不在任何 manifest 里 -> 返回空串而不是默认板型(实际 \"" + kind + "\")");
     }
 
     // --- 查不到:目录本身不存在 ---
     {
-        const std::string kind = w6::boardKindOf(g_w6 / u8p("没有这个目录") / "x.png");
+        const std::string kind = w6::boardKindOf(g_w6 / utf8path::fromUtf8("没有这个目录") / "x.png");
         check(kind.empty(), "目录不存在 -> 返回空串(不是崩)");
     }
 
@@ -259,9 +262,9 @@ static void test_recipe_dir() {
 
     // --- 显式指定 ---
     {
-        const std::string d = w6::findRecipeDir(g_recipes.string());
-        check(d == g_recipes.string(),
-              "显式指定时原样返回(实际 \"" + d + "\")");
+        const fs::path d = w6::findRecipeDir(g_recipes);
+        check(d == g_recipes,
+              "显式指定时原样返回(实际 \"" + utf8path::text(d) + "\")");
     }
 
     // --- 显式指定了一个不存在的目录 ---
@@ -270,19 +273,83 @@ static void test_recipe_dir() {
     //   而不是原样返回一个坏路径 —— 后者会让每块板各报一次
     //   "配方加载失败",刷屏,而且掩盖了真正的原因。
     {
-        const std::string d = w6::findRecipeDir((g_w6 / u8p("根本没有这个目录")).string());
+        const fs::path d = w6::findRecipeDir(g_w6 / utf8path::fromUtf8("根本没有这个目录"));
         check(d.empty(),
-              "指定的目录里没有配方 -> 返回空串(实际 \"" + d + "\")");
+              "指定的目录里没有配方 -> 返回空串(实际 \"" + utf8path::text(d) + "\")");
     }
 
     // --- 自动找 ---
     {
-        const std::string d = w6::findRecipeDir("");
+        const fs::path d = w6::findRecipeDir(fs::path());
         check(!d.empty(), "自动找得到配方目录");
         if (!d.empty()) {
-            check(fs::exists(fs::path(d) / "demo.json"),
-                  "自动找到的目录里确实有 demo.json(实际 " + d + ")");
+            check(fs::exists(d / "demo.json"),
+                  "自动找到的目录里确实有 demo.json(实际 " + utf8path::text(d) + ")");
         }
+    }
+}
+
+// ============================================================
+// 用例 2.5:路径的编码往返
+//
+// ⚠ 这一组是被**真 CI runner** 逼出来的。
+//
+//   2026-10-26 第一次在 GitHub runner(windows-2022,ACP=1252)上真跑,
+//   W6 的 w6_cli 套件挂在"配方目录"这一条:
+//     "No mapping for the Unicode character exists in the target multi-byte code page"
+//   本机(ACP=936 GBK)一路绿 —— 差别不在代码,在**这台机器的 ACP**。
+//
+//   ⚠ 而且原来那条测试只钉了**负例**(指定一个坏目录 -> 返回空)。
+//     "坏目录"怎么编码都对 —— 于是**编码搞错了这条测试照样过**。
+//     这就是"验证不等于验证":测试看着在验,其实没验到点上。
+//     负例通过 + 正例缺失 = 这条断言当时什么都没保证。
+//
+//   所以这里补三条**正例**:
+//     (a) text() 出来的是**真 UTF-8 字节**
+//         (按 ACP 窄化是 16 字节 GBK;ACP=1252 直接抛异常)
+//     (b) fromUtf8(text(p)) == p —— 往返不丢
+//     (c) 一个**真的存在**的中文名目录,findRecipeDir 找得到
+//         (只有正例才能证明"路径没在传递过程中被改写")
+// ============================================================
+static void test_path_encoding_roundtrip() {
+    beginCase("路径编码:文本是 UTF-8,往返不丢,中文目录找得到");
+
+    const fs::path zh = utf8path::fromUtf8("根本没有这个目录");
+
+    // --- (a) text() 是 UTF-8 ---
+    {
+        const std::string t = utf8path::text(zh);
+        // "根本没有这个目录" = 8 个汉字,UTF-8 各 3 字节 = 24 字节。
+        // 按 ACP 窄化(GBK)只有 16 字节;ACP=1252 压根转不了(抛异常)。
+        check(t.size() == 24,
+              "text() 出来是 UTF-8 字节(期望 24,实际 " +
+              std::to_string(t.size()) + ")");
+        check(t.find('?') == std::string::npos,
+              "text() 里没有被替换成 '?' 的字符(那是 ACP 转不动时的默认行为)");
+    }
+
+    // --- (b) 往返不丢 ---
+    {
+        const fs::path back = utf8path::fromUtf8(utf8path::text(zh));
+        check(back == zh,
+              "路径 -> UTF-8 文本 -> 路径,还是同一条路径");
+    }
+
+    // --- (c) 中文名目录找得到 ---
+    {
+        const fs::path dir =
+            fs::current_path() / "w6_cli_test_tmp" / utf8path::fromUtf8("中文配方目录");
+        fs::create_directories(dir);
+        {
+            // findRecipeDir 要求目录里确实有 .json 才认它
+            std::ofstream j(dir / "demo.json");
+            j << "{}";
+        }
+        const fs::path found = w6::findRecipeDir(dir);
+        check(found == dir,
+              "中文名目录被原样找到(实际 \"" + utf8path::text(found) + "\")");
+        check(fs::exists(found / "demo.json"),
+              "找到的就是那一个,不是碰巧同名的别的目录");
     }
 }
 
@@ -315,7 +382,7 @@ static void test_run_board() {
                 w6::BoardResult br;
                 std::string err;
                 const bool ok = w6::runBoard(g_w6 / "images" / file,
-                                            g_recipes.string(), br, err);
+                                            g_recipes, br, err);
                 check(ok, file + " 能判(失败原因:" + err + ")");
                 if (!ok) continue;
                 check(br.pass == (want == "PASS"),
@@ -350,7 +417,7 @@ static void test_run_board() {
         w6::BoardResult br;
         std::string err;
         const bool ok = w6::runBoard(lonely / "unregistered.png",
-                                     g_recipes.string(), br, err);
+                                     g_recipes, br, err);
         check(!ok, "没登记的图必须判不了(不能当成某块板蒙混过关)");
         check(!err.empty(), "判不了时必须给原因(不能一声不吭)");
         check(err.find("板型") != std::string::npos,
@@ -362,8 +429,8 @@ static void test_run_board() {
     {
         w6::BoardResult br;
         std::string err;
-        const bool ok = w6::runBoard(g_w6 / "images" / u8p("根本没有这张图.png"),
-                                     g_recipes.string(), br, err);
+        const bool ok = w6::runBoard(g_w6 / "images" / utf8path::fromUtf8("根本没有这张图.png"),
+                                     g_recipes, br, err);
         check(!ok, "图不存在必须判不了");
         check(!err.empty(), "图不存在时必须给原因");
     }
@@ -373,7 +440,7 @@ static void test_run_board() {
         w6::BoardResult br;
         std::string err;
         const bool ok = w6::runBoard(g_w6 / "images" / "baseline.png",
-                                     (g_w6 / u8p("根本没有这个目录")).string(),
+                                     (g_w6 / utf8path::fromUtf8("根本没有这个目录")),
                                      br, err);
         check(!ok, "配方目录不对时必须判不了");
         check(!err.empty(), "配方目录不对时必须给原因");
@@ -406,7 +473,7 @@ static void test_non_ascii_filename() {
     // 拿一张**真的**板子当素材 —— 空白图判不出东西(会被当成拒绝判定),
     // 那样测的就不是"文件名编码",而是"图对不对"了。
     const fs::path src = g_w6 / "images" / "complex" / "power_baseline.png";
-    const fs::path png = dir / u8p("测试板.png");
+    const fs::path png = dir / utf8path::fromUtf8("测试板.png");
     check(copyFileTo(src, png), "复制出中文名的板子");
     check(fs::exists(png), "中文名的板子真在磁盘上");
 
@@ -426,7 +493,7 @@ static void test_non_ascii_filename() {
 
     // --- (b) 批量报告里被"判",不是被"跳过" ---
     {
-        const w6::ReportResult rep = w6::runReport(dir, g_recipes.string(), false);
+        const w6::ReportResult rep = w6::runReport(dir, g_recipes, false);
         check(rep.boardCount == 1,
               "中文名板子被判了 1 块(实际 " + std::to_string(rep.boardCount) + ")");
         check(rep.skipCount == 0,
@@ -582,7 +649,7 @@ static void test_rows_from_board() {
             w6::BoardResult br;
             std::string err;
             if (!w6::runBoard(g_w6 / "images" / "complex" / file,
-                              g_recipes.string(), br, err)) {
+                              g_recipes, br, err)) {
                 check(false, kind + "/" + file + " 能判:" + err);
                 continue;
             }
@@ -615,7 +682,7 @@ static void test_run_report() {
     beginCase("批量报告:递归、相对路径、跳过必须报出来");
 
     const fs::path images = g_w6 / "images";
-    const w6::ReportResult rep = w6::runReport(images, g_recipes.string(), false);
+    const w6::ReportResult rep = w6::runReport(images, g_recipes, false);
 
     // --- 数量对账:判过的 + 跳过的 = 目录里 PNG 的总数 ---
     //
@@ -704,7 +771,7 @@ static void test_run_report() {
         writePng(overlay / "w6_inspect_probe.png", blank);
 
         const w6::ReportResult o =
-            w6::runReport(overlay, g_recipes.string(), false);
+            w6::runReport(overlay, g_recipes, false);
         check(o.skipCount == 1,
               "inspect 的叠加图被跳过,没被当成板子判(实际跳过 " +
               std::to_string(o.skipCount) + " 张)");
@@ -741,7 +808,7 @@ static void test_run_report() {
         writePng(orphan / "a.png", blank);
         writePng(orphan / "b.png", blank);
 
-        const w6::ReportResult o = w6::runReport(orphan, g_recipes.string(), false);
+        const w6::ReportResult o = w6::runReport(orphan, g_recipes, false);
         check(o.boardCount == 0, "没有真值表的目录 -> 一块板都不判");
         check(o.skipCount == 2, "两张图都记成跳过(实际 " +
               std::to_string(o.skipCount) + ")");
@@ -772,7 +839,7 @@ static void test_write_csv() {
     b.component = "C1"; b.defect = "wrong"; b.description = "本体错色";
     b.result = "FAIL";
 
-    check(w6::writeCSVReport(csv.string(), {a, b}, true), "写 CSV 成功");
+    check(w6::writeCSVReport(csv, {a, b}, true), "写 CSV 成功");
 
     const auto lines = readCsv(csv);
     check(lines.size() == 3, "表头 + 2 行 = 3 行(实际 " +
@@ -799,7 +866,7 @@ static void test_write_csv() {
     {
         w6::ReportRow c = a;
         c.component = "U1";
-        check(w6::writeCSVReport(csv.string(), {c}, false), "追加 CSV 成功");
+        check(w6::writeCSVReport(csv, {c}, false), "追加 CSV 成功");
         const auto lines2 = readCsv(csv);
         check(lines2.size() == 4, "追加后是 4 行(实际 " +
               std::to_string(lines2.size()) + ")");
@@ -816,7 +883,7 @@ static void test_write_csv() {
     {
         const fs::path csv2 = dir / "empty.csv";
         fs::remove(csv2);
-        check(w6::writeCSVReport(csv2.string(), {}, true), "写空报告成功");
+        check(w6::writeCSVReport(csv2, {}, true), "写空报告成功");
         const auto lines3 = readCsv(csv2);
         check(lines3.size() == 1, "一张行都没有时也要写表头(实际 " +
               std::to_string(lines3.size()) + " 行)");
@@ -852,8 +919,8 @@ static void test_read_codes() {
     beginCase("读码:没读 / 读了但是空,必须分得开;失败必须报出来");
 
     const fs::path qrImg = g_root / "W5_OCR_QRCode" / "images" / "qrcode_test.png";
-    const cv::Mat img = cv::imread(qrImg.string(), cv::IMREAD_COLOR);
-    check(!img.empty(), "读得到 " + qrImg.string());
+    const cv::Mat img = w6::loadImage(qrImg);
+    check(!img.empty(), "读得到 " + utf8path::text(qrImg));
     if (img.empty()) return;
 
     // --- QR 内容对 ---
@@ -874,11 +941,22 @@ static void test_read_codes() {
 
     // --- 指定一个不存在的 tesseract -> 必须失败并说清楚 ---
     {
-        const std::string bogus = "D:/绝对不存在的路径/tesseract.exe";
+        // ⚠ 这里以前是 `const std::string bogus = "D:/绝对不存在的路径/..."`,
+        //   然后直接喂给 readBoardCodes()。
+        //   API 改成 fs::path 之后,**隐式**转换还在:
+        //   fs::path(const std::string&) 按 **ACP** 解释那段窄串,
+        //   于是路径当场被拆成 GBK 字节 —— 错误消息里写的是
+        //   「D:/缁濆涓嶅瓨鍦ㄧ殑璺緞/tesseract.exe」。
+        //   本机 ACP=936 把 24 字节 UTF-8 读成 12 个汉字,
+        //   runner 的 ACP=1252 读成 24 个 Latin-1 字符 ——
+        //   **两台机器都错**,只是本机错得"像是对的"。
+        //   现在窄串一律先走 utf8path::fromUtf8()(唯一的一处定义),
+        //   而 w6_cli.h 里的守卫会**让这种写法编译不过**。
+        const fs::path bogus = utf8path::fromUtf8("D:/绝对不存在的路径/tesseract.exe");
         const w6::BoardCodes c = w6::readBoardCodes(img, true, bogus);
         check(!c.silkRead, "tesseract 不存在 -> silkRead=false");
         check(c.silk.empty(), "tesseract 不存在 -> 没有返回任何文字");
-        check(c.silkError.find(bogus) != std::string::npos,
+        check(c.silkError.find(utf8path::text(bogus)) != std::string::npos,
               "失败原因里写明了路径(实际 \"" + c.silkError + "\")");
     }
 
@@ -907,10 +985,13 @@ static void test_report_reports_read_failures() {
     beginCase("批量报告:没读成的读取要单列,不能混进 skipped");
 
     const fs::path dir = g_w6 / "images";
-    const std::string bogus = "D:/绝对不存在的路径/tesseract.exe";
+    // 明确按 UTF-8 转 —— 这段中文是源文件里的 UTF-8 字节。
+    // (别用 fs::path(窄串):那是按 ACP 解释,本机读成 12 个汉字、
+    //  runner 读成 24 个 Latin-1 字符 —— 又一个"每台机器都错"的东西。)
+    const fs::path bogus = utf8path::fromUtf8("D:/绝对不存在的路径/tesseract.exe");
 
     const w6::ReportResult rep =
-        w6::runReport(dir, g_recipes.string(), true, bogus);
+        w6::runReport(dir, g_recipes, true, bogus);
 
     check(rep.boardCount > 0, "跑到了板(实际 " + std::to_string(rep.boardCount) + " 块)");
     check(!rep.readFailures.empty(),
@@ -920,7 +1001,7 @@ static void test_report_reports_read_failures() {
         const auto& f = rep.readFailures.front();
         check(!f.file.empty(), "失败项写了是哪张图");
         check(f.what == "silkscreen", "失败项写了读的是什么(实际 \"" + f.what + "\")");
-        check(f.reason.find(bogus) != std::string::npos,
+        check(f.reason.find(utf8path::text(bogus)) != std::string::npos,
               "失败原因里写明了路径(实际 \"" + f.reason + "\")");
     }
 
@@ -935,7 +1016,7 @@ static void test_report_reports_read_failures() {
 
     // --- 开关关着时,不算失败 ---
     {
-        const w6::ReportResult off = w6::runReport(dir, g_recipes.string(), false);
+        const w6::ReportResult off = w6::runReport(dir, g_recipes, false);
         check(off.readFailures.empty(),
               "开关关着 -> 不算读取失败(实际 " +
               std::to_string(off.readFailures.size()) + " 条)");
@@ -952,8 +1033,8 @@ int main() {
     fs::remove_all(tmp);
 
     std::cout << "=== W6 CLI 回归测试 ===" << std::endl;
-    std::cout << "仓库根: " << g_root.string() << std::endl;
-    std::cout << "产物目录: " << tmp.string() << std::endl;
+    std::cout << "仓库根: " << utf8path::text(g_root) << std::endl;
+    std::cout << "产物目录: " << utf8path::text(tmp) << std::endl;
 
     if (!fs::exists(g_w6) || !fs::exists(g_recipes)) {
         check(false, "找得到 W6 数据目录和配方目录");
@@ -967,6 +1048,7 @@ int main() {
     try {
         test_board_kind();
         test_recipe_dir();
+        test_path_encoding_roundtrip();
         test_run_board();
         test_non_ascii_filename();
         test_csv_escape();

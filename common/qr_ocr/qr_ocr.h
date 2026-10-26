@@ -39,8 +39,13 @@
 
 #include <opencv2/core.hpp>
 
+#include <filesystem>
 #include <string>
 #include <vector>
+
+// 路径 <-> UTF-8 文本的**唯一一处定义** + 窄串守卫
+// (守卫宏 UTF8PATH_NO_NARROW_ARG 在这里)。
+#include "utf8_path.h"
 
 namespace qroc {
 
@@ -75,7 +80,11 @@ struct OcrOptions {
 
     // tesseract 可执行文件路径。空 = 自动找(先找显式路径,
     // 再找默认安装位置,再找 PATH)。
-    std::string tesseractPath;
+    //
+    // ⚠ 是 **fs::path** 不是窄串 —— 理由见 common/utf8_path/utf8_path.h:
+    //   窄串承载路径必须先挑编码,而"挑哪个"取决于它从哪来
+    //   (argv 是 ACP,文件读出来的是 UTF-8),迟早有一次挑错。
+    std::filesystem::path tesseractPath;
 
     // 中间产物目录(预处理图 + tesseract 的输出 txt 放这儿)。
     // 空 = 系统临时目录。
@@ -84,7 +93,7 @@ struct OcrOptions {
     //   往里丢中间产物,下一次扫描会把自己的中间产物当成待检板
     //   扫一遍(而且它没有 manifest 登记,会被报成"跳过",
     //   看着像少检了一块板)。
-    std::string workDir;
+    std::filesystem::path workDir;
 
     // 中间文件名前缀(同一目录下多次调用不会互相覆盖)。
     std::string stem = "ocr";
@@ -96,7 +105,7 @@ struct OcrResult {
     std::string error;               // 人话;ok=true 时为空
     cv::Mat preprocessed;            // 预处理后的二值图(教学展示用)
     std::string commandLine;         // 实际调 tesseract 的命令行(教学展示用)
-    std::string usedTesseract;       // 实际用的 tesseract 路径
+    std::filesystem::path usedTesseract;  // 实际用的 tesseract 路径
 };
 
 // 读文字。
@@ -105,13 +114,24 @@ struct OcrResult {
 // 成功但图上没字时 ok=true 且 text 为空 —— 这两件事必须分得开。
 OcrResult readText(const cv::Mat& img, const OcrOptions& opt = OcrOptions());
 
-// 找 tesseract。找到返回路径,找不到返回**空串**。
+// 找 tesseract。找到返回路径,找不到返回**空路径**。
 //
-// ⚠ 找不到就返回空串,不要返回一个"看起来能用"的假路径 ——
+// ⚠ 找不到就返回空路径,不要返回一个"看起来能用"的假路径 ——
 //   那样调用方会拿着假路径去跑,报错信息会指向一个不存在的文件。
-std::string findTesseract(const std::string& explicitPath = std::string());
+//
+// ⚠ 返回的是 **fs::path**,不是窄串(见 common/utf8_path/utf8_path.h)。
+std::filesystem::path findTesseract(
+    const std::filesystem::path& explicitPath = std::filesystem::path());
+
+// 窄串守卫:传 std::string / "字面串" 进来**编译不过**
+// (理由见 common/utf8_path/utf8_path.h)。
+template <class S, std::enable_if_t<!utf8path::IsPathArg<S>::value, int> = 0>
+std::filesystem::path findTesseract(const S& explicitPath) {
+    static_assert(utf8path::IsPathArg<S>::value, UTF8PATH_ONLY_PATH_MSG);
+    return std::filesystem::path();
+}
 
 // 默认安装位置(仅 Windows)。
-std::string defaultTesseractPath();
+std::filesystem::path defaultTesseractPath();
 
 } // namespace qroc

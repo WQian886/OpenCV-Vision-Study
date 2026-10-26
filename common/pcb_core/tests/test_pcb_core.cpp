@@ -38,6 +38,7 @@
 
 #include "pcb_core.h"
 #include "mini_json.h"
+#include "utf8_path.h"
 
 #include <opencv2/opencv.hpp>
 
@@ -492,7 +493,7 @@ static void test_recipe_validation() {
     {
         BoardRecipe r;
         std::string reason;
-        const bool ok = loadRecipeFile("根本没有这个文件.json", &r, &reason);
+        const bool ok = loadRecipeFile(utf8path::fromUtf8("根本没有这个文件.json"), &r, &reason);
         check(!ok, "读不到文件必须失败");
         check(!reason.empty(), "读不到文件要说原因");
     }
@@ -671,7 +672,7 @@ static void test_end_to_end() {
 
             BoardRecipe recipe;
             std::string reason;
-            const bool loaded = loadRecipeFile((recipes / "demo.json").string(),
+            const bool loaded = loadRecipeFile(recipes / "demo.json",
                                                &recipe, &reason);
             check(loaded, "加载 demo 配方" + (loaded ? "" : ("(" + reason + ")")));
 
@@ -690,7 +691,7 @@ static void test_end_to_end() {
                         ? row[siteCol] : std::string();
 
                 const cv::Mat img =
-                    cv::imread((w6 / "images" / file).string(), cv::IMREAD_COLOR);
+                    cv::imread(utf8path::text(w6 / "images" / file), cv::IMREAD_COLOR);
                 if (img.empty()) {
                     check(false, "读得到 " + file);
                     continue;
@@ -873,12 +874,12 @@ static void test_end_to_end() {
 
                 BoardRecipe recipe;
                 std::string reason;
-                if (!loadRecipeFile((recipes / (kind + ".json")).string(),
+                if (!loadRecipeFile(recipes / utf8path::fromUtf8(kind + ".json"),
                                     &recipe, &reason)) {
                     check(false, kind + " 配方加载失败:" + reason);
                     continue;
                 }
-                const cv::Mat img = cv::imread((cdir / file).string(), cv::IMREAD_COLOR);
+                const cv::Mat img = cv::imread(utf8path::text(cdir / file), cv::IMREAD_COLOR);
                 if (img.empty()) {
                     check(false, "读得到 " + file);
                     continue;
@@ -1036,7 +1037,7 @@ static void test_short_needs_pads() {
 
     const fs::path w6 = g_root / "W6_PCB_DefectProject";
     const cv::Mat img =
-        cv::imread((w6 / "images" / "baseline.png").string(), cv::IMREAD_COLOR);
+        cv::imread(utf8path::text(w6 / "images" / "baseline.png"), cv::IMREAD_COLOR);
     check(!img.empty(), "读得到 baseline.png");
     if (img.empty()) return;
 
@@ -1130,7 +1131,7 @@ static void test_insufficient_needs_pads() {
 
     const fs::path w6 = g_root / "W6_PCB_DefectProject";
     const cv::Mat img =
-        cv::imread((w6 / "images" / "baseline.png").string(), cv::IMREAD_COLOR);
+        cv::imread(utf8path::text(w6 / "images" / "baseline.png"), cv::IMREAD_COLOR);
     check(!img.empty(), "读得到 baseline.png");
     if (img.empty()) return;
 
@@ -1218,7 +1219,7 @@ int main() {
     g_root = findRepoRoot();
 
     std::cout << "=== common/pcb_core 回归测试 ===" << std::endl;
-    std::cout << "仓库根: " << g_root.string() << std::endl;
+    std::cout << "仓库根: " << utf8path::text(g_root) << std::endl;
 
     test_mini_json();
     test_recipe_validation();

@@ -39,6 +39,8 @@
 
 #include "qr_ocr.h"
 
+#include "utf8_path.h"
+
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 
@@ -125,8 +127,8 @@ static void test_qr() {
     // --- 图上有 QR ---
     {
         const fs::path img = g_root / "W5_OCR_QRCode" / "images" / "qrcode_test.png";
-        const cv::Mat m = cv::imread(img.string(), cv::IMREAD_COLOR);
-        check(!m.empty(), "读得到 " + img.string());
+        const cv::Mat m = cv::imread(utf8path::text(img), cv::IMREAD_COLOR);
+        check(!m.empty(), "读得到 " + utf8path::text(img));
         if (m.empty()) return;
 
         const QrResult r = readQr(m);
@@ -173,31 +175,31 @@ static void test_find_tesseract() {
     //   偷换 = 拿另一个程序跑出来的结果,调用方却以为是自己指定的那个。
     //   静默换人比找不到更难查。
     {
-        const std::string bogus = "D:/绝对不存在的路径/tesseract.exe";
+        const fs::path bogus = utf8path::fromUtf8("D:/绝对不存在的路径/tesseract.exe");
         check(findTesseract(bogus).empty(),
               "显式指定的不存在路径 -> 返回空串,而不是悄悄换成默认的那个");
     }
 
     // --- 显式指定一个真实存在的路径 ---
     {
-        const std::string real = findTesseract();
+        const fs::path real = findTesseract();
         if (real.empty()) {
             skip("显式指定真实路径时原样返回",
                  "本机没装 tesseract,没有可指定的真实路径");
         } else {
             check(findTesseract(real) == real,
-                  "显式指定真实路径时原样返回(\"" + real + "\")");
+                  "显式指定真实路径时原样返回(\"" + utf8path::text(real) + "\")");
         }
     }
 
     // --- 自动找 ---
     {
-        const std::string found = findTesseract();
+        const fs::path found = findTesseract();
         if (found.empty()) {
             skip("自动找 tesseract", "本机没装 tesseract(这本身是允许的)");
-            std::cout << "         装的路径是 " << defaultTesseractPath() << std::endl;
+            std::cout << "         装的路径是 " << utf8path::text(defaultTesseractPath()) << std::endl;
         } else {
-            check(fs::exists(found), "自动找到的路径真的存在(\"" + found + "\")");
+            check(fs::exists(found), "自动找到的路径真的存在(\"" + utf8path::text(found) + "\")");
         }
     }
 }
@@ -221,17 +223,17 @@ static void test_ocr() {
 
     // --- 显式指定一个不存在的 tesseract ---
     {
-        const std::string bogus = "D:/绝对不存在的路径/tesseract.exe";
+        const fs::path bogus = utf8path::fromUtf8("D:/绝对不存在的路径/tesseract.exe");
         OcrOptions opt;
         opt.tesseractPath = bogus;
-        opt.workDir = (fs::temp_directory_path() / "qroc_test_bogus").string();
+        opt.workDir = fs::temp_directory_path() / "qroc_test_bogus";
 
-        const cv::Mat m = cv::imread(img.string(), cv::IMREAD_COLOR);
+        const cv::Mat m = cv::imread(utf8path::text(img), cv::IMREAD_COLOR);
         if (!m.empty()) {
             const OcrResult r = readText(m, opt);
             check(!r.ok, "指定的 tesseract 不存在 -> ok=false(不是悄悄换一个)");
             check(r.text.empty(), "指定的 tesseract 不存在 -> 没有返回任何文字");
-            check(contains(r.error, bogus),
+            check(contains(r.error, utf8path::text(bogus)),
                   "错误消息里写明了**用的是哪个路径**(实际 \"" + r.error + "\")");
             check(contains(r.error, "不会悄悄换"),
                   "错误消息明说不会悄悄换一个(实际 \"" + r.error + "\")");
@@ -246,8 +248,8 @@ static void test_ocr() {
             return;
         }
 
-        const cv::Mat m = cv::imread(img.string(), cv::IMREAD_COLOR);
-        check(!m.empty(), "读得到 " + img.string());
+        const cv::Mat m = cv::imread(utf8path::text(img), cv::IMREAD_COLOR);
+        check(!m.empty(), "读得到 " + utf8path::text(img));
         if (m.empty()) return;
 
         const fs::path work = fs::temp_directory_path() / "qroc_test_work";
@@ -255,7 +257,7 @@ static void test_ocr() {
         fs::remove_all(work, ec);
 
         OcrOptions opt;
-        opt.workDir = work.string();
+        opt.workDir = work;
         opt.stem = "silk_test";
         opt.psm = 11;
 
@@ -271,9 +273,9 @@ static void test_ocr() {
 
         // 中间产物落在**指定的**目录里
         check(fs::exists(work / "silk_test.png"),
-              "预处理图落在 workDir(" + (work / "silk_test.png").string() + ")");
+              "预处理图落在 workDir(" + utf8path::text(work / "silk_test.png") + ")");
         check(fs::exists(work / "silk_test.txt"),
-              "tesseract 的输出落在 workDir(" + (work / "silk_test.txt").string() + ")");
+              "tesseract 的输出落在 workDir(" + utf8path::text(work / "silk_test.txt") + ")");
 
         // 教学展示用的字段
         check(!r.preprocessed.empty(), "返回了预处理图");
@@ -317,7 +319,7 @@ static void test_workdir_isolation() {
     }
 
     const fs::path img = g_root / "W5_OCR_QRCode" / "images" / "ocr_test.png";
-    const cv::Mat m = cv::imread(img.string(), cv::IMREAD_COLOR);
+    const cv::Mat m = cv::imread(utf8path::text(img), cv::IMREAD_COLOR);
     if (m.empty()) return;
 
     // 故意把 stem 取得很特别,万一落在 CWD 里就能认出来
@@ -330,8 +332,8 @@ static void test_workdir_isolation() {
     //   flaky 至少每次随机,这个是**一次坏掉、永久变红**。
     const std::string stemName = "qroc_should_never_land_here";
     std::error_code ec;
-    fs::remove(fs::path(stemName + ".png"), ec);
-    fs::remove(fs::path(stemName + ".txt"), ec);
+    fs::remove(utf8path::fromUtf8(stemName + ".png"), ec);
+    fs::remove(utf8path::fromUtf8(stemName + ".txt"), ec);
 
     OcrOptions opt;
     opt.stem = stemName;
@@ -346,14 +348,14 @@ static void test_workdir_isolation() {
 
     const fs::path tmp = fs::temp_directory_path() / "qroc_ocr";
     check(fs::exists(tmp / (stemName + ".png")),
-          "中间产物落在系统临时目录(" + tmp.string() + ")");
+          "中间产物落在系统临时目录(" + utf8path::text(tmp) + ")");
 }
 
 int main() {
     g_root = findRepoRoot();
 
     std::cout << "=== common/qr_ocr 回归测试 ===" << std::endl;
-    std::cout << "仓库根: " << g_root.string() << std::endl;
+    std::cout << "仓库根: " << utf8path::text(g_root) << std::endl;
 
     test_qr();
     test_find_tesseract();

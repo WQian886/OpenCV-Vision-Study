@@ -1,5 +1,7 @@
 #include "qr_ocr.h"
 
+#include "utf8_path.h"
+
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 // QRCodeDetector 在 objdetect 里,不在 core 里 ——
@@ -10,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -83,9 +86,30 @@ QrResult readQr(const cv::Mat& img) {
 }
 
 // ============================================================
+// 写图(不经 cv::imwrite)
+//
+// ⚠ 为什么不用 cv::imwrite:它内部按 **ANSI 代码页**打开文件,
+//   路径里有非 ASCII 字符时**写不出去**。
+//   而且 imwrite 只返回 false,错误消息里看不出
+//   是"路径编码不对"还是"磁盘满了"还是"格式不支持"。
+//   自己 imencode + 按宽路径写字节,中文路径也能写,
+//   失败原因也说得清。
+// ============================================================
+static bool saveImage(const fs::path& p, const cv::Mat& img) {
+    std::vector<unsigned char> buf;
+    if (!cv::imencode(".png", img, buf)) return false;
+    std::ofstream f(p, std::ios::binary);
+    if (!f) return false;
+    f.write(reinterpret_cast<const char*>(buf.data()),
+            static_cast<std::streamsize>(buf.size()));
+    f.close();
+    return f.good();
+}
+
+// ============================================================
 // tesseract 定位
 // ============================================================
-std::string defaultTesseractPath() {
+fs::path defaultTesseractPath() {
 #ifdef _WIN32
     // ⚠ 路径不能写死成**某一台机器**的事实。
     //
@@ -107,15 +131,16 @@ std::string defaultTesseractPath() {
     };
     std::error_code ec;
     for (const char* c : kCandidates) {
-        if (fs::exists(fs::path(c), ec) && !ec) return std::string(c);
+        const fs::path p(c);
+        if (fs::exists(p, ec) && !ec) return p;
     }
-    return std::string(kCandidates[0]);
+    return fs::path(kCandidates[0]);
 #else
-    return std::string();
+    return fs::path();
 #endif
 }
 
-std::string findTesseract(const std::string& explicitPath) {
+fs::path findTesseract(const fs::path& explicitPath) {
     std::error_code ec;
 
     // 显式指定:存在就用,不存在就**不换**。
@@ -124,13 +149,13 @@ std::string findTesseract(const std::string& explicitPath) {
     //   调用方明确说了"用这个",我们偷偷换一个 = 拿另一个程序去跑,
     //   跑出来的结果调用方以为是它指定的那个。静默换人最阴险。
     if (!explicitPath.empty()) {
-        if (fs::exists(fs::path(explicitPath), ec) && !ec) return explicitPath;
-        return std::string();
+        if (fs::exists(explicitPath, ec) && !ec) return explicitPath;
+        return fs::path();
     }
 
     // 默认安装位置
-    const std::string def = defaultTesseractPath();
-    if (!def.empty() && fs::exists(fs::path(def), ec) && !ec) return def;
+    const fs::path def = defaultTesseractPath();
+    if (!def.empty() && fs::exists(def, ec) && !ec) return def;
 
     // PATH 里找
 #ifdef _WIN32
@@ -140,12 +165,15 @@ std::string findTesseract(const std::string& explicitPath) {
         std::string dir;
         while (std::getline(ss, dir, ';')) {
             if (dir.empty()) continue;
-            fs::path cand = fs::path(dir) / "tesseract.exe";
-            if (fs::exists(cand, ec) && !ec) return cand.string();
+            // ⚠ PATH 是 **ACP** 的(getenv 给的就是 ACP 窄串),
+            //   所以 fs::path(dir) 按 ACP 解释 —— 正好对。
+            //   这里千万别套 utf8path::fromUtf8:那是把对的搞坏。
+            const fs::path cand = fs::path(dir) / "tesseract.exe";
+            if (fs::exists(cand, ec) && !ec) return cand;
         }
     }
 #endif
-    return std::string();
+    return fs::path();
 }
 
 // ============================================================
@@ -178,36 +206,40 @@ OcrResult readText(const cv::Mat& img, const OcrOptions& opt) {
     fs::path workDir;
     std::error_code ec;
     if (!opt.workDir.empty()) {
-        workDir = fs::path(opt.workDir);
+        // opt.workDir 已经是 fs::path —— 不再窄化成字符串,
+        // 也就没有"按哪个代码页解释"的问题了。
+        workDir = opt.workDir;
     } else {
         workDir = fs::temp_directory_path(ec) / "qroc_ocr";
         if (ec) workDir = fs::path(".");
     }
     fs::create_directories(workDir, ec);
     if (ec) {
-        out.error = "中间产物目录建不出来: " + workDir.string() +
+        out.error = "中间产物目录建不出来: " + utf8path::text(workDir) +
                     "(" + ec.message() + ")";
         return out;
     }
 
     const std::string stem = opt.stem.empty() ? std::string("ocr") : opt.stem;
-    const fs::path prePath  = workDir / (stem + ".png");
-    const fs::path outBase  = workDir / stem;
-    const fs::path outTxt   = workDir / (stem + ".txt");
+    const fs::path prePath  = workDir / utf8path::fromUtf8(stem + ".png");
+    const fs::path outBase  = workDir / utf8path::fromUtf8(stem);
+    const fs::path outTxt   = workDir / utf8path::fromUtf8(stem + ".txt");
 
-    if (!cv::imwrite(prePath.string(), thresh)) {
-        out.error = "预处理图写不出去: " + prePath.string();
+    if (!saveImage(prePath, thresh)) {
+        out.error = "预处理图写不出去: " + utf8path::text(prePath);
         return out;
     }
 
     // --- 3. 找 tesseract ---
-    const std::string exe = findTesseract(opt.tesseractPath);
+    const fs::path exe = findTesseract(opt.tesseractPath);
     if (exe.empty()) {
         if (!opt.tesseractPath.empty()) {
-            out.error = "指定的 tesseract 路径不存在: " + opt.tesseractPath +
+            out.error = "指定的 tesseract 路径不存在: " +
+                        utf8path::text(opt.tesseractPath) +
                         " —— 不会悄悄换一个来跑";
         } else {
-            out.error = "没找到 tesseract(试过 " + defaultTesseractPath() +
+            out.error = "没找到 tesseract(试过 " +
+                        utf8path::text(defaultTesseractPath()) +
                         " 和 PATH 里的 tesseract.exe)—— 装 Tesseract-OCR 才能读文字";
         }
         return out;
@@ -219,9 +251,13 @@ OcrResult readText(const cv::Mat& img, const OcrOptions& opt) {
     //
     // 用 CreateProcessW 而不是 system():tesseract 的路径里有空格,
     // system() 会把它切成两半。
-    const std::wstring wExe    = utf8ToWide(exe);
-    const std::wstring wPre    = utf8ToWide(prePath.string());
-    const std::wstring wBase   = utf8ToWide(outBase.string());
+    //
+    // ⚠ 路径已经是 fs::path(宽字符)了,直接取 wstring ——
+    //   以前是 utf8ToWide(窄串),而那个窄串是 .string() 窄化出来的,
+    //   ACP=1252 的机器上**直接抛异常**。
+    const std::wstring wExe    = exe.wstring();
+    const std::wstring wPre    = prePath.wstring();
+    const std::wstring wBase   = outBase.wstring();
     const std::wstring wLang   = utf8ToWide(opt.lang);
     const std::wstring cmdLine = L"\"" + wExe + L"\" \"" + wPre + L"\" \"" +
                                  wBase + L"\" -l " + wLang + L" --psm " +
@@ -255,7 +291,7 @@ OcrResult readText(const cv::Mat& img, const OcrOptions& opt) {
     // --- 5. 读结果 ---
     std::ifstream f(outTxt);
     if (!f) {
-        out.error = "tesseract 跑完了但没产出 " + outTxt.string();
+        out.error = "tesseract 跑完了但没产出 " + utf8path::text(outTxt);
         return out;
     }
     std::string all, line;

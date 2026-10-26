@@ -35,12 +35,19 @@ add_executable(w5_ocr_qrcode ${SOURCES})
 # ============================================================
 set(QR_OCR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../common/qr_ocr")
 
+# 路径 <-> UTF-8 文本的**唯一一处定义**(纯头文件,没有 .cpp)。
+# 共享核心里凡是要把路径变成文本(写 CSV / 拼错误消息),
+# 或者把 UTF-8 文本变成路径,都走这一个头。
+# 约定本身写在 utf8_path.h 的注释里 —— 为什么"窄串不承载路径"。
+set(UTF8_PATH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../common/utf8_path")
+
 add_library(w5_qr_ocr STATIC
     ${QR_OCR_DIR}/qr_ocr.cpp
 )
 
 target_include_directories(w5_qr_ocr PUBLIC
     ${QR_OCR_DIR}
+    ${UTF8_PATH_DIR}
     ${OpenCV_INCLUDE_DIRS}
 )
 

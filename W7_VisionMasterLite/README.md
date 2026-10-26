@@ -58,10 +58,12 @@
 > **第九笔把「CI 在真 runner 上跑过」这件事做掉了** ——
 > 2026-10-26 仓库建了 remote(`WQian886/OpenCV-Vision-Study`),
 > `windows-2022` 上真的跑起来了,顺带把**欠账 9** 结清 → **已收 14 / 未收 5**。
-> 真跑还挖出**三件「只有这台机器成立」**的东西:
+> 真跑还挖出**四件「只有这台机器成立」**的东西:
 > W1–W4 的空 `images/` **不在 git 里**(干净克隆上 build 挂)、
 > **Qt 的 DLL 不在 PATH 上**(链接过了但 exe 起不来)、
-> **tesseract 的 PATH 只写在 YAML 里**(本地彩排根本没做这件事)——三件都修掉了。
+> **tesseract 的 PATH 只写在 YAML 里**(本地彩排根本没做这件事)、
+> **ACP 把同一份代码判成两回事**(`path::string()` 严格窄化:字符在 ACP 里
+> 表示不出来就抛 1113;本机 GBK 有中文所以绿,runner 的 Latin-1 没有就炸)——四件都修掉了。
 > 详见 [notes_CI_FirstRunnerRun_2026-10.md](../notes/notes_CI_FirstRunnerRun_2026-10.md)。
 
 ## 🎯 学习目标

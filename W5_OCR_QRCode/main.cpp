@@ -117,7 +117,11 @@ static void runOCR() {
     // images/ 是"待检图"的目录,往里丢中间产物,下一次扫描会把自己的
     // 中间产物当成待检样本扫一遍(而且它没有 manifest 登记,
     // 会被报成"跳过",看着像少检了一块板)。
-    opt.workDir = "out/ocr";
+    // ⚠ 写成 fs::path(...),不是裸窄串 ——
+    //   成员赋值不走函数调用,编译器拦不住窄串(见 utf8_path.h 的「局限」),
+    //   所以这一处得**自己**写清楚:这是路径,不是文本。
+    //   (纯 ASCII 所以现在两种写法结果一样;但规矩得是规矩。)
+    opt.workDir = std::filesystem::path("out/ocr");
     opt.stem = "w5_ocr";
 
     const qroc::OcrResult r = qroc::readText(img, opt);

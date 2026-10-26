@@ -1,6 +1,7 @@
 #include "pcb_core.h"
 #include "pcb_color_ref.h"
 #include "mini_json.h"
+#include "utf8_path.h"
 
 #include <algorithm>
 #include <cmath>
@@ -530,10 +531,14 @@ bool parseRecipeJson(const std::string& text, BoardRecipe* out, std::string* rea
     return true;
 }
 
-bool loadRecipeFile(const std::string& path, BoardRecipe* out, std::string* reason) {
+bool loadRecipeFile(const std::filesystem::path& path, BoardRecipe* out, std::string* reason) {
+    // ⚠ ifstream 收 **fs::path** 时,MSVC 走宽字符 API ——
+    //   路径里有中文也开得到。
+    //   收窄串时它按 **ACP** 解释,于是"UTF-8 的路径"会被当成别的字符,
+    //   文件读不到,而且错误消息里只说"读不到",看不出是编码的事。
     std::ifstream f(path, std::ios::binary);
     if (!f) {
-        if (reason) *reason = "读不到配方文件 " + path;
+        if (reason) *reason = "读不到配方文件 " + utf8path::text(path);
         return false;
     }
     std::ostringstream ss;
@@ -542,7 +547,7 @@ bool loadRecipeFile(const std::string& path, BoardRecipe* out, std::string* reas
     f.close();
 
     if (!parseRecipeJson(text, out, reason)) {
-        if (reason) *reason = "配方 " + path + ": " + *reason;
+        if (reason) *reason = "配方 " + utf8path::text(path) + ": " + *reason;
         return false;
     }
     return true;
