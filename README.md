@@ -151,7 +151,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 29 份 + 76 张 atomic 卡，~1004 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 29 份 + 77 张 atomic 卡，~1008 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -183,7 +183,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_W7_SuiteList_2026-10.md` (13 KB) — 结项之后还的第八笔：**套件名单只有一份**（手抄的那份漂了 8 个名字 → 那 8 个套件的汇总行进了调试通道 → 计数器默默少算了 **567** 条断言）+ **计数的数不许比真值小而不说话**（CI 从「红」到「绿」的一笔）
 - `notes_CI_FirstRunnerRun_2026-10.md` (16 KB) — 结项之后还的第九笔：**CI 第一次在真 runner 上跑**（欠账 9 收口）——真跑挖出四件「只有这台机器成立」的东西：空目录不在 git 里 / Qt 的 DLL 不在 PATH 上 / tesseract 的 PATH 只写在 YAML 里 / **ACP 把同一份代码判成两回事**（`.string()` 严格窄化：字符在 ACP 里表示不出来就抛 1113）
 
-`notes/atomic/` 里是**单条教训卡片**（76 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（77 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -248,7 +248,7 @@ OpenCV/
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 核对文档里的数 + 检查源码树没被写脏
 ├── tools/check-doc-numbers.ps1  # 文档里每个「当前事实」的数 ↔ 实测（期望值从文档读）
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（29 份 + 76 张 atomic 卡）
+├── notes/                 # 变更日志（29 份 + 77 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -273,7 +273,7 @@ OpenCV/
   > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
   > 连最接近的 ANSI 口径（33,368）也对不上。
   > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
-- 29 份变更日志 + 76 张 atomic 卡 / ~1004 KB
+- 29 份变更日志 + 77 张 atomic 卡 / ~1008 KB
 - **29 个无头回归测试 / 2853 条断言**（W7 26 个 / 2371，W6 3 个 / 482；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
