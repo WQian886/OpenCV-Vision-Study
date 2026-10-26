@@ -24,7 +24,18 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../common/cmake/ThirdParty.cmake)
 find_package(OpenCV REQUIRED)
 
 # ===== 源文件（跟 hmi 工程一样显式列出）=====
-set(SOURCES main.cpp)
+#
+# pixel_ops.cpp **链进两个目标**（demo 和测试），一份源码两个用法。
+#
+# 为什么不是"测试里再抄一遍判据"：
+#   抄出来的副本会随核心漂移 —— 改了判据，测试还在按旧判据断言，
+#   于是测试「绿着」而 demo 已经变了。绿灯什么也没证明。
+#
+# 仓库里已有同样的做法：W6 的 w6_cli.cpp、W2 的 color_pipeline.cpp。
+set(SOURCES
+    main.cpp
+    pixel_ops.cpp
+)
 
 add_executable(w1_imageio ${SOURCES})
 
@@ -58,3 +69,49 @@ add_custom_command(TARGET w1_imageio POST_BUILD
         $<TARGET_FILE_DIR:w1_imageio>
     COMMENT "Copying OpenCV DLLs to output directory"
 )
+
+# ============================================================
+# === 无头回归测试（2026-10-26 新增）
+#
+# W1–W5 在这一天之前**一条自动化测试都没有**。
+# 补法不是"给 main.cpp 加个开关"，而是把纯逻辑抽出来再测它 ——
+# 见 pixel_ops.h 的开头为什么有这一层。
+#
+# 这个套件会往**工作目录**写一个 PNG 再读回来（验证存盘/读盘这一链），
+# 所以工作目录必须存在，而且必须在 **build/** 里 ——
+# 源码树一个字节都不许变（CI 的最后一步就查这个）。
+# ============================================================
+enable_testing()
+
+add_executable(w1_imageio_test
+    tests/test_w1_imageio.cpp
+    pixel_ops.cpp
+)
+
+target_include_directories(w1_imageio_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(w1_imageio_test PRIVATE ${OpenCV_LIBS})
+
+if(MSVC)
+    target_compile_options(w1_imageio_test PRIVATE /utf-8)
+endif()
+
+add_custom_command(TARGET w1_imageio_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${OpenCV_BIN_DIR}
+        $<TARGET_FILE_DIR:w1_imageio_test>
+    COMMENT "Copying OpenCV DLLs to test output directory"
+)
+
+# 工作目录必须在 configure 期就建好：
+# ctest 遇到不存在的工作目录会直接报 "Unable to find executable"，
+# 那是一条和测试本身无关的红 —— 看起来像代码坏了，其实一个测试都没跑。
+set(W1_TEST_WORK "${CMAKE_CURRENT_BINARY_DIR}/test_work/w1_imageio")
+file(MAKE_DIRECTORY "${W1_TEST_WORK}")
+
+add_test(NAME w1_imageio
+         COMMAND w1_imageio_test
+         WORKING_DIRECTORY "${W1_TEST_WORK}")

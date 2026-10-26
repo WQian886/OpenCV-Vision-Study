@@ -141,31 +141,20 @@
 ////    return 0;
 ////}
 // exercises/ex3_blue2black.cpp
+//
+// ⚠ 判据和遍历**不在这个文件里** —— 它们在 pixel_ops.{h,cpp}。
+// main.cpp 和 tests/test_w1_imageio.cpp 调的是**同一份**实现。
+// 原因见 pixel_ops.h 的开头（2026-10-26 补测试时抽出来的）。
+#include "pixel_ops.h"
 #include <opencv2/opencv.hpp>
 #include <iostream>
 
 int main() {
     // 生成测试图:左半浅蓝,右半浅红,中间一条蓝带
-    cv::Mat img(300, 400, CV_8UC3, cv::Scalar(255, 255, 255));
-    img(cv::Rect(0, 0, 200, 300)).setTo(cv::Scalar(200, 100, 100)); // 浅蓝(B=200)
-    img(cv::Rect(200, 100, 200, 100)).setTo(cv::Scalar(220, 80, 80));  // 深蓝带
+    cv::Mat out = w1::makeEx3Image();
 
-    cv::Mat out = img.clone();
-    int blackCount = 0;
-
-    // 🔥 核心:遍历 + at<Vec3b>(y, x)
-    for (int y = 0; y < out.rows; ++y) {
-        for (int x = 0; x < out.cols; ++x) {
-            cv::Vec3b& px = out.at<cv::Vec3b>(y, x);
-            // 只涂"真正蓝色": B 高 + G/R 低
-            // 白色 B=255 但 G=R=255 → 被排除
-            // 浅蓝 B=200,G=100,R=100 → 涂黑 ✅
-            if (px[0] > 100 && px[1] < 150 && px[2] < 150) {
-                px = cv::Vec3b(0, 0, 0);  // 涂黑
-                ++blackCount;
-            }
-        }
-    }
+    // 🔥 核心:遍历 + at<Vec3b>(y, x) + 「什么算蓝」的判据
+    const int blackCount = w1::paintBlueToBlack(out);
 
     cv::imwrite("images/ex3_blue2black.png", out);
     cv::imshow("Ex3: Blue > 100 -> Black", out);

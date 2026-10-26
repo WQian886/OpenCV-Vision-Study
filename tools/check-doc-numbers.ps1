@@ -149,7 +149,9 @@ if ($Measured.Count -eq 0) {
 
 $W7Proj = 'W7_VisionMasterLite'
 $W6Proj = 'W6_PCB_DefectProject'
-foreach ($p in @($W7Proj, $W6Proj)) {
+$W2Proj = 'W2_ColorFilter'
+$W1Proj = 'W1_ImageIO'
+foreach ($p in @($W7Proj, $W6Proj, $W2Proj, $W1Proj)) {
     if (-not $Measured.ContainsKey($p)) {
         Fail "the per-suite file has no entry for project '$p'"
     }
@@ -158,15 +160,40 @@ if ($Failures.Count -gt 0) { Write-Host ""; Write-Host "DOC NUMBERS FAILED" -For
 
 $W7 = $Measured[$W7Proj]
 $W6 = $Measured[$W6Proj]
+$W2 = $Measured[$W2Proj]
+$W1 = $Measured[$W1Proj]
 $W7Suites = $W7.Count
 $W6Suites = $W6.Count
+$W2Suites = $W2.Count
+$W1Suites = $W1.Count
 $W7Asserts = ($W7.Values | Measure-Object -Sum).Sum
 $W6Asserts = ($W6.Values | Measure-Object -Sum).Sum
-$AllSuites = $W7Suites + $W6Suites
-$AllAsserts = $W7Asserts + $W6Asserts
+$W2Asserts = ($W2.Values | Measure-Object -Sum).Sum
+$W1Asserts = ($W1.Values | Measure-Object -Sum).Sum
+$AllSuites = $W7Suites + $W6Suites + $W2Suites + $W1Suites
+$AllAsserts = $W7Asserts + $W6Asserts + $W2Asserts + $W1Asserts
+
+# Where each project's per-suite table lives.
+#
+# The table is checked in the README of the project that OWNS the suite,
+# not in one central place -- because the table is written next to the
+# code it describes, and that is where it will be kept honest.
+#
+# (2026-10-26: W1 and W2 got their first suites, so they joined this list.
+#  A project that gains a suite must gain a row here, or its table will
+#  silently stop being checked -- which is the same disease as the table
+#  not existing at all.)
+$SuiteProjects = @(
+    @{ Project = $W7Proj; Readme = 'W7_VisionMasterLite/README.md' }
+    @{ Project = $W6Proj; Readme = 'W6_PCB_DefectProject/README.md' }
+    @{ Project = $W2Proj; Readme = 'W2_ColorFilter/README.md' }
+    @{ Project = $W1Proj; Readme = 'W1_ImageIO/README.md' }
+)
 
 Write-Host ("   measured (build): {0} {1} suites / {2} assertions" -f $W7Proj, $W7Suites, $W7Asserts)
 Write-Host ("   measured (build): {0} {1} suites / {2} assertions" -f $W6Proj, $W6Suites, $W6Asserts)
+Write-Host ("   measured (build): {0} {1} suites / {2} assertions" -f $W2Proj, $W2Suites, $W2Asserts)
+Write-Host ("   measured (build): {0} {1} suites / {2} assertions" -f $W1Proj, $W1Suites, $W1Asserts)
 Write-Host ("   measured (build): TOTAL {0} suites / {1} assertions" -f $AllSuites, $AllAsserts)
 
 # ------------------------------------------------------------------
@@ -235,49 +262,74 @@ Write-Host ("   measured (tree) : {0} C++ files / {1} lines" -f $CppFiles, $CppL
 Write-Host ("   measured (tree) : {0} notes + {1} atomic cards / {2} KB" -f $NoteFiles, $AtomicFiles, $NoteKB)
 
 # ------------------------------------------------------------------
-# 3. The strong check: the per-suite table
+# 3. The strong check: the per-suite tables
 # ------------------------------------------------------------------
 # This is the one that catches "the total is right but the distribution
-# is wrong". The table in W7_VisionMasterLite/README.md is the single
-# place where every suite's count is written down.
+# is wrong". Every project that has suites carries its own per-suite
+# table in its own README, and each one is checked against what the
+# build just measured.
+#
+# 2026-10-26: this used to check W7's table ONLY. W6's table said
+# 180/36/163 (=379) while the build said 279/36/167 (=482) -- the total
+# was right and the distribution was wrong, and nobody noticed, because
+# nobody was looking at that table.
+#
+#   => A table that nobody checks is a table that drifts.
 Write-Host ""
-Write-Host "   -- per-suite table (W7_VisionMasterLite/README.md)"
+Write-Host "   -- per-suite tables (one per project)"
 
-$w7Readme = Get-DocLines 'W7_VisionMasterLite/README.md'
-$DocRows = @{}
-foreach ($line in $w7Readme) {
-    $m = [regex]::Match($line, '^\|\s*`([A-Za-z0-9_]+)`\s*\|\s*(\d+)\s*\|')
-    if ($m.Success) { $DocRows[$m.Groups[1].Value] = [int]$m.Groups[2].Value }
-}
+foreach ($pt in $SuiteProjects) {
+    $proj = $pt.Project
+    # ⚠ NOT `$measured` -- PowerShell variable names are CASE-INSENSITIVE,
+    # so `$measured` and `$Measured` are the SAME variable. Writing
+    # `$measured = $Measured[$proj]` would overwrite the outer table
+    # with the inner one, and the NEXT project would look up its own
+    # name in W7's suite table and get $null.
+    #
+    #   => The variable that holds "the outer table" must not be spelled
+    #      like the variable that holds "one row of the outer table".
+    $projMeasured = $Measured[$proj]
+    $readme = $pt.Readme
+    $before = $Failures.Count
 
-if ($DocRows.Count -eq 0) {
-    Fail ("the per-suite table in W7_VisionMasterLite/README.md was not found." +
-          "`n   The checker's pattern no longer matches the table -- update it here." +
-          "`n   A table that cannot be read is not a table that can be checked.")
-}
-else {
-    if ($DocRows.Count -ne $W7Suites) {
-        Fail ("the per-suite table lists {0} suites, reality has {1}" -f $DocRows.Count, $W7Suites)
+    $docLines = Get-DocLines $readme
+    $DocRows = @{}
+    foreach ($line in $docLines) {
+        $m = [regex]::Match($line, '^\|\s*`([A-Za-z0-9_]+)`\s*\|\s*(\d+)\s*\|')
+        if ($m.Success) { $DocRows[$m.Groups[1].Value] = [int]$m.Groups[2].Value }
     }
-    foreach ($name in ($W7.Keys | Sort-Object)) {
+
+    if ($DocRows.Count -eq 0) {
+        Fail ("the per-suite table in " + $readme + " was not found." +
+              "`n   The checker's pattern no longer matches the table -- update it here." +
+              "`n   A table that cannot be read is not a table that can be checked.")
+        continue
+    }
+
+    $measuredCount = $projMeasured.Count
+    $measuredSum = ($projMeasured.Values | Measure-Object -Sum).Sum
+    if ($DocRows.Count -ne $measuredCount) {
+        Fail ("the per-suite table in " + $readme + " lists {0} suites, reality has {1}" -f $DocRows.Count, $measuredCount)
+    }
+    foreach ($name in ($projMeasured.Keys | Sort-Object)) {
         if (-not $DocRows.ContainsKey($name)) {
-            Fail ("the per-suite table has no row for suite '$name' (reality: {0} assertions)" -f $W7[$name])
+            Fail ("the per-suite table in " + $readme + " has no row for suite '" + $name + "' (reality: " + $projMeasured[$name] + " assertions)")
         }
-        elseif ($DocRows[$name] -ne $W7[$name]) {
-            Fail ("suite '$name': the table says {0} assertions, reality says {1}" -f $DocRows[$name], $W7[$name])
+        elseif ($DocRows[$name] -ne $projMeasured[$name]) {
+            Fail ("suite '" + $name + "' (" + $proj + "): the table says " + $DocRows[$name] + " assertions, reality says " + $projMeasured[$name])
         }
     }
     foreach ($name in ($DocRows.Keys | Sort-Object)) {
-        if (-not $W7.ContainsKey($name)) {
-            Fail "the per-suite table lists a suite '$name' that does not exist"
+        if (-not $projMeasured.ContainsKey($name)) {
+            Fail ("the per-suite table in " + $readme + " lists a suite '" + $name + "' that does not exist")
         }
     }
     $docSum = ($DocRows.Values | Measure-Object -Sum).Sum
-    if ($docSum -ne $W7Asserts) {
-        Fail ("the per-suite table adds up to {0}, reality says {1}" -f $docSum, $W7Asserts)
+    if ($docSum -ne $measuredSum) {
+        Fail ("the per-suite table in " + $readme + " adds up to " + $docSum + ", reality says " + $measuredSum)
     }
-    if ($Failures.Count -eq 0) {
-        Write-Host ("   {0} suites, every row matches, sum = {1}" -f $DocRows.Count, $docSum)
+    if ($Failures.Count -eq $before) {
+        Write-Host ("   {0,-24} {1} suites, every row matches, sum = {2}" -f $proj, $DocRows.Count, $docSum)
     }
 }
 
@@ -362,8 +414,16 @@ $Claims = @(
        Expect = @($W7Suites, $W7Asserts) }
     @{ Label = 'root README: statistics block'
        File  = 'README.md'
-       Pattern = '^\- \*\*(\d+)\D+(\d+)\D+\*\*.*W7 (\d+)\D+(\d+).*W6 (\d+)\D+(\d+)'
-       Expect = @($AllSuites, $AllAsserts, $W7Suites, $W7Asserts, $W6Suites, $W6Asserts) }
+       Pattern = '^\- \*\*(\d+)\D+(\d+)\D+\*\*.*W7 (\d+)\D+(\d+).*W6 (\d+)\D+(\d+).*W2 (\d+)\D+(\d+).*W1 (\d+)\D+(\d+)'
+       Expect = @($AllSuites, $AllAsserts, $W7Suites, $W7Asserts, $W6Suites, $W6Asserts, $W2Suites, $W2Asserts, $W1Suites, $W1Asserts) }
+    @{ Label = 'root README: W2 test bullet'
+       File  = 'README.md'
+       Pattern = '^\- \*\*W2 .*\*\*(\d+)\D+(\d+)\D+\*\*'
+       Expect = @($W2Suites, $W2Asserts) }
+    @{ Label = 'root README: W1 test bullet'
+       File  = 'README.md'
+       Pattern = '^\- \*\*W1 .*\*\*(\d+)\D+(\d+)\D+\*\*'
+       Expect = @($W1Suites, $W1Asserts) }
     @{ Label = 'root README: dl_infer halves'
        File  = 'README.md'
        Pattern = '`dl_infer`.*#else.*\*\*\D+(\d+)\s*/\s*(\d+)\D+'

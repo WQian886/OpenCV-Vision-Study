@@ -6,7 +6,27 @@
 //   3. cv::GaussianBlur / medianBlur / bilateralFilter 三种滤波
 //   4. cv::threshold / adaptiveThreshold 二值化
 //   5. Otsu 自动阈值
+//
 // ============================================================
+//
+// ⚠ 处理链**不在这个文件里** —— 它在 color_pipeline.{h,cpp}。
+//
+// 原因：这一层原本写在 main() 里，外面挂着 imshow 和 10 个 imwrite，
+// 于是它**一条测试都写不了**（无头环境没有显示器，也不能往源码树写东西）。
+// 2026-10-26 把纯逻辑抽出来之后，main.cpp 和
+// tests/test_w2_color_filter.cpp 调的是**同一份**实现。
+//
+// 抽出来之后，本文件只负责三件事：
+//   1. 读图（没有就生成）
+//   2. 把每一环的**结果**打印出来（这是给人看的部分）
+//   3. 保存 + 显示（这是要 GUI 和磁盘的部分）
+//
+// 一条都不许在这里重写一遍 —— 重写就是「抄副本」，
+// 而抄出来的副本会随核心漂移，漂了没人知道。
+//
+// ============================================================
+
+#include "color_pipeline.h"
 
 #include <opencv2/opencv.hpp>
 #include <iostream>
@@ -16,37 +36,6 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
-
-// ============================================================
-// 生成模拟 PCB 的测试图：深绿底色 + 金色元件 + 噪声
-// ============================================================
-static cv::Mat generatePcbLikeImage() {
-    const int W = 640, H = 480;
-    cv::Mat img(H, W, CV_8UC3, cv::Scalar(40, 80, 40));   // 深绿 PCB 底色 (BGR)
-
-    // 8 个金色焊点（黄褐色,模拟铜/金元件）
-    std::vector<cv::Rect> pads = {
-        cv::Rect(50,  100, 80, 80), cv::Rect(200, 100, 80, 80),
-        cv::Rect(350, 100, 80, 80), cv::Rect(500, 100, 80, 80),
-        cv::Rect(50,  300, 80, 80), cv::Rect(200, 300, 80, 80),
-        cv::Rect(350, 300, 80, 80), cv::Rect(500, 300, 80, 80),
-    };
-    for (const auto& p : pads) {
-        cv::rectangle(img, p, cv::Scalar(60, 180, 220), -1);  // 金黄色填充 (BGR)
-    }
-
-    // 中央文字
-    cv::putText(img, "W2 Color Filter Test",
-                cv::Point(150, 240), cv::FONT_HERSHEY_SIMPLEX,
-                0.8, cv::Scalar(200, 200, 200), 2);
-
-    // 加点噪声(模拟传感器噪声,让滤波有"事可做")
-    cv::Mat noise(img.size(), CV_16SC3);
-    cv::randn(noise, cv::Scalar::all(0), cv::Scalar::all(25));
-    cv::add(img, noise, img, cv::noArray(), CV_8UC3);
-
-    return img;
-}
 
 // ============================================================
 // 把 3 张图横向拼成 1 张,方便对比展示
@@ -69,7 +58,7 @@ int main() {
     cv::Mat img = cv::imread(imgPath, cv::IMREAD_COLOR);
     if (img.empty()) {
         std::cout << "[提示] " << imgPath << " 不存在,自动生成 PCB 测试图\n";
-        img = generatePcbLikeImage();
+        img = w2::generatePcbLikeImage();
         cv::imwrite(imgPath, img);
         std::cout << "[提示] 已保存到 " << imgPath << "\n\n";
     }
@@ -80,8 +69,7 @@ int main() {
     // ============ 2. 色彩空间转换 BGR → HSV ============
     // HSV: H(色相 0-179)/ S(饱和度 0-255)/ V(明度 0-255)
     // 电气工程师视角:像把示波器从 XY 切到极坐标模式
-    cv::Mat hsv;
-    cv::cvtColor(img, hsv, cv::COLOR_BGR2HSV);
+    const cv::Mat hsv = w2::toHsv(img);
 
     cv::Mat hsvChannels[3];
     cv::split(hsv, hsvChannels);
@@ -92,24 +80,21 @@ int main() {
     std::cout << "  V 通道(明度):  均值 = " << cv::mean(hsvChannels[2])[0] << "\n\n";
 
     // ============ 3. 颜色提取(金色焊点) ============
-    // 金色 HSV 范围:H=10-30(黄到橙),S=100-255(够饱和),V=100-255(够亮)
-    cv::Mat goldMask;
-    cv::inRange(hsv, cv::Scalar(10, 100, 100), cv::Scalar(30, 255, 255), goldMask);
+    // 金色 HSV 范围在 color_pipeline.cpp 里(只有那一份):
+    // H=10-30(黄到橙),S=100-255(够饱和),V=100-255(够亮)
+    const cv::Mat goldMask = w2::goldMask(img);
+    const cv::Mat goldOnly = w2::goldOnly(img);
 
-    cv::Mat goldOnly;
-    cv::bitwise_and(img, img, goldOnly, goldMask);
-
-    int goldPixels = cv::countNonZero(goldMask);
+    const int goldPixels = cv::countNonZero(goldMask);
     std::cout << "===== 颜色提取(金色焊点) =====\n";
     std::cout << "  检测到 " << goldPixels << " 个金色像素\n";
     std::cout << "  占总像素 " << std::fixed << std::setprecision(2)
               << (100.0 * goldPixels / (img.cols * img.rows)) << "%\n\n";
 
     // ============ 4. 滤波对比(去噪) ============
-    cv::Mat blurG, blurM, blurB;
-    cv::GaussianBlur(img, blurG, cv::Size(5, 5), 0);    // 高斯(平滑)
-    cv::medianBlur(img, blurM, 5);                      // 中值(去椒盐)
-    cv::bilateralFilter(img, blurB, 9, 75, 75);         // 双边(保边)
+    const cv::Mat blurG = w2::gaussianBlur(img);
+    const cv::Mat blurM = w2::medianBlur(img);
+    const cv::Mat blurB = w2::bilateralDenoise(img);
 
     // 量化对比:滤波后图像与原图的"差异度"
     auto diffMean = [&](const cv::Mat& filtered) {
@@ -123,22 +108,18 @@ int main() {
     std::cout << "  [双边]  " << diffMean(blurB) << "  (越大说明保边越强)\n\n";
 
     // ============ 5. 灰度化 + 阈值对比 ============
-    cv::Mat gray;
-    cv::cvtColor(img, gray, cv::COLOR_BGR2GRAY);
+    const cv::Mat gray = w2::toGray(img);
 
-    cv::Mat threshBinary, threshAdaptive, threshOtsu;
-    // 全局阈值 127
-    cv::threshold(gray, threshBinary, 127, 255, cv::THRESH_BINARY);
-    // 自适应阈值(邻域均值)
-    cv::adaptiveThreshold(gray, threshAdaptive, 255,
-                          cv::ADAPTIVE_THRESH_MEAN_C, cv::THRESH_BINARY, 11, 2);
-    // Otsu 自动阈值(自动找最佳分割点)
-    cv::threshold(gray, threshOtsu, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
+    const cv::Mat threshBinary = w2::thresholdFixed(gray);
+    const cv::Mat threshAdaptive = w2::thresholdAdaptive(gray);
+    double otsuThresh = 0;
+    const cv::Mat threshOtsu = w2::thresholdOtsu(gray, &otsuThresh);
 
     std::cout << "===== 阈值对比(前景像素数) =====\n";
     std::cout << "  [全局@127]   " << cv::countNonZero(threshBinary) << "\n";
     std::cout << "  [自适应]     " << cv::countNonZero(threshAdaptive) << "\n";
-    std::cout << "  [Otsu 自动]  " << cv::countNonZero(threshOtsu) << "\n\n";
+    std::cout << "  [Otsu 自动]  " << cv::countNonZero(threshOtsu)
+              << "  (Otsu 选的阈值 = " << otsuThresh << ")\n\n";
 
     // ============ 6. 保存所有输出 ============
     cv::imwrite("images/w2_hsv.png", hsv);

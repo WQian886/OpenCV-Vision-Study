@@ -10,10 +10,13 @@
 ## 📁 工程结构
 ```
 W1_ImageIO/
-├── CMakeLists.txt    # 找 OpenCV + 编译
-├── main.cpp          # Hello OpenCV 主程序
-├── images/           # 测试图片(自动生成)
-└── README.md         # 本文件
+├── CMakeLists.txt      # 找 OpenCV + 编译
+├── main.cpp            # Hello OpenCV 主程序
+├── pixel_ops.{h,cpp}   # 练习 3 的判据和涂黑逻辑（可测的那一层）
+├── tests/
+│   └── test_w1_imageio.cpp   # 无头回归测试
+├── images/             # 测试图片(自动生成)
+└── README.md           # 本文件
 ```
 
 ## 🛠️ 如何构建（VS 方式）
@@ -37,6 +40,44 @@ cmake -S . -B build -G Ninja
 cmake --build build
 build\w1_imageio.exe
 ```
+
+## 🧪 跑测试
+
+W1 有 **1 个 ctest 套件、29 条断言**（2026-10-26 之前是 **0 个**）。
+
+```powershell
+cd E:\qianwie\00study\OpenCV\W1_ImageIO
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+
+# ⚠ 必须带 -C Release,否则套件全报 Not Run
+ctest --test-dir build -C Release --output-on-failure
+```
+
+| 套件 | 断言 | 测什么 |
+|---|---|---|
+| `w1_imageio` | 29 | **练习 3 那段代码自己的测试**:造出来的图对不对、**BGR 不是 RGB**(判据写成 RGB 会把白底整片判成蓝)、**边界是闭的**(B 正好 100 不算蓝、G/R 正好 150 不算蓝)、**涂黑是幂等的**(再涂一次是 0 个)、**imwrite→imread 往返逐像素相同**(PNG 无损)、读不存在的文件得到空 Mat 而不是崩溃 |
+
+> 🔧 **为什么练习 3 的代码被拆出去了**：
+> 它原本整段写在 `main.cpp` 里 —— 一个只有 20 行的程序没人测，
+> 不是因为它不重要，是因为**它写在了 `main()` 里**：
+> 写测试的人得先把它拆出来。
+>
+> 现在判据在 `pixel_ops.cpp` 的 `isBluePixel()`，涂黑在 `paintBlueToBlack()`，
+> **demo 和测试调的是同一份源码**（同一个 `pixel_ops.cpp` 链进两个目标）——
+> 不在测试里再抄一遍判据。抄出来的副本会随核心漂移：
+> 改了判据，测试还在按旧判据断言，于是测试「绿着」而 demo 已经变了。
+> **绿灯什么也没证明。**
+
+> 🧹 **测试产物落在 `build/test_work/w1_imageio/`,不落源码树。**
+> 那个套件会写一个 PNG 再读回来（断"存盘→读盘"这一链），
+> 读完就删掉 —— 源码树一个字节都不变，
+> CI 的"源码树必须干净"那一步对这套测试不是空转。
+
+> 🤖 **一条命令跑完"构建 + 全部测试 + 检查源码树没被写脏"**：
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File ..\tools\ci.ps1
+> ```
 
 ## 📚 知识点笔记
 

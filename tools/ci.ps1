@@ -13,7 +13,7 @@
       1. Preflight. Every tool and every third-party path must exist.
          A missing dependency FAILS HERE, loudly. It never "skips".
       2. All 7 projects configure and build (Release).
-      3. W6 and W7 suites run and pass.
+      3. W1, W2, W6 and W7 suites run and pass.
       3b. The assertion count is counted FROM THIS BUILD TREE and
           printed (plus written to build/ci/assertions.txt).
           The number quoted in the README and in the notes must come
@@ -318,7 +318,7 @@ Write-Host "   working tree before: $($TreeBefore.Count) uncommitted entr(y/ies)
 # ------------------------------------------------------------------
 # Step 2: configure + build all 7 projects
 # ------------------------------------------------------------------
-# W1..W7. W1-W4 have no tests -- they are built only, and that fact is
+# W1..W7. W3-W5 have no tests -- they are built only, and that fact is
 # reported in the summary at the end so nobody mistakes "built" for
 # "tested".
 $Projects = @(
@@ -327,6 +327,20 @@ $Projects = @(
     'W3_EdgeContour',
     'W4_TemplateFeature',
     'W5_OCR_QRCode',
+    'W6_PCB_DefectProject',
+    'W7_VisionMasterLite'
+)
+
+# The projects that HAVE test suites.
+#
+# This is a list of its own, not "the projects except the ones without
+# tests": the list of what is actually tested is a fact that changes
+# (W1 and W2 got their first suites on 2026-10-26), and a fact that
+# changes needs to be written down in ONE place -- otherwise a project
+# gets a suite and nobody runs it, and the suite silently rots.
+$TestProjects = @(
+    'W1_ImageIO',
+    'W2_ColorFilter',
     'W6_PCB_DefectProject',
     'W7_VisionMasterLite'
 )
@@ -360,7 +374,7 @@ foreach ($p in $Projects) {
 Say "Step 3/6  test suites"
 
 $SuiteCount = 0
-foreach ($p in @('W6_PCB_DefectProject', 'W7_VisionMasterLite')) {
+foreach ($p in $TestProjects) {
     $bld = Join-Path $BuildRoot $p
     Write-Host ""
     Write-Host "-- $p"
@@ -407,7 +421,7 @@ Say "Step 3b/6  assertion count"
 $AssertionTotal = 0
 $AssertionReport = @()
 $PerSuiteLines = @()
-foreach ($p in @('W6_PCB_DefectProject', 'W7_VisionMasterLite')) {
+foreach ($p in $TestProjects) {
     $bld = Join-Path $BuildRoot $p
     # A second ctest run, this time verbose, so that each suite's
     # "pass=N" line is in the captured text. --output-on-failure only
@@ -806,7 +820,7 @@ Write-Host "   source tree unchanged by the tests: OK"
 # ------------------------------------------------------------------
 Say "summary"
 Write-Host "   built   : $($Projects.Count) projects (Release)"
-Write-Host "   tested  : $SuiteCount ctest suites (W6 + W7)"
+Write-Host "   tested  : $SuiteCount ctest suites (W1 + W2 + W6 + W7)"
 Write-Host "   asserts : $AssertionTotal assertions (counted from this build)"
 Write-Host "   docs    : every number quoted in the docs matches the build"
 Write-Host "   smoke   : W5 qr --no-gui + W7 headless pipeline"

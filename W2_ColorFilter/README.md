@@ -10,7 +10,10 @@
 ```
 W2_ColorFilter/
 ├── CMakeLists.txt
-├── main.cpp
+├── main.cpp                    # 只做 读图/打印/存图/显示
+├── color_pipeline.{h,cpp}      # 处理链（可测的那一层）+ 全部常量
+├── tests/
+│   └── test_w2_color_filter.cpp   # 无头回归测试
 ├── images/                      # 测试图片 + 10 个输出结果
 └── README.md
 ```
@@ -56,6 +59,52 @@ W2_ColorFilter/
 | Otsu 自动阈值 | 图像有明显双峰（前景/背景对比强）|
 
 **Otsu 的本质**：自动找"前景/背景分离得最好的那个阈值"。**前提**：图像直方图是双峰的（PCB 检测常用）。
+
+## 🧪 跑测试
+
+W2 有 **1 个 ctest 套件、54 条断言**（2026-10-26 之前是 **0 个**）。
+
+```powershell
+cd E:\qianwie\00study\OpenCV\W2_ColorFilter
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+
+# ⚠ 必须带 -C Release,否则套件全报 Not Run
+ctest --test-dir build -C Release --output-on-failure
+```
+
+| 套件 | 断言 | 测什么 |
+|---|---|---|
+| `w2_color_filter` | 54 | **整条处理链自己的测试**:造出来的 PCB 图对不对、**HSV 转换**（含"背景的色相不在金色窗口里"这条实测）、**inRange 提取**（罩住焊点 ≥75%、背景误选 ≤2%）、**三种滤波**（标准差压到 1/3 以下、均值不动、**高斯糊开阶跃边缘而双边保住**、中值把椒盐噪声完全还原）、**三种阈值**（固定/自适应/Otsu 各自的规则和边界、**光照不均时固定阈值全军覆没而自适应留得住**）、**整条链**（每一环的输出尺寸都和原图一样） |
+
+> 🔧 **为什么处理链被拆出去了**：
+> 它原本整段写在 `main.cpp` 里，中间隔着 `imshow` / `waitKey` / `imwrite`
+> —— **一个要开窗口的函数没法做无头测试**。
+> 现在处理链在 `color_pipeline.cpp`，**demo 和测试调的是同一份源码**
+> （同一个 `color_pipeline.cpp` 链进两个目标），
+> **一条都不许在 `main.cpp` 里再重写一遍** —— 重写就是"抄副本"。
+>
+> 顺带解决了另一个问题：**常量以前散在 `main.cpp` 里**，
+> 现在焊盘矩形、焊盘颜色、金色 HSV 窗口**只在 `color_pipeline.cpp` 里定义一次**。
+
+> ⚠ **实测出来的两个数，和教科书不一样**：
+>
+> | | 教科书 | OpenCV 实测 |
+> |---|---|---|
+> | 8bit HSV 的色相 | `60*(g-b)/delta` | **`(g-b)*30/delta`（小一半）** |
+> | 焊点 BGR(60,180,220) 的色相 | 45 | **23** |
+>
+> 按教科书的算法去凑这个 HSV 窗口，会凑出一个**选不中焊点**的窗口。
+> 现在的窗口（H=10..30）罩住焊点 **87.0%** 的像素，背景误选只有 **0.60%**。
+>
+> 这也是为什么**每个门槛都是量出来的**，不是拍脑袋写的：
+> 量出来的门槛都**留了余量**，卡死在一个实测值上的门槛
+> 就成了"只有这台机器成立"的断言。
+
+> 🤖 **一条命令跑完"构建 + 全部测试 + 检查源码树没被写脏"**：
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File ..\tools\ci.ps1
+> ```
 
 ## ✏️ 课后练习
 

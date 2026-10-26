@@ -16,6 +16,23 @@
 | **W6** | PCB 缺陷检测综合项目 | ✅ 100% | [README](./W6_PCB_DefectProject/README.md) |
 | **W7** | Mini VisionMaster Lite (Qt) | ✅ 最终版 | [README](./W7_VisionMasterLite/README.md) |
 
+## 🧪 回归测试现状
+
+2026-10-26 之前，**W1–W5 一条自动化测试都没有** ——
+W7 之前只有 W6 有套件（因为 W6 是第一个「别人真的拿去用」的项目）。
+
+这一天给 **W1 和 W2** 补上了（两个都是纯 OpenCV，不需要 Qt 窗口）：
+
+- **W1 图像 I/O + 像素操作** — **1 个无头回归测试 / 29 条断言**（2026-10-26 之前是 **0 个**）
+- **W2 色彩空间 + 滤波 + 阈值** — **1 个无头回归测试 / 54 条断言**（2026-10-26 之前是 **0 个**）
+
+补法不是「给 `main.cpp` 加个开关」，而是**把纯逻辑拆出来再测它** ——
+`pixel_ops.{h,cpp}` / `color_pipeline.{h,cpp}`，
+**demo 和测试链的是同一个源码**（不抄副本）。
+详见 [notes_W1W2_Tests_2026-10.md](./notes/notes_W1W2_Tests_2026-10.md)。
+
+W3 / W4 / W5 还没有套件（入口已经拆好了，见那份笔记的第 9 节）。
+
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 482 条断言**
@@ -106,7 +123,7 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 ```
 
-一条命令跑完：**7 个工程全部编译（Release）→ W6 3 套件 + W7 26 套件
+一条命令跑完：**7 个工程全部编译（Release）→ W1 1 + W2 1 + W6 3 + W7 26 共 31 套件
 全部跑通 → 数断言并**核对文档里引用的每一个数**
 → W5 的 exe 冒烟 → W7 真跑一条完整流水线（headless）
 → 检查源码树没被写脏**。
@@ -119,7 +136,14 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 期望值**从文档读**，不**抄**一份到 CI 里——抄的那份就是下一个会漂的东西；
 而且**逐套件**表逐行查，不只查总数（**总数对得上，分部可以对得上不对**）。
 它当场逮到三处真漂移，其中一处是根 README 说 `camera` 是 90、实测 93。
-详见 [notes_W7_DocNumbers_2026-10.md](./notes/notes_W7_DocNumbers_2026-10.md)。
+
+2026-10-26 又加了第四处：检查器原来**只查 W7 的表**，
+改成**每个项目都查自己的表**之后，
+**W6 的表当场漂了出来**（写着 180/36/163 = 379，
+实测 279/36/167 = 482，而**同一份 README 的正文**写着 482）。
+**一个没人检查的表，就是一个会漂的表。**
+详见 [notes_W1W2_Tests_2026-10.md](./notes/notes_W1W2_Tests_2026-10.md) 和
+[notes_W7_DocNumbers_2026-10.md](./notes/notes_W7_DocNumbers_2026-10.md)。
 
 `.github/workflows/ci.yml` 在 GitHub Actions 上跑同一套步骤
 （Windows runner + `tools/ci-deps.ps1` 装 tesseract / Qt 6.8.3 / 官方预编译 OpenCV 4.13.0）。
@@ -151,7 +175,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 29 份 + 77 张 atomic 卡，~1008 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 30 份 + 82 张 atomic 卡，~1034 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -182,8 +206,9 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_W7_DocNumbers_2026-10.md` (12 KB) — 结项之后还的第七笔：**把「数字对不对得上」变成机器可查的一步**（欠账 11 的强制那半步）——期望值**读**出来不**抄**一份、逐套件表强查、当场逮到三处真漂移
 - `notes_W7_SuiteList_2026-10.md` (13 KB) — 结项之后还的第八笔：**套件名单只有一份**（手抄的那份漂了 8 个名字 → 那 8 个套件的汇总行进了调试通道 → 计数器默默少算了 **567** 条断言）+ **计数的数不许比真值小而不说话**（CI 从「红」到「绿」的一笔）
 - `notes_CI_FirstRunnerRun_2026-10.md` (16 KB) — 结项之后还的第九笔：**CI 第一次在真 runner 上跑**（欠账 9 收口）——真跑挖出四件「只有这台机器成立」的东西：空目录不在 git 里 / Qt 的 DLL 不在 PATH 上 / tesseract 的 PATH 只写在 YAML 里 / **ACP 把同一份代码判成两回事**（`.string()` 严格窄化：字符在 ACP 里表示不出来就抛 1113）
+- `notes_W1W2_Tests_2026-10.md` (11 KB) — **给 W1 / W2 补测试**（W1–W5 零测试缺口的第一笔）——把纯逻辑从 `main()` 里拆出来、demo 和测试链**同一份源码**、**每个门槛都是量出来的**、**变异验证当场逮到我自己的测试量错了对象**
 
-`notes/atomic/` 里是**单条教训卡片**（77 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（82 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -248,7 +273,7 @@ OpenCV/
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 核对文档里的数 + 检查源码树没被写脏
 ├── tools/check-doc-numbers.ps1  # 文档里每个「当前事实」的数 ↔ 实测（期望值从文档读）
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（29 份 + 77 张 atomic 卡）
+├── notes/                 # 变更日志（30 份 + 82 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -258,7 +283,7 @@ OpenCV/
 ## 📊 统计
 
 - 7 个 C++ 项目 + 2 个共享核心
-- 133 个 C++ 文件 / **42,050 行**（含注释与空行）。口径是**一条能跑的完整命令**，2026-10-26 实测：
+- 139 个 C++ 文件 / **43,157 行**（含注释与空行）。口径是**一条能跑的完整命令**，2026-10-26 实测：
 
   ```powershell
   $files = git ls-files '*.cpp' '*.h'
@@ -273,7 +298,7 @@ OpenCV/
   > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
   > 连最接近的 ANSI 口径（33,368）也对不上。
   > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
-- 29 份变更日志 + 77 张 atomic 卡 / ~1008 KB
-- **29 个无头回归测试 / 2853 条断言**（W7 26 个 / 2371，W6 3 个 / 482；
+- 30 份变更日志 + 82 张 atomic 卡 / ~1034 KB
+- **31 个无头回归测试 / 2936 条断言**（W7 26 个 / 2371，W6 3 个 / 482，W2 1 个 / 54，W1 1 个 / 29；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
