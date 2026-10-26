@@ -225,6 +225,71 @@ if (-not (Test-Path (Join-Path $QtRoot 'lib/cmake/Qt6'))) {
           "`n   Only W7 needs Qt. If you are only checking W1-W6, that is fine --" +
           "`n   but the script builds all 7, so it needs a real Qt6 install.")
 }
+
+# ------------------------------------------------------------------
+# Qt's DLLs have to be findable at RUN time.
+#
+# Why this is here and not in the workflow file:
+#
+#   W7 links Qt6::Core/Gui/Widgets, and NONE of the seven projects copy
+#   the Qt DLLs next to the exe (only the OpenCV ones are copied). So
+#   the exes find Qt6Core.dll the Windows way: through PATH.
+#
+#   On the developer's machine that works because Qt was installed with
+#   its bin directory on the machine PATH. On a GitHub runner it does
+#   NOT: the runner installs Qt into D:\a\_temp\Qt\6.8.3\msvc2022_64,
+#   and that bin directory is not on PATH.
+#
+#   That is the same disease as the aqtinstall bug: the local rehearsal
+#   passes because of a fact about THIS MACHINE, and the runner fails.
+#   So the path is put on PATH HERE, from the $QtRoot the caller gave
+#   us -- the same value the build used to find the headers and libs.
+#   One source, not two.
+# ------------------------------------------------------------------
+$qtBin = Join-Path $QtRoot 'bin'
+if (-not (Test-Path $qtBin)) {
+    Fail ("Qt bin directory not found: $qtBin" +
+          "`n   The exes need Qt6Core.dll at RUN time, and they find it" +
+          "`n   through PATH -- this script puts it there.")
+}
+$pathEntries = @($env:PATH -split ';' | Where-Object { $_ -ne '' })
+if ($pathEntries -notcontains $qtBin) {
+    $env:PATH = "$qtBin;" + ($pathEntries -join ';')
+    Write-Host "   qt bin added to PATH: $qtBin"
+}
+else {
+    Write-Host "   qt bin already on PATH: $qtBin"
+}
+
+# ------------------------------------------------------------------
+# Tesseract's directory has to be on PATH too.
+#
+# The shared QR/OCR core calls tesseract as an EXTERNAL program, so the
+# tests need it on PATH -- not just present. The workflow file used to
+# do this in YAML, which meant there were two places that knew about it
+# and the local rehearsal (tools/ci.ps1 on its own) did not do it at
+# all. One place now: here, driven by TESSERACT_EXE -- the value
+# tools/ci-deps.ps1 exported after it installed tesseract.
+# ------------------------------------------------------------------
+if ($env:TESSERACT_EXE) {
+    if (-not (Test-Path $env:TESSERACT_EXE)) {
+        Fail ("TESSERACT_EXE is set but the file is not there: $env:TESSERACT_EXE" +
+              "`n   The OCR half of the QR/OCR suite would be skipped, and a" +
+              "`n   skipped path is worse than a failing one.")
+    }
+    $tessDir = Split-Path -Parent $env:TESSERACT_EXE
+    if ($pathEntries -notcontains $tessDir) {
+        $env:PATH = "$tessDir;" + ($env:PATH)
+        Write-Host "   tesseract dir added to PATH: $tessDir"
+    }
+    else {
+        Write-Host "   tesseract dir already on PATH: $tessDir"
+    }
+}
+else {
+    Write-Host "   tesseract: TESSERACT_EXE is not set -- the OCR suite will report it"
+}
+
 Write-Host "   opencv: $OpenCvLib"
 Write-Host "   opencv bin: $OpenCvBin"
 Write-Host "   qt   : $QtRoot"

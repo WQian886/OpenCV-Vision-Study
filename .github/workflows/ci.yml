@@ -92,15 +92,10 @@ jobs:
       - name: Run CI
         shell: pwsh
         run: |
-          # tesseract was installed by the provisioning step; make sure
-          # it is on PATH for this step (the runner refreshes the env
-          # per step, but being explicit costs nothing and removes a
-          # whole class of "it worked on my machine" confusion).
-          if ($env:TESSERACT_EXE) {
-            $tess = Split-Path -Parent $env:TESSERACT_EXE
-            $env:PATH = "$tess;$env:PATH"
-          }
-
+          # NOTE: the PATH for tesseract and for Qt's DLLs is set INSIDE
+          # tools/ci.ps1, not here. It used to be here -- and that was
+          # the second copy of the same fact, which meant the local
+          # rehearsal did not do what the runner did. One place now.
           ./tools/ci.ps1 `
             -OpenCvLib $env:OPENCV_LIB `
             -OpenCvBin $env:OPENCV_BIN `

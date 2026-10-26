@@ -19,7 +19,7 @@
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 477 条断言**
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。17 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），26 个无头回归测试共 2371 条断言。**已结项**（2026-10-24），欠账 19 条已收 13 条，剩下 6 条都写清了边界和重开条件 → [结项报告](./notes/notes_W7_Close_2026-10.md)
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。17 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），26 个无头回归测试共 2371 条断言。**已结项**（2026-10-24），欠账 19 条已收 14 条，剩下 5 条都写清了边界和重开条件 → [结项报告](./notes/notes_W7_Close_2026-10.md)
 
 ## 🔗 两个共享核心（common/）
 
@@ -132,15 +132,20 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 > **整份 workflow 也能在本机跑**：`tools/ci-local.ps1` 解析 `ci.yml` 并执行它里面的
 > `run:` 块（`GITHUB_ENV` 交接、shell、退出码都按 runner 的规矩来），
 > 结果 `ALL WORKFLOW STEPS PASSED` —— 本机跑的和 GitHub 跑的是同一批命令。
-> 真正干活的那几步（配置 / 编译 / 测试 / 源码树检查）已在本机
-> `tools/ci.ps1` 跑通。**还没在真实 runner 上验过的**只剩两条**纯环境性**的
-> （choco 那个安装动作、GitHub 自己的调度与网络），
-> 哪些验过、哪些没验过，见
+>
+> ✅ **2026-10-26：整套 CI 在真 runner（`windows-2022`）上真的跑过了。**
+> 第一次真跑**挖出三件「只有这台机器成立」的东西** ——
+> 空目录不在 git 里（干净克隆上 build 挂）、
+> Qt 的 DLL 不在 PATH 上（链接过了但 exe 起不来）、
+> tesseract 的 PATH 只写在 YAML 里（本地彩排根本没做这件事）。
+> 三件都修掉了，详见
+> [notes_CI_FirstRunnerRun_2026-10.md](./notes/notes_CI_FirstRunnerRun_2026-10.md)；
+> CI 这条线的完整记录在
 > [notes_CI_2026-10.md](./notes/notes_CI_2026-10.md)。
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 28 份 + 71 张 atomic 卡，~944 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 29 份 + 75 张 atomic 卡，~980 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -160,18 +165,19 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_PCB_Short_2026-10.md` (19 KB) — 短路判据重做：从「量标记圈」到「量两个端子之间」（附：陈旧数据副本）
 - `notes_PCB_Insufficient_2026-10.md` (16 KB) — 焊少判据重做：从「量 ROI 里的金」到「量这个焊盘自己的铜」
 - `notes_W7_RunEngine_2026-10.md` (60 KB) — 执行引擎抽离（第十轮）+ headless runner（片 3）+ 假 ONNX Runtime（片 4）+ 假 MVS SDK（片 5）
-- `notes_W7_Close_2026-10.md` (48 KB) — **W7 结项报告**：欠账总账（结项 17 条 → 现在 19 条）、每条债的边界与重开条件、明确不覆盖的范围、怎么复现这份结项
+- `notes_W7_Close_2026-10.md` (56 KB) — **W7 结项报告**：欠账总账（结项 17 条 → 现在 19 条）、每条债的边界与重开条件、明确不覆盖的范围、怎么复现这份结项
 - `notes_W7_Verdict_2026-10.md` (18 KB) — 结项之后还的第一笔：把「结论怎么说」收成**一份**规则（GUI 和 CI 共用），顺带抓到 CI 的一个**漏检**
 - `notes_W7_BadStep_2026-10.md` (15 KB) — 结项之后还的第二笔：让「跑坏了」真的算进判定（引擎把输出置空 → 旧判据数不到它）
 - `notes_W7_RenderPlan_2026-10.md` (16 KB) — 结项之后还的第三笔：结果面板「显示哪张图」收成**一份**规则，顺带抓到本轮自己的两个洞
 - `notes_W7_FrameProtocol_2026-10.md` (19 KB) — 结项之后还的第四笔：「源怎么报帧数」收成**一份**（第十份抄副本）+ 纯层瘦身 + **本项目第一条编译期约束**（只链 `Qt6::Core` 的目标往纯层塞 widget 就编不过）
 - `notes_W7_ParseLayer_2026-10.md` (20 KB) — 结项之后还的第五笔：**解析层别丢节点**（未知算子留在画布上标「未安装」→ 链不断 → 那一步强制失败）+ 三个「写了没人读」的字段改名并搬进纯层，顺带抓到**两个旧用例正在断言 bug**
 - `notes_W7_MainWindow_2026-10.md` (19 KB) — 结项之后还的第六笔：**主窗口第一次进测试**（主程序源码编成静态库 + offscreen 起真窗口），按「错了用户会不会自己发现」划线，顺带抓到**第十一遍抄副本**和一个**状态和画面对不上**的真 bug
-- `notes_W7_Knob_Audit_2026-10.md` (124 KB) — **旋钮审计**：欠账的**唯一登记处**（第十节）。19 条账、每条的边界与重开条件、每笔的证据在哪
+- `notes_W7_Knob_Audit_2026-10.md` (127 KB) — **旋钮审计**：欠账的**唯一登记处**（第十节）。19 条账、每条的边界与重开条件、每笔的证据在哪
 - `notes_W7_DocNumbers_2026-10.md` (12 KB) — 结项之后还的第七笔：**把「数字对不对得上」变成机器可查的一步**（欠账 11 的强制那半步）——期望值**读**出来不**抄**一份、逐套件表强查、当场逮到三处真漂移
-- `notes_W7_SuiteList_2026-10.md` (12 KB) — 结项之后还的第八笔：**套件名单只有一份**（手抄的那份漂了 8 个名字 → 那 8 个套件的汇总行进了调试通道 → 计数器默默少算了 **567** 条断言）+ **计数的数不许比真值小而不说话**（CI 从「红」到「绿」的一笔）
+- `notes_W7_SuiteList_2026-10.md` (13 KB) — 结项之后还的第八笔：**套件名单只有一份**（手抄的那份漂了 8 个名字 → 那 8 个套件的汇总行进了调试通道 → 计数器默默少算了 **567** 条断言）+ **计数的数不许比真值小而不说话**（CI 从「红」到「绿」的一笔）
+- `notes_CI_FirstRunnerRun_2026-10.md` (10 KB) — 结项之后还的第九笔：**CI 第一次在真 runner 上跑**（欠账 9 收口）——真跑挖出三件「只有这台机器成立」的东西：空目录不在 git 里 / Qt 的 DLL 不在 PATH 上 / tesseract 的 PATH 只写在 YAML 里
 
-`notes/atomic/` 里是**单条教训卡片**（71 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（75 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -202,6 +208,10 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `at-the-total-can-hide-a-wrong-part.md` — 总数对得上，**分部**可以对不上
 - `at-a-historical-snapshot-looks-like-a-current-claim.md` — 历史快照长得和当前声明一模一样，得划作用域
 - `at-the-counter-must-not-undercount-silently.md` — 数的那一步也会数不全，而且它**不说话**（少算的那部分最容易出事）
+- `at-an-empty-dir-is-not-in-git.md` — git 只带文件不带目录 ⇒ 空目录是**这台机器的事实**，不是仓库的事实
+- `at-the-runtime-dll-lookup-is-a-machine-fact.md` — 构建期用**路径**、运行期用**名字** ⇒ 链接成功 ≠ exe 跑得起来
+- `at-a-rehearsal-can-pass-because-it-was-skipped.md` — 被跳过的那段代码 = 还没写过的代码（彩排的绿灯可能来自「压根没跑」）
+- `at-the-detector-must-not-die-on-what-it-detects.md` — 检测器不能被它要检测的东西杀死（否则「没检出」和「检测器死了」长得一样）
 
 W7 收官期的改动（PCB/DL 算子、视频源、帧循环、每步结果查看、pin 检查、最近工程）
 逐条记在 git 提交信息里，每条都写清了"为什么"和"测试抓到了什么"。
@@ -232,7 +242,7 @@ OpenCV/
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 核对文档里的数 + 检查源码树没被写脏
 ├── tools/check-doc-numbers.ps1  # 文档里每个「当前事实」的数 ↔ 实测（期望值从文档读）
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（28 份 + 71 张 atomic 卡）
+├── notes/                 # 变更日志（29 份 + 75 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -257,7 +267,7 @@ OpenCV/
   > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
   > 连最接近的 ANSI 口径（33,368）也对不上。
   > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
-- 28 份变更日志 + 71 张 atomic 卡 / ~944 KB
+- 29 份变更日志 + 75 张 atomic 卡 / ~980 KB
 - **29 个无头回归测试 / 2848 条断言**（W7 26 个 / 2371，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
