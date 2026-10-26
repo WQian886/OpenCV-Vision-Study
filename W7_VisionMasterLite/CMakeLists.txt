@@ -1517,13 +1517,25 @@ w7_add_test(mainwindow_wiring w7_mainwindow_test)
 #
 # QT_FORCE_STDERR_LOGGING=1 把日志打回 stderr,失败详情才进得了 ctest 输出。
 # ============================================================
-set_tests_properties(
-    undo_redo pcb_operators dl_postprocess image_sources
-    step_result pin_and_recent line_fit measurement run_policy detection_operators
-    template_match operator_library operator_knobs pure_layer pipeline_graph
-    mainwindow_wiring
-    PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1"
-)
+# 名单用 ${W7_TEST_SUITES} —— w7_add_test() 每注册一个套件就往里 append
+# 一次(见本文件开头的函数定义),所以它是**唯一那一份**、机器维护的。
+#
+# ⚠ 2026-10-26:这里以前是一份**人手维护的 16 个名字**的名单。
+#   2026-10-24 之后新加的 8 个套件(dl_infer / dl_infer_nosdk / camera /
+#   camera_nosdk / run_engine / result_render_plan / frame_verdict /
+#   headless_runner)从没被加进去 →
+#   那 8 个的 qInfo 汇总行进了 Windows 调试通道而不是 stderr →
+#   ctest 看不见它们的输出 → tools/ci.ps1 的计数器只数到 18 个套件 /
+#   1804 条断言(真值是 26 / 2371)→
+#   Step 3c 拿 18/1804 去对文档里的 26/2371 → CI 红了。
+#
+#   根因和本项目栽过十几次的「抄副本」是同一条:
+#   **套件名单本来只有一份(W7_TEST_SUITES),又抄了一份在下面。**
+#   抄出来的那份漂了 —— 而漂了没人知道,因为
+#   「计数的那一步」默默报了一个更小的数,自己不报警。
+#   ⇒ 现在改成用那一份,这类漂移结构上不可能再发生。
+set_tests_properties(${W7_TEST_SUITES}
+    PROPERTIES ENVIRONMENT "QT_FORCE_STDERR_LOGGING=1")
 
 # ============================================================
 # === 暂存测试数据(每次构建都重拷)

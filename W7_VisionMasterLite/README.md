@@ -16,7 +16,7 @@
 > ⚠ **现在的账是 19 条 / 已收 13 / 未收 6**(见下面那段)。
 > 欠账的**完整定义只有一处**:`notes/notes_W7_Knob_Audit_2026-10.md` 第十节。
 >
-> 📌 **2026-10-25 结项后又还了六笔**:
+> 📌 **结项后又还了八笔**(2026-10-25 六笔 + 2026-10-26 两笔):
 > 欠账 17 收了一半(判定口径搬成 `frame_verdict.h`,GUI 和 CI 共用一份),
 > 欠账 18 的**运行期形状**也收掉了(「压根没跑成」的那一步现在算坏帧)——
 > 顺带发现上一轮只抽了「分类」没抽「采集」,那是**刚建好的架构里的裂缝**;
@@ -45,6 +45,16 @@
 > 根 README 说 `camera` 是 90、实测 93(**表对了,散文错了**)。
 > 欠账 18 的加载期 + 欠账 19 + **欠账 17** + **欠账 11 的机器可查那半步**
 > → **已收 13 / 未收 6**。
+> **第八笔把「门禁自己数不全」这件事修掉了** ——
+> 2026-10-26 早上第一次真跑 CI 时,Step 3c **是红的**:
+> 26 个套件全过,但计数器只看见 **18** 个 / **1804** 条断言(真值 26 / 2371),
+> 因为那 8 个套件的汇总行用 `qInfo()` 打,而 `QT_FORCE_STDERR_LOGGING=1`
+> 那份名单**手写了 16 个名字**、漏掉了最新加的 8 个 →
+> 它们的输出进了 Windows 调试通道,ctest 看不见。
+> 修法两条:**名单改用 `${W7_TEST_SUITES}`**(机器维护的那一份)、
+> **CI 交叉核对「ctest 跑了几个 vs 计数器看见几个」**(少看见就红并点名)。
+> ⚠ 那次红还**指错了方向**(让人去改文档里本来正确的 2371)——
+> 详见 [notes_W7_SuiteList_2026-10.md](../notes/notes_W7_SuiteList_2026-10.md)。
 
 ## 🎯 学习目标
 1. 理解**工业视觉平台的 3 层架构**:算子 + 流水线 + GUI
@@ -1174,13 +1184,15 @@ $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
   [notes/notes_W7_Close_2026-10.md](../notes/notes_W7_Close_2026-10.md),
   欠账的**完整定义只有一处**:
   [notes/notes_W7_Knob_Audit_2026-10.md](../notes/notes_W7_Knob_Audit_2026-10.md) 第十节。
-- **结项之后还的六笔**在
+- **结项之后还的八笔**在
   [notes/notes_W7_Verdict_2026-10.md](../notes/notes_W7_Verdict_2026-10.md)(判定口径收成一份)、
   [notes/notes_W7_BadStep_2026-10.md](../notes/notes_W7_BadStep_2026-10.md)(让「跑坏了」真的算进判定)、
   [notes/notes_W7_RenderPlan_2026-10.md](../notes/notes_W7_RenderPlan_2026-10.md)(结果面板「显示哪张图」收成一份)、
   [notes/notes_W7_FrameProtocol_2026-10.md](../notes/notes_W7_FrameProtocol_2026-10.md)(帧协议收成一份 + **编译期分层约束**)、
-  [notes/notes_W7_ParseLayer_2026-10.md](../notes/notes_W7_ParseLayer_2026-10.md)(**解析层别丢节点** + 三个死字段改名搬进纯层)
-  和 [notes/notes_W7_MainWindow_2026-10.md](../notes/notes_W7_MainWindow_2026-10.md)(**主窗口第一次进测试** + 「算子没装」收成一份)。
+  [notes/notes_W7_ParseLayer_2026-10.md](../notes/notes_W7_ParseLayer_2026-10.md)(**解析层别丢节点** + 三个死字段改名搬进纯层)、
+  [notes/notes_W7_MainWindow_2026-10.md](../notes/notes_W7_MainWindow_2026-10.md)(**主窗口第一次进测试** + 「算子没装」收成一份)、
+  [notes/notes_W7_DocNumbers_2026-10.md](../notes/notes_W7_DocNumbers_2026-10.md)(**数字对不对得上变成机器可查**)、
+  [notes/notes_W7_SuiteList_2026-10.md](../notes/notes_W7_SuiteList_2026-10.md)(**套件名单只有一份** + 计数的数不许比真值小而不说话)。
 - ~~**PCB 判定沿用 W6 的样本数据**:`short.png` 会同时报出 `short` 和 `wrong`~~
   —— **2026-10-20 已修**:短路图重画成"两脚被铜条连通"之后,铜条是金色不是青色,
   `short.png` 现在只报 `short`(点名 R2),不再串扰 `wrong`。

@@ -384,6 +384,57 @@ foreach ($p in @('W6_PCB_DefectProject', 'W7_VisionMasterLite')) {
               "`n   If the suites changed their summary line, fix the counter here." +
               "`n   A count of zero would be worse than no count at all.")
     }
+
+    # ------------------------------------------------------------------
+    # Step 3b-bis: how many suites did ctest actually RUN, and did the
+    # counter see ALL of them?
+    #
+    # Why this cross-check exists (2026-10-26):
+    #   The counter counted whatever it could SEE. Eight suites (added
+    #   2026-10-24) were missing from the QT_FORCE_STDERR_LOGGING list in
+    #   W7's CMakeLists, so their qInfo summary never reached ctest. The
+    #   counter counted 18 of 26 suites and reported 1804 assertions --
+    #   and said nothing about the 8 it could not see.
+    #
+    #   A total that is quietly SHORT is the same disease as "the
+    #   pipeline passed because nothing was judged": the number looks
+    #   fine, it is just missing part of the population. Step 3c then
+    #   compares that short total against the docs and fails for the
+    #   WRONG reason -- the docs were right, the MEASUREMENT was not.
+    #
+    #   So the measuring step has to say "I could not see N suites" out
+    #   loud, instead of reporting a smaller number as if it were the
+    #   whole truth.
+    # ------------------------------------------------------------------
+    $mRan = [regex]::Match($verbose, '(?m)^\d+% tests passed.*?out of (\d+)')
+    if (-not $mRan.Success) {
+        $mRan = [regex]::Match($verbose, 'out of (\d+)')
+    }
+    if (-not $mRan.Success) {
+        Fail ("could not read the suite count out of the ctest -V output for $p." +
+              "`n   Without it there is nothing to compare the counter against.")
+    }
+    $ranSuites = [int]$mRan.Groups[1].Value
+    if ($suiteNames.Count -ne $ranSuites) {
+        Fail ("the ctest output lists $($suiteNames.Count) suite lines but ctest says it ran $ranSuites suites." +
+              "`n   The name parsing is out of step with the output -- fix the counter" +
+              "`n   before trusting anything it says.")
+    }
+    if ($perSuite.Count -ne $ranSuites) {
+        $missed = @()
+        foreach ($idx in ($suiteNames.Keys | Sort-Object)) {
+            if (-not $perSuite.ContainsKey($idx)) {
+                $missed += $suiteNames[$idx]
+            }
+        }
+        Fail ("for $p, ctest ran $ranSuites suites but the counter only saw $($perSuite.Count)." +
+              "`n   Suites whose output never reached ctest: " + ($missed -join ', ') +
+              "`n   Their summary line went somewhere else: Qt sends qInfo to the" +
+              "`n   Windows debug channel unless QT_FORCE_STDERR_LOGGING=1 is set." +
+              "`n   Check set_tests_properties(... ENVIRONMENT 'QT_FORCE_STDERR_LOGGING=1')" +
+              "`n   in the project's CMakeLists -- and make sure the list it names" +
+              "`n   EVERY suite, not a hand-kept copy of that list.")
+    }
     foreach ($idx in ($perSuite.Keys | Sort-Object)) {
         if (-not $suiteNames.ContainsKey($idx)) {
             Fail ("could not find the NAME of suite #$idx in the ctest output for $p." +

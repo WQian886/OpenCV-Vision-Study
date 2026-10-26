@@ -19,7 +19,7 @@
 ## 🏆 两个综合项目
 
 - **W6 PCB 缺陷检测** — 命令行工具，识别 7 类 PCB 缺陷（缺件/错件/极性反/焊桥/焊少/偏移/短路），输出 CSV 报告。**3 个无头回归测试 / 477 条断言**
-- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。17 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），26 个无头回归测试共 2371 条断言。**已结项**（2026-10-24），欠账 19 条已收 12 条，剩下 7 条都写清了边界和重开条件 → [结项报告](./notes/notes_W7_Close_2026-10.md)
+- **W7 Mini VisionMaster Lite** — Qt 流程图编辑器，对标海康 VM EasyBuilder。17 个算子 + pin 类型检查 + 每步结果查看（多帧，带帧选择器）+ 单步执行 + 帧循环 + JSON 持久化 + 撤销重做 + **无头跑整条流水线**（`--run pipeline.json`，四种退出码），26 个无头回归测试共 2371 条断言。**已结项**（2026-10-24），欠账 19 条已收 13 条，剩下 6 条都写清了边界和重开条件 → [结项报告](./notes/notes_W7_Close_2026-10.md)
 
 ## 🔗 两个共享核心（common/）
 
@@ -93,8 +93,11 @@ cmd /c '"D:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Buil
 >
 > 看着像代码全坏了，其实一个测试都没跑。
 
-> 测试失败时想看是哪条断言挂了，CMakeLists 里已经给 26 个套件都设了
-> `QT_FORCE_STDERR_LOGGING=1`。不加的话 Qt 6 在 Windows 上会把 `qInfo`
+> 测试失败时想看是哪条断言挂了，CMakeLists 里已经给**全部套件**都设了
+> `QT_FORCE_STDERR_LOGGING=1`（名单取自 `${W7_TEST_SUITES}` —— **机器维护**，
+> 不再手写；那一段曾经漏了 8 个套件，让计数器默默少算了 567 条断言，
+> 详见 [notes_W7_SuiteList_2026-10.md](./notes/notes_W7_SuiteList_2026-10.md)）。
+> 不加的话 Qt 6 在 Windows 上会把 `qInfo`
 > 送到调试通道而不是 stderr，`--output-on-failure` 只能看到一个非零退出码。
 
 ## 🤖 CI
@@ -137,7 +140,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 27 份 + 70 张 atomic 卡，~921 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 28 份 + 71 张 atomic 卡，~944 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -166,8 +169,9 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_W7_MainWindow_2026-10.md` (19 KB) — 结项之后还的第六笔：**主窗口第一次进测试**（主程序源码编成静态库 + offscreen 起真窗口），按「错了用户会不会自己发现」划线，顺带抓到**第十一遍抄副本**和一个**状态和画面对不上**的真 bug
 - `notes_W7_Knob_Audit_2026-10.md` (124 KB) — **旋钮审计**：欠账的**唯一登记处**（第十节）。19 条账、每条的边界与重开条件、每笔的证据在哪
 - `notes_W7_DocNumbers_2026-10.md` (12 KB) — 结项之后还的第七笔：**把「数字对不对得上」变成机器可查的一步**（欠账 11 的强制那半步）——期望值**读**出来不**抄**一份、逐套件表强查、当场逮到三处真漂移
+- `notes_W7_SuiteList_2026-10.md` (12 KB) — 结项之后还的第八笔：**套件名单只有一份**（手抄的那份漂了 8 个名字 → 那 8 个套件的汇总行进了调试通道 → 计数器默默少算了 **567** 条断言）+ **计数的数不许比真值小而不说话**（CI 从「红」到「绿」的一笔）
 
-`notes/atomic/` 里是**单条教训卡片**（70 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（71 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -197,6 +201,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `at-the-expected-value-must-be-read-not-copied.md` — 期望值要**读**出来，不要**抄**一份（在检查器里写死 = 抄副本）
 - `at-the-total-can-hide-a-wrong-part.md` — 总数对得上，**分部**可以对不上
 - `at-a-historical-snapshot-looks-like-a-current-claim.md` — 历史快照长得和当前声明一模一样，得划作用域
+- `at-the-counter-must-not-undercount-silently.md` — 数的那一步也会数不全，而且它**不说话**（少算的那部分最容易出事）
 
 W7 收官期的改动（PCB/DL 算子、视频源、帧循环、每步结果查看、pin 检查、最近工程）
 逐条记在 git 提交信息里，每条都写清了"为什么"和"测试抓到了什么"。
@@ -227,7 +232,7 @@ OpenCV/
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 核对文档里的数 + 检查源码树没被写脏
 ├── tools/check-doc-numbers.ps1  # 文档里每个「当前事实」的数 ↔ 实测（期望值从文档读）
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（27 份 + 70 张 atomic 卡）
+├── notes/                 # 变更日志（28 份 + 71 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -252,7 +257,7 @@ OpenCV/
   > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
   > 连最接近的 ANSI 口径（33,368）也对不上。
   > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
-- 27 份变更日志 + 70 张 atomic 卡 / ~921 KB
+- 28 份变更日志 + 71 张 atomic 卡 / ~944 KB
 - **29 个无头回归测试 / 2848 条断言**（W7 26 个 / 2371，W6 3 个 / 477；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
