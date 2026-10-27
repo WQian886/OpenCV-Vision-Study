@@ -802,6 +802,18 @@ $rel = $f.FullName.Substring($RepoRoot.Length)
 **门禁自己的注释，也是主张**
 （`at-unverified-number-in-comment.md`）。
 
+**这四条变异现在住在仓库里**：`tools/mutate-census.ps1`。
+（原先它也在 `build/probe/` 下 —— **同一个毛病**：
+量它的脚本不在仓库里 ⇒ 谁都重跑不了 ⇒ 那张表就成了转述。）
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\mutate-census.ps1 -Mutation A,B,C,D
+```
+
+它自己会判定「**A/B/C 必须是红，D 必须是绿**」，
+对不上就**报错退出**（退出码 1）——
+⇒ **连「这条验证自己有没有坏」，也写进了它自己。**
+
 ### 8.7 这一节的数，是**写完这一节之后**才量的
 
 §8.5 那张表里的每一个数，都是**这一轮量出来的**，

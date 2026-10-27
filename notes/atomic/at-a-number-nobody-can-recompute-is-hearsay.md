@@ -90,6 +90,22 @@
 ⇒ 注释里的数也是主张（`at-unverified-number-in-comment.md`）。
 ⇒ 而检查器**自己**的注释最容易没人看。
 
+## 顺带：那四条变异也搬进仓库了
+
+验证这道门禁的四条变异（A/B/C 让引用的数漂一个，D 把尺子弄坏），
+**原来的脚本也在 `build/probe/` 下** —— **同一个毛病**。
+
+⇒ 现在是 `tools/mutate-census.ps1`，**谁都能重跑**：
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\mutate-census.ps1 -Mutation A,B,C,D
+```
+
+它自己会判定「**A/B/C 必须是红，D 必须是绿**」，
+对不上就**报错退出**（退出码 1）。
+
+⇒ **连「这条验证自己有没有坏」，也写进了它自己。**
+
 ## 检查清单
 
 - [ ] 这个数是用什么算出来的？那段代码**在仓库里**吗？

@@ -661,6 +661,45 @@ Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $sectionChecke
 Write-Host "   every section pointer in the docs resolves: OK"
 
 # ------------------------------------------------------------------
+# Step 3f/6: the census gate's OWN failure path
+# ------------------------------------------------------------------
+#
+# Why this step exists (2026-10-27):
+#
+#   Step 3e checks the numbers the documents quote.  But a gate that
+#   has never been seen to go RED is a gate nobody knows works:
+#   "CI is green" only proves the SUCCESS path.  The failure path
+#   runs only when the tree is broken -- and the tree is never broken.
+#
+#   So the four mutations run here, on every CI run, against COPIES
+#   of the tree (the real tree is never touched):
+#
+#     A  a quoted number drifts          -> must be RED
+#     B  another quoted number drifts     -> must be RED
+#     C  the CHECKER'S OWN header drifts  -> must be RED
+#     D  the ruler is broken              -> must be GREEN
+#
+#   D is the one that matters: it proves the red in A/B/C came from
+#   the CHECKER and not from a coincidence.  A broken ruler must
+#   produce ZERO reds -- so if D ever comes out RED, the ruler is
+#   measuring nothing at all, and A/B/C going red would mean nothing.
+#
+#   The harness is tools/mutate-census.ps1.  It used to live under
+#   build/probe/, which .gitignore blocks -- i.e. the script that
+#   measured the census was NOT in the repository, so the census table
+#   in the notes was hearsay (notes/atomic/at-a-number-nobody-can-
+#   recompute-is-hearsay.md).
+Say "Step 3f/6  the census gate's own failure path"
+
+$mutationHarness = Join-Path $RepoRoot 'tools\mutate-census.ps1'
+if (-not (Test-Path $mutationHarness)) {
+    Fail "mutation harness not found: $mutationHarness"
+}
+Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $mutationHarness,
+             '-RepoRoot', $RepoRoot, '-Mutation', 'A,B,C,D')
+Write-Host "   the census gate still catches a broken ruler: OK"
+
+# ------------------------------------------------------------------
 # Step 4: W5 smoke check
 # ------------------------------------------------------------------
 # W5 has no test suite. The shared common/qr_ocr suite covers the QR and
