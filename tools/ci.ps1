@@ -25,6 +25,10 @@
           FROM the docs, never hardcoded here -- a hardcoded expectation
           is a second copy, and a second copy is what drifts.
           This is debt 11 (see the knob audit, section 10).
+      3d. Every relative link in the documentation resolves. A link is a
+          recorded fact too -- "that file is over there, and it is still
+          there" -- and a link nobody follows drifts exactly like a
+          table nobody checks.
       4. W5's executable still runs. W5 has no test suite of its own,
          so this smoke check is the only thing CI says about W5.
          It asserts a serial number was actually decoded, using the
@@ -577,6 +581,41 @@ Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $checker,
 Write-Host "   documentation numbers agree with the measured build: OK"
 
 # ------------------------------------------------------------------
+# Step 3d/6: the links between the documents
+# ------------------------------------------------------------------
+#
+# Why this step exists (2026-10-26):
+#
+#   Step 3c checks that the NUMBERS in the docs match reality. It does
+#   not check the LINKS -- and a link is a recorded fact too: "that file
+#   is over there, and it is still there".
+#
+#   The same round that added Step 3c also deleted a card from
+#   notes/atomic/ (it duplicated another card, so its content was folded
+#   into the old one as a "recurrence" section). Three other cards
+#   linked to the deleted file. Nothing noticed: the link text still
+#   read perfectly, the markdown still rendered, and CI was green.
+#
+#   While writing the checker it found a SECOND broken link, one that
+#   had been sitting in W7_VisionMasterLite/README.md for a while: it
+#   pointed at "W7_VisionMasterLite/operator_library_groups.h" from
+#   inside W7_VisionMasterLite/ -- i.e. at
+#   W7_VisionMasterLite/W7_VisionMasterLite/operator_library_groups.h,
+#   which does not exist. The file it meant is one directory up.
+#
+#   => A link nobody follows is a link that drifts. Same disease as the
+#      per-suite table, one object over.
+Say "Step 3d/6  documentation links"
+
+$linkChecker = Join-Path $RepoRoot 'tools\check-links.ps1'
+if (-not (Test-Path $linkChecker)) {
+    Fail "link checker not found: $linkChecker"
+}
+Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $linkChecker,
+             '-RepoRoot', $RepoRoot)
+Write-Host "   every relative link in the docs resolves: OK"
+
+# ------------------------------------------------------------------
 # Step 4: W5 smoke check
 # ------------------------------------------------------------------
 # W5 has no test suite. The shared common/qr_ocr suite covers the QR and
@@ -823,6 +862,7 @@ Write-Host "   built   : $($Projects.Count) projects (Release)"
 Write-Host "   tested  : $SuiteCount ctest suites (W1 + W2 + W6 + W7)"
 Write-Host "   asserts : $AssertionTotal assertions (counted from this build)"
 Write-Host "   docs    : every number quoted in the docs matches the build"
+Write-Host "   links   : every relative link in the docs resolves"
 Write-Host "   smoke   : W5 qr --no-gui + W7 headless pipeline"
 Write-Host "   clean   : tests added nothing to the source tree"
 Write-Host ""

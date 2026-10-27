@@ -998,7 +998,7 @@ if (parent) { 建树项 }
 这个形态的特点是：**新增一个分类不会报错、不会崩**，只会让那一类算子无声无息
 地不见了。用户看到的是"怎么没有 DL 推理"，不会想到是建树的 if 少了一个分支。
 
-所以改成 [operator_library_groups.h](W7_VisionMasterLite/operator_library_groups.h)
+所以改成 [operator_library_groups.h](./operator_library_groups.h)
 里的做法：给定分类，要么落进已知分组，**要么现建一个分组**。无论传进来什么，
 没有算子会不见；现建出来的 key 回报给调用方，日志里留一句。
 

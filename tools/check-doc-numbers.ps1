@@ -261,7 +261,35 @@ $NoteKB = [int][math]::Round($NoteBytes / 1024)
 Write-Host ("   measured (tree) : {0} C++ files / {1} lines" -f $CppFiles, $CppLines)
 Write-Host ("   measured (tree) : {0} notes + {1} atomic cards / {2} KB" -f $NoteFiles, $AtomicFiles, $NoteKB)
 
+# The size of EACH note, measured the same way (bytes normalised to LF).
+#
+# The total above is checked, but the per-file table in the root README
+# was not -- and it had drifted in 8 of its 30 rows, one of them by
+# 29 KB. The total was right the whole time, because a per-file table
+# can be wrong in every row and still add up to the right number when
+# the errors cancel. (Same disease as the per-suite table: the total
+# hides the distribution.)
+#
+# So the sizes are measured here, once, and compared with what the
+# README says -- and the README's own total stays the only place the
+# total is written down.
+$NoteSizes = @{}
+if (Test-Path $noteDir) {
+    foreach ($f in (Get-ChildItem -Path $noteDir -File -Filter *.md)) {
+        $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+        $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+        $start = 0
+        if ($hasBom) { $start = 3 }
+        $text = [System.Text.Encoding]::UTF8.GetString($bytes, $start, $bytes.Length - $start)
+        $norm = $text.Replace("`r`n", "`n")
+        $kb = [int][math]::Round([System.Text.Encoding]::UTF8.GetByteCount($norm) / 1024)
+        $NoteSizes[$f.Name] = $kb
+    }
+}
+
 # ------------------------------------------------------------------
+# 3. The strong check: the per-suite tables
+# ------------------------------------------------------------------# ------------------------------------------------------------------
 # 3. The strong check: the per-suite tables
 # ------------------------------------------------------------------
 # This is the one that catches "the total is right but the distribution
@@ -330,6 +358,58 @@ foreach ($pt in $SuiteProjects) {
     }
     if ($Failures.Count -eq $before) {
         Write-Host ("   {0,-24} {1} suites, every row matches, sum = {2}" -f $proj, $DocRows.Count, $docSum)
+    }
+}
+
+# ------------------------------------------------------------------
+# 3b. The per-note size table in the root README
+# ------------------------------------------------------------------
+# The root README lists every note with its size:
+#
+#   - `notes_W7_Close_2026-10.md` (58 KB) -- ...
+#
+# That table was NOT checked, and it had drifted in 8 of its 30 rows
+# (one by 29 KB) while the TOTAL it was supposed to add up to stayed
+# exactly right. That is the shape the per-suite table has too: the
+# total can be right while every row is wrong, because the errors
+# cancel out.
+#
+# The expected values are READ from the README (the README is the one
+# place they are written); reality comes from the tree.
+Write-Host ""
+Write-Host "   -- per-note sizes (root README)"
+
+$readmeLines = Get-DocLines 'README.md'
+$DocNoteSizes = @{}
+foreach ($line in $readmeLines) {
+    $m = [regex]::Match($line, '^- `(?<f>notes_[^`]+\.md)` \((?<kb>\d+) KB\)')
+    if ($m.Success) { $DocNoteSizes[$m.Groups['f'].Value] = [int]$m.Groups['kb'].Value }
+}
+
+if ($DocNoteSizes.Count -eq 0) {
+    Fail ("the per-note size table in README.md was not found." +
+          "`n   The checker's pattern no longer matches the table -- update it here." +
+          "`n   A table that cannot be read is not a table that can be checked.")
+}
+else {
+    foreach ($name in ($DocNoteSizes.Keys | Sort-Object)) {
+        if (-not $NoteSizes.ContainsKey($name)) {
+            Fail ("the per-note size table in README.md lists '" + $name + "', which does not exist in notes/")
+        }
+        elseif ($DocNoteSizes[$name] -ne $NoteSizes[$name]) {
+            Fail ("'" + $name + "': README says " + $DocNoteSizes[$name] + " KB, reality says " + $NoteSizes[$name] + " KB")
+        }
+    }
+    # A note that exists but is not listed is a note nobody can find.
+    # (The listing is 1:1 with notes/ -- every note has a line, every
+    #  line has a note.)
+    foreach ($name in ($NoteSizes.Keys | Sort-Object)) {
+        if (-not $DocNoteSizes.ContainsKey($name)) {
+            Fail ("'" + $name + "' is in notes/ but has no line in the README's per-note size table")
+        }
+    }
+    if ($Failures.Count -eq 0) {
+        Write-Host ("   {0} notes, every size matches, and the listing is 1:1 with notes/" -f $DocNoteSizes.Count)
     }
 }
 

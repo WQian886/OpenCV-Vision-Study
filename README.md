@@ -125,6 +125,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 一条命令跑完：**7 个工程全部编译（Release）→ W1 1 + W2 1 + W6 3 + W7 26 共 31 套件
 全部跑通 → 数断言并**核对文档里引用的每一个数**
+→ **核对文档里每一个相对链接都真的能走到**
 → W5 的 exe 冒烟 → W7 真跑一条完整流水线（headless）
 → 检查源码树没被写脏**。
 
@@ -142,6 +143,17 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 **W6 的表当场漂了出来**（写着 180/36/163 = 379，
 实测 279/36/167 = 482，而**同一份 README 的正文**写着 482）。
 **一个没人检查的表，就是一个会漂的表。**
+
+同一轮还发现根 README 那张「每份笔记多大」的表**30 行里错了 8 行**（一个差 29 KB），
+**而总数一直是对的**——一行的错可以被另一行的错抵消。
+现在那张表也**逐份**查，而且要求它和 `notes/` 目录**一一对应**。
+
+再往后是 **Step 3d（`tools/check-links.ps1`）**：**文档里每一个相对链接都要真的能走到**。
+起因是上一轮**删掉了一张重复的卡**——**三张别的卡还指着它**，
+而链接的文字还是那么好看、markdown 还是照常渲染、**CI 还是绿的**。
+**链接本身一个字都没变，变的是它指的那个文件没了** ⇒ 只能**跟着走一遍**才能发现。
+写完检查器，第一次跑就逮到**另一个**坏链接（早就在那儿了：
+`W7_VisionMasterLite/README.md` 里的路径多了一层目录）。
 详见 [notes_W1W2_Tests_2026-10.md](./notes/notes_W1W2_Tests_2026-10.md) 和
 [notes_W7_DocNumbers_2026-10.md](./notes/notes_W7_DocNumbers_2026-10.md)。
 
@@ -175,7 +187,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 30 份 + 81 张 atomic 卡，~1037 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 30 份 + 82 张 atomic 卡，~1047 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -187,28 +199,28 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_W7_ImageSourceCamera_2026-09.md` (10 KB) — 工业相机图像源（MVS SDK 条件编译）
 - `notes_W7_UndoRedo_2026-09.md` (17 KB) — M6 撤销重做 + 节点 UUID + P0 悬垂指针修复
 - `notes_PCB_SharedCore_2026-10.md` (15 KB) — 共享判定核心 + W6 可测层 + 路径编码 bug
-- `notes_W7_EngineeringLessons_2026-10.md` (35 KB) — W7 工程经验汇总
-- `notes_PCB_Polarity_2026-10.md` (17 KB) — 极性判据重做：从「量错东西」到「量对东西」
-- `notes_QR_OCR_SharedCore_2026-10.md` (14 KB) — QR/OCR 合并成共享核心（第 5 次抄副本）
+- `notes_W7_EngineeringLessons_2026-10.md` (34 KB) — W7 工程经验汇总
+- `notes_PCB_Polarity_2026-10.md` (16 KB) — 极性判据重做：从「量错东西」到「量对东西」
+- `notes_QR_OCR_SharedCore_2026-10.md` (15 KB) — QR/OCR 合并成共享核心（第 5 次抄副本）
 - `notes_TestWorkDir_2026-10.md` (18 KB) — 测试产物落构建目录：`.gitignore` 藏起来的是文件，不是问题
-- `notes_CI_2026-10.md` (19 KB) — 上 CI：路径不能写死，以及 CI 第一次跑就逮到的两个真 bug
+- `notes_CI_2026-10.md` (48 KB) — 上 CI：路径不能写死，以及 CI 第一次跑就逮到的两个真 bug
 - `notes_PCB_Short_2026-10.md` (19 KB) — 短路判据重做：从「量标记圈」到「量两个端子之间」（附：陈旧数据副本）
 - `notes_PCB_Insufficient_2026-10.md` (16 KB) — 焊少判据重做：从「量 ROI 里的金」到「量这个焊盘自己的铜」
 - `notes_W7_RunEngine_2026-10.md` (60 KB) — 执行引擎抽离（第十轮）+ headless runner（片 3）+ 假 ONNX Runtime（片 4）+ 假 MVS SDK（片 5）
-- `notes_W7_Close_2026-10.md` (56 KB) — **W7 结项报告**：欠账总账（结项 17 条 → 现在 19 条）、每条债的边界与重开条件、明确不覆盖的范围、怎么复现这份结项
+- `notes_W7_Close_2026-10.md` (58 KB) — **W7 结项报告**：欠账总账（结项 17 条 → 现在 19 条）、每条债的边界与重开条件、明确不覆盖的范围、怎么复现这份结项
 - `notes_W7_Verdict_2026-10.md` (18 KB) — 结项之后还的第一笔：把「结论怎么说」收成**一份**规则（GUI 和 CI 共用），顺带抓到 CI 的一个**漏检**
 - `notes_W7_BadStep_2026-10.md` (15 KB) — 结项之后还的第二笔：让「跑坏了」真的算进判定（引擎把输出置空 → 旧判据数不到它）
-- `notes_W7_RenderPlan_2026-10.md` (16 KB) — 结项之后还的第三笔：结果面板「显示哪张图」收成**一份**规则，顺带抓到本轮自己的两个洞
-- `notes_W7_FrameProtocol_2026-10.md` (19 KB) — 结项之后还的第四笔：「源怎么报帧数」收成**一份**（第十份抄副本）+ 纯层瘦身 + **本项目第一条编译期约束**（只链 `Qt6::Core` 的目标往纯层塞 widget 就编不过）
+- `notes_W7_RenderPlan_2026-10.md` (17 KB) — 结项之后还的第三笔：结果面板「显示哪张图」收成**一份**规则，顺带抓到本轮自己的两个洞
+- `notes_W7_FrameProtocol_2026-10.md` (20 KB) — 结项之后还的第四笔：「源怎么报帧数」收成**一份**（第十份抄副本）+ 纯层瘦身 + **本项目第一条编译期约束**（只链 `Qt6::Core` 的目标往纯层塞 widget 就编不过）
 - `notes_W7_ParseLayer_2026-10.md` (20 KB) — 结项之后还的第五笔：**解析层别丢节点**（未知算子留在画布上标「未安装」→ 链不断 → 那一步强制失败）+ 三个「写了没人读」的字段改名并搬进纯层，顺带抓到**两个旧用例正在断言 bug**
 - `notes_W7_MainWindow_2026-10.md` (19 KB) — 结项之后还的第六笔：**主窗口第一次进测试**（主程序源码编成静态库 + offscreen 起真窗口），按「错了用户会不会自己发现」划线，顺带抓到**第十一遍抄副本**和一个**状态和画面对不上**的真 bug
-- `notes_W7_Knob_Audit_2026-10.md` (127 KB) — **旋钮审计**：欠账的**唯一登记处**（第十节）。19 条账、每条的边界与重开条件、每笔的证据在哪
+- `notes_W7_Knob_Audit_2026-10.md` (126 KB) — **旋钮审计**：欠账的**唯一登记处**（第十节）。19 条账、每条的边界与重开条件、每笔的证据在哪
 - `notes_W7_DocNumbers_2026-10.md` (12 KB) — 结项之后还的第七笔：**把「数字对不对得上」变成机器可查的一步**（欠账 11 的强制那半步）——期望值**读**出来不**抄**一份、逐套件表强查、当场逮到三处真漂移
 - `notes_W7_SuiteList_2026-10.md` (13 KB) — 结项之后还的第八笔：**套件名单只有一份**（手抄的那份漂了 8 个名字 → 那 8 个套件的汇总行进了调试通道 → 计数器默默少算了 **567** 条断言）+ **计数的数不许比真值小而不说话**（CI 从「红」到「绿」的一笔）
-- `notes_CI_FirstRunnerRun_2026-10.md` (16 KB) — 结项之后还的第九笔：**CI 第一次在真 runner 上跑**（欠账 9 收口）——真跑挖出四件「只有这台机器成立」的东西：空目录不在 git 里 / Qt 的 DLL 不在 PATH 上 / tesseract 的 PATH 只写在 YAML 里 / **ACP 把同一份代码判成两回事**（`.string()` 严格窄化：字符在 ACP 里表示不出来就抛 1113）
-- `notes_W1W2_Tests_2026-10.md` (12 KB) — **给 W1 / W2 补测试**（W1–W5 零测试缺口的第一笔）——把纯逻辑从 `main()` 里拆出来、demo 和测试链**同一份源码**、**每个门槛都是量出来的**、**变异验证当场逮到我自己的测试量错了对象**
+- `notes_CI_FirstRunnerRun_2026-10.md` (17 KB) — 结项之后还的第九笔：**CI 第一次在真 runner 上跑**（欠账 9 收口）——真跑挖出四件「只有这台机器成立」的东西：空目录不在 git 里 / Qt 的 DLL 不在 PATH 上 / tesseract 的 PATH 只写在 YAML 里 / **ACP 把同一份代码判成两回事**（`.string()` 严格窄化：字符在 ACP 里表示不出来就抛 1113）
+- `notes_W1W2_Tests_2026-10.md` (14 KB) — **给 W1 / W2 补测试**（W1–W5 零测试缺口的第一笔）——把纯逻辑从 `main()` 里拆出来、demo 和测试链**同一份源码**、**每个门槛都是量出来的**、**变异验证当场逮到我自己的测试量错了对象**
 
-`notes/atomic/` 里是**单条教训卡片**（81 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（82 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -272,8 +284,9 @@ OpenCV/
 ├── common/cmake/          # 三方依赖路径(本机默认值 + CI 覆盖)
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 核对文档里的数 + 检查源码树没被写脏
 ├── tools/check-doc-numbers.ps1  # 文档里每个「当前事实」的数 ↔ 实测（期望值从文档读）
+├── tools/check-links.ps1  # 文档里每个相对链接 → 真的能走到（链接不会自己漂）
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（30 份 + 81 张 atomic 卡）
+├── notes/                 # 变更日志（30 份 + 82 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -298,7 +311,7 @@ OpenCV/
   > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
   > 连最接近的 ANSI 口径（33,368）也对不上。
   > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
-- 30 份变更日志 + 81 张 atomic 卡 / ~1037 KB
+- 30 份变更日志 + 82 张 atomic 卡 / ~1047 KB
 - **31 个无头回归测试 / 2936 条断言**（W7 26 个 / 2371，W6 3 个 / 482，W2 1 个 / 54，W1 1 个 / 29；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

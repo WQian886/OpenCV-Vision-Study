@@ -79,7 +79,8 @@ $projMeasured = $Measured[$proj]     # 一眼能看出是"某个项目的"
 
 ## 配套
 
-- [the-restored-file-kept-the-old-timestamp.md](./the-restored-file-kept-the-old-timestamp.md)
-  —— 同一轮里的另一个「报错不指向原因」的坑
+- [at-ninja-mtime-stale-binary.md](./at-ninja-mtime-stale-binary.md)
+  —— 同一轮里的另一个「现象不指向原因」的坑：
+  文件内容是对的，跑的却是旧二进制
 
 参见 `notes/notes_W1W2_Tests_2026-10.md`（这一笔的完整记录）。

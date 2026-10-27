@@ -18,6 +18,8 @@
 #   · 7 projects compile (Release)
 #   · 31 ctest suites pass (W1 1 + W2 1 + W6 3 + W7 26)
 #   · W5's executable still decodes a QR
+#   · every number quoted in the docs matches the build
+#   · every relative link in the docs resolves
 #   · the source tree is byte-identical after all of that
 #     (test products must land in build/, never in the source tree)
 #

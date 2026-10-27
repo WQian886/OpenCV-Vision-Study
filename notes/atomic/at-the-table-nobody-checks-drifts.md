@@ -87,6 +87,8 @@ $SuiteProjects = @(
   —— 总数对得上，分部可以对不上
 - [at-a-branch-nobody-compiles-is-not-tested.md](./at-a-branch-nobody-compiles-is-not-tested.md)
   —— 同一个形状的另一个对象：**没人编译过的那一半，不算存在过**
+- [at-a-link-does-not-know-its-target-is-gone.md](./at-a-link-does-not-know-its-target-is-gone.md)
+  —— 同一个原则的另一个对象：**没人跟着走的链接，会指向一个已经没了的文件**
 - [at-unverified-number-in-comment.md](./at-unverified-number-in-comment.md)
 - [at-four-copies-of-one-number.md](./at-four-copies-of-one-number.md)
 
