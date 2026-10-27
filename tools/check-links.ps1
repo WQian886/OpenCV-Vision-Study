@@ -83,6 +83,20 @@ if ([string]::IsNullOrEmpty($RepoRoot)) {
 # three things. A second copy of them is a second thing that can drift.
 . (Join-Path $PSScriptRoot 'lib\DocScan.ps1')
 
+# The root is resolved to an ABSOLUTE path, and the tree is identified,
+# BEFORE anything is measured.  See Resolve-RepoRoot and
+# Get-RepoTreeProblems in tools/lib/DocScan.ps1 for what goes wrong
+# without this: a relative root makes every path lookup miss, and the
+# checker then reports a clean sheet on a tree it never saw.
+$RepoRoot = Resolve-RepoRoot $RepoRoot
+$treeProblems = Get-RepoTreeProblems $RepoRoot
+if ($treeProblems.Count -gt 0) {
+    Write-Host ("FAILED: '{0}' is not the OpenCV study tree." -f $RepoRoot) -ForegroundColor Red
+    Write-Host ("   missing: {0}" -f ($treeProblems -join ', ')) -ForegroundColor Red
+    Write-Host "   A checker pointed at the wrong tree measures air and reports a clean sheet." -ForegroundColor Red
+    exit 1
+}
+
 $Failures = New-Object System.Collections.ArrayList
 
 function Fail([string]$msg) {

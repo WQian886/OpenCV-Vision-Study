@@ -41,6 +41,67 @@
 #>
 
 # ------------------------------------------------------------------
+# Where is the repository?
+# ------------------------------------------------------------------
+#
+# The checkers compute "the path of this file relative to the repo" by
+# taking a PREFIX off an absolute path:
+#
+#     $f.FullName.Substring($RepoRoot.Length)
+#
+# That only works if $RepoRoot is byte-for-byte a prefix of the
+# absolute paths.  Pass "." and it is not: Get-ChildItem returns
+# "E:\repo\notes\x.md" while $RepoRoot is ".", so the "relative" path
+# comes out as "\repo\notes\x.md" -- a path that exists nowhere.  Every
+# lookup then misses, and the checker reports a clean sheet on a tree
+# it never saw.
+#
+# MEASURED, by running the section checker that way:
+#
+#     166 pointers seen, 123 resolved, 46 "could not be checked",
+#     117 named files "not in this tree", 0 atomic cards found
+#     ... and the gate said OK.
+#
+# So the root is resolved ONCE, to an absolute path, before anything
+# else happens.  A relative root is not an error -- it is just
+# resolved first.
+function Resolve-RepoRoot([string]$Path) {
+    if ([string]::IsNullOrEmpty($Path)) { $Path = (Get-Location).Path }
+    $resolved = Resolve-Path -LiteralPath $Path -ErrorAction Stop
+    $full = $resolved.ProviderPath
+    $full = $full.TrimEnd([char]'\', [char]'/')
+    # A drive root ("E:\") trims down to "E:", and "E:" means the
+    # CURRENT directory on drive E, not the root of the drive.  Put
+    # the separator back.
+    if ($full -match '^[A-Za-z]:$') { $full = $full + [char]'\' }
+    return $full
+}
+
+# ------------------------------------------------------------------
+# Is this the tree we think it is?
+# ------------------------------------------------------------------
+#
+# A checker pointed at the wrong tree measures air, and its report
+# looks exactly like a pass -- that is the failure this project keeps
+# paying for (notes/atomic/at-a-lint-that-finds-nothing-looks-green.md,
+# notes/atomic/at-an-audit-that-cannot-see-starts-lying.md).
+#
+# The section checker SAYS what it could not check (46 unchecked
+# pointers, 117 files "not in this tree") and THEN says OK, because
+# saying it is not the same as letting it change the verdict.
+#
+# So the tree is identified BEFORE anything is measured, and a tree
+# that does not have this shape is refused out loud.
+function Get-RepoTreeProblems([string]$RepoRoot) {
+    $missing = @()
+    foreach ($p in @('README.md', 'notes', 'notes\atomic', 'tools\ci.ps1')) {
+        $full = Join-Path $RepoRoot $p
+        if (-not (Test-Path -LiteralPath $full)) { $missing += $p }
+    }
+    return ,$missing
+}
+
+# ------------------------------------------------------------------
 # Which markdown files are in scope
 # ------------------------------------------------------------------
 #
@@ -249,4 +310,170 @@ function Get-CornerQuoteSpans([string[]]$Lines) {
         }
     }
     return ,$spans.ToArray()
+}
+
+# ------------------------------------------------------------------
+# "41,330" -> 41330
+# ------------------------------------------------------------------
+#
+# The documents write big numbers with a thousands separator, and the
+# separator is not part of the number.
+function Parse-Num([string]$s) {
+    return [int](($s -replace ',', '').Trim())
+}
+
+# ------------------------------------------------------------------
+# One claim: "this document says this number HERE"
+# ------------------------------------------------------------------
+#
+# A claim names a PLACE (a file, optionally a section) and a pattern
+# whose capture groups hold the numbers the document must carry.
+#
+# The EXPECTED values are NOT part of the claim: they come from the
+# measurement, so the expected number is never written down twice.
+# The document holds it once; this function only knows WHERE to look.
+# That is the difference between "a second copy that drifts" and
+# "a check that holds the copy still".
+#
+# Three rules, all of them learned the hard way:
+#
+#   1. A claim that is NOT FOUND is a FAILURE, not a skip. A rule
+#      that stops firing and reports nothing is the failure this
+#      project keeps paying for.
+#
+#   2. EVERY hit in scope is checked. One hit that matches is not
+#      enough -- the second hit is where the drift hides.
+#
+#   3. The scope ('After') exists because some documents carry a
+#      CURRENT snapshot AND a HISTORICAL snapshot of the same shape.
+#      A checker that cannot tell them apart either flags the
+#      historical one (a false alarm on a deliberate record) or
+#      ignores both (no check at all). A missing scope marker is
+#      also a FAILURE: the anchor has to be updated, not skipped.
+#
+# The result is an object: Ok, Why, and the LINE NUMBERS that were
+# checked. The line numbers are there so a human can go and look at
+# the line -- a number into an array is not.
+function Test-Claim($claim, [string[]]$lines) {
+    $scope = $lines
+    $scopeStart = 0
+    if ($claim.ContainsKey('After')) {
+        $start = -1
+        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+            if ($lines[$i] -match $claim.After) { $start = $i; break }
+        }
+        if ($start -lt 0) {
+            return [pscustomobject]@{
+                Ok = $false; Hits = @()
+                Why = ("the section marker was NOT FOUND -- the anchor in" +
+                       " the checker has to be updated. It is deliberately" +
+                       " not skipped: a checker that stops recognising its own docs and" +
+                       " says nothing is the failure this project keeps paying for.")
+            }
+        }
+        $end = $lines.Count
+        for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^#{1,6}\s') { $end = $i; break }
+        }
+        if ($end -le $start) { $end = $start + 1 }
+        $scope = $lines[$start..($end - 1)]
+        $scopeStart = $start
+    }
+
+    $hits = @()
+
+    # A BLOCK claim: a run of consecutive lines that states a list of
+    # numbers, checked as a LIST rather than line by line.
+    #
+    # 'Start' finds the first line of the block (and it must match
+    # exactly ONE line -- a block that can start in two places is a
+    # block with two meanings), 'Lines' says how many lines it takes,
+    # and every integer in those lines is compared with 'Expect', in
+    # order.
+    #
+    # Why a block is one claim and not N line claims: the block is ONE
+    # statement ("the census is: 132 files, 694 chapters, 177
+    # pointers, ..."), and a claim per line would let the block drift
+    # apart -- 132 files of one tree and 177 pointers of another.
+    #
+    # The numbers are extracted with a plain integer match, so a block
+    # that also contains a FILE NAME with digits in it (a date, a
+    # chapter number) cannot use this kind: the digits in the path
+    # would be counted as part of the list. Those blocks use line
+    # claims with the path as the anchor.
+    if ($claim.ContainsKey('Start')) {
+        $starts = @()
+        for ($i = 0; $i -lt $scope.Count; $i++) {
+            if ($scope[$i] -match $claim.Start) { $starts += $i }
+        }
+        if ($starts.Count -eq 0) {
+            return [pscustomobject]@{
+                Ok = $false; Hits = @()
+                Why = ("the block was NOT FOUND -- the wording changed, so the anchor in" +
+                       " the checker has to be updated. It is deliberately not skipped:" +
+                       " a checker that stops recognising its own docs and says nothing" +
+                       " is the failure this project keeps paying for.")
+            }
+        }
+        if ($starts.Count -gt 1) {
+            return [pscustomobject]@{
+                Ok = $false; Hits = @()
+                Why = ("the block matches {0} lines in the scope -- a block that can" +
+                       " start in two places has two meanings. Make the anchor exact." -f $starts.Count)
+            }
+        }
+        $s = $starts[0]
+        $last = [Math]::Min($s + [int]$claim.Lines - 1, $scope.Count - 1)
+        $nums = @()
+        for ($i = $s; $i -le $last; $i++) {
+            foreach ($m in [regex]::Matches($scope[$i], '\d+')) {
+                $nums += ,([pscustomobject]@{ Line = ($scopeStart + $i + 1); Value = [int]$m.Value })
+            }
+        }
+        $bad = @()
+        if ($nums.Count -ne $claim.Expect.Count) {
+            $bad += ("the block states {0} numbers, the checker expects {1}" -f $nums.Count, $claim.Expect.Count)
+        }
+        else {
+            for ($g = 0; $g -lt $nums.Count; $g++) {
+                if ($nums[$g].Value -ne [int]$claim.Expect[$g]) {
+                    $bad += ("line {0}: number {1} is {2}, reality says {3}" -f `
+                             $nums[$g].Line, ($g + 1), $nums[$g].Value, [int]$claim.Expect[$g])
+                }
+            }
+        }
+        if ($bad.Count -gt 0) {
+            return [pscustomobject]@{ Ok = $false; Hits = @(); Why = ($bad -join '; ') }
+        }
+        return [pscustomobject]@{ Ok = $true; Hits = @(); Why = $null }
+    }
+
+    for ($i = 0; $i -lt $scope.Count; $i++) {
+        $m = [regex]::Match($scope[$i], $claim.Pattern)
+        if ($m.Success) { $hits += ,([pscustomobject]@{ Line = ($scopeStart + $i + 1); Match = $m }) }
+    }
+    if ($hits.Count -eq 0) {
+        return [pscustomobject]@{
+            Ok = $false; Hits = @()
+            Why = ("the claim was NOT FOUND -- the wording changed, so the anchor in" +
+                   " the checker has to be updated. It is deliberately" +
+                   " not skipped: a checker that stops recognising its own docs and" +
+                   " says nothing is the failure this project keeps paying for.")
+        }
+    }
+    $bad = @()
+    foreach ($h in $hits) {
+        $m = $h.Match
+        for ($g = 1; $g -le $claim.Expect.Count; $g++) {
+            $got = Parse-Num $m.Groups[$g].Value
+            $want = [int]$claim.Expect[$g - 1]
+            if ($got -ne $want) {
+                $bad += ("line {0}: group {1} is {2}, reality says {3}" -f $h.Line, $g, $got, $want)
+            }
+        }
+    }
+    if ($bad.Count -gt 0) {
+        return [pscustomobject]@{ Ok = $false; Hits = $hits; Why = ($bad -join '; ') }
+    }
+    return [pscustomobject]@{ Ok = $true; Hits = $hits; Why = $null }
 }

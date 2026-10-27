@@ -20,19 +20,19 @@
       round and found three real dangling links on its first run. The
       same round measured what the link checker CANNOT see: a link is
       a recorded fact about a FILE, and a section pointer is a
-      recorded fact about a PLACE. 164 section pointers, of which 57
+      recorded fact about a PLACE. 179 section pointers, of which 59
       point into ONE file -- notes/notes_W7_Knob_Audit_2026-10.md,
       the debt register that this project keeps editing.
 
       Measured, not estimated: renumbering that one chapter breaks
-      35 of those pointers, and every one of them still reads
+      36 of those pointers, and every one of them still reads
       perfectly. (A mutation run on a copy of the tree confirmed
-      the 35.)
+      the 36.)
 
-      Measured on the day it was written: 164 pointers, all of them
+      Measured on the day it was written: 177 pointers, all of them
       resolving -- so this gate is not reporting a fire that is already
-      burning, it is stopping the next one from starting. (SIXTEEN
-      lines of prose had to be REWRITTEN first -- eighteen pointers --
+      burning, it is stopping the next one from starting. (TWENTY-THREE
+      lines of prose had to be REWRITTEN first -- twenty-five pointers --
       because they pointed at a chapter of a file they did not name;
       see notes/notes_SectionPointers_2026-10.md.)
 
@@ -147,6 +147,20 @@ if ([string]::IsNullOrEmpty($RepoRoot)) {
 }
 
 . (Join-Path $PSScriptRoot 'lib\DocScan.ps1')
+
+# The root is resolved to an ABSOLUTE path, and the tree is identified,
+# BEFORE anything is measured.  See Resolve-RepoRoot and
+# Get-RepoTreeProblems in tools/lib/DocScan.ps1 for what goes wrong
+# without this: a relative root makes every path lookup miss, and the
+# gate then reports a clean sheet on a tree it never saw.
+$RepoRoot = Resolve-RepoRoot $RepoRoot
+$treeProblems = Get-RepoTreeProblems $RepoRoot
+if ($treeProblems.Count -gt 0) {
+    Write-Host ("FAILED: '{0}' is not the OpenCV study tree." -f $RepoRoot) -ForegroundColor Red
+    Write-Host ("   missing: {0}" -f ($treeProblems -join ', ')) -ForegroundColor Red
+    Write-Host "   A checker pointed at the wrong tree measures air and reports a clean sheet." -ForegroundColor Red
+    exit 1
+}
 
 $Failures = New-Object System.Collections.ArrayList
 
@@ -324,6 +338,24 @@ $Fragments = 0
 $MissingNames = @{}
 $AmbiguousNames = @{}
 $PointedAt = @{}
+# The BLAST RADIUS, measured per CHAPTER and not per file.
+#
+# $PointedAt answers "how many pointers aim at this FILE". That is not
+# the number the docs quote: the docs quote what happens when ONE
+# chapter is renumbered, and that is the number of pointers that aim
+# at that one CHAPTER. A file can be the target of 59 pointers spread
+# over 40 chapters -- renumbering all of them is not a thing anyone
+# does; renumbering the tenth one is.
+#
+# $PointedAtChapter is keyed by "<full path>|<chapter token>".
+$PointedAtChapter = @{}
+# Of those, how many the LOOSE rule would have let through: a pointer
+# whose OWN file happens to have a chapter with the same number would
+# be rebound to it by the loose rule, and would go green while
+# pointing at the wrong place. This is the number the docs call "the
+# ones the loose rule did not catch", and it is measured here, live,
+# instead of being quoted from a mutation run that nobody can repeat.
+$PointedAtChapterMissed = @{}
 # Every skip, with its reason and its place. The summary prints how
 # many; -List prints which ones, so a human can judge each.
 $Skips = New-Object System.Collections.ArrayList
@@ -642,14 +674,33 @@ foreach ($f in $mdFiles) {
             }
 
             # The pointer names a file that is not in this tree, so
-            # there is no chapter table to check it against.  That is
-            # a SKIP, and it is counted -- a pointer that was never
-            # checked must never be counted as one that passed.
+            # there is no chapter table to check it against.
+            #
+            # This is a FAILURE, not a skip.  A pointer is a CLAIM
+            # about a place -- "the third section of that file".  If
+            # the file is not there, the claim cannot be true, and a
+            # reader who follows it lands nowhere.  The link checker
+            # already fails on exactly this (a relative link to a
+            # file that does not exist), and the two checkers must
+            # agree: a broken pointer is a broken link with more
+            # words in it.
+            #
+            # The MENTION of a file that is not there stays a skip:
+            # a mention can be a suggestion ("we could add a
+            # CHANGELOG.md"), a forward reference, or a name in
+            # another repo.  It is the POINTER that is a claim, and a
+            # claim that cannot be checked is a broken one.
             if ($null -ne $bound -and $bound.State -ne 'ok') {
                 $PointersUncheckable++
+                $why = "which is not in this tree"
+                if ($bound.State -eq 'ambiguous') {
+                    $why = "which is AMBIGUOUS (more than one file has that name)"
+                }
                 [void]$Skips.Add([pscustomobject]@{
                     File = $relFile; Line = ($s.Index + 1); Text = $p.Text
-                    Reason = ("bound to '" + $bound.Name + "', which is not in this tree") })
+                    Reason = ("bound to '" + $bound.Name + "', " + $why) })
+                Fail ("{0}:{1}: pointer '{2}' is bound to '{3}', {4} -- so it cannot be checked" -f `
+                      $relFile, ($s.Index + 1), $p.Text, $bound.Name, $why)
                 continue
             }
 
@@ -663,6 +714,24 @@ foreach ($f in $mdFiles) {
                 if ($target -eq $f.FullName) { $SameFile++ } else { $CrossFile++ }
                 if (-not $PointedAt.ContainsKey($target)) { $PointedAt[$target] = 0 }
                 $PointedAt[$target]++
+                # Per chapter: the blast radius of renumbering ONE
+                # chapter of this file.
+                $ck = $target + '|' + $p.Token
+                if (-not $PointedAtChapter.ContainsKey($ck)) { $PointedAtChapter[$ck] = 0 }
+                $PointedAtChapter[$ck]++
+                # The loose rule would have looked in the file the
+                # pointer is IN first. If that file has a chapter with
+                # the same number, the loose rule binds there and
+                # goes GREEN -- silently pointing at the wrong place.
+                # Those are the breaks the strict rule catches and the
+                # loose one does not.
+                if ($target -ne $f.FullName) {
+                    $own = $ChapterTokens[$f.FullName]
+                    if ($null -ne $own -and $own.Contains($p.Token)) {
+                        if (-not $PointedAtChapterMissed.ContainsKey($ck)) { $PointedAtChapterMissed[$ck] = 0 }
+                        $PointedAtChapterMissed[$ck]++
+                    }
+                }
                 continue
             }
 
@@ -799,6 +868,606 @@ if ($PointedAt.Count -gt 0) {
 }
 
 # ------------------------------------------------------------------
+# 7. The census: the numbers this script measured, as the docs quote them
+# ------------------------------------------------------------------
+#
+# WHY this section exists
+#
+# The numbers this script prints are a RECORDED FACT about the tree,
+# and the documents quote them.  A quote that nobody checks is a
+# quote that drifts: by the time this section was written, four
+# places in this repository had already gone stale (35 instead of 36,
+# 19 instead of 20, "from 39 to 40" instead of "from 40 to 41"), and
+# NOTHING in the CI noticed -- because the numbers in the prose were
+# checked against NOTHING.
+#
+#   => A table that nobody checks is a table that drifts
+#      (notes/atomic/at-the-table-nobody-checks-drifts.md), one object
+#      over: this time the table is the CENSUS.
+#
+# The EXPECTED values below are the measurements.  They are never
+# written down here.  The document holds the number once; this
+# checker only knows WHERE to look.  That is the difference between
+# "a second copy that drifts" and "a check that holds the copy
+# still".
+#
+# WHY the blast radius is measured here and not quoted from a mutation
+#
+# The docs say "renumber that one heading and 36 pointers break".
+# That 36 came from a mutation run on a COPY of the tree -- a number
+# nobody can repeat without the harness.  But it does not have to be
+# that way: the blast radius of renumbering ONE chapter is the number
+# of pointers that resolve to THAT chapter, and this script already
+# knows every pointer's target.  So it is measured here, LIVE, and the
+# mutation run becomes a confirmation instead of the only source.
+#
+# The same trick gives the "loose rule" number for free: of the
+# pointers that aim at that chapter, the ones whose OWN file happens
+# to have a chapter with the same number are exactly the ones the
+# loose rule would have rebound -- silently pointing at the wrong
+# place while going green.  That is the number the docs have been
+# quoting from a mutation run, and it is now measured.
+#
+# The patterns are ASCII.  The Chinese a pattern needs is written as
+# \uXXXX, which the .NET regex engine understands -- so the file stays
+# readable by PowerShell 5.1 (which would mangle a Chinese character
+# in the SOURCE) while the pattern still matches the Chinese prose.
+$FilesCount = $mdFiles.Count
+$ChaptersCount = $HeadingCount
+$PointersCount = $TotalPointers
+$ResolvedCount = $Resolved
+$QuotedCount = $PointersQuoted
+$CodeCount = $PointersInCode
+$UncheckableCount = $PointersUncheckable
+# The pointers that were SEEN but not checked (quoted or in code).  The
+# documents quote this too, and it is the difference between "checked"
+# and "counted", so it gets its own name.
+$SkippedPointers = $PointersCount - $ResolvedCount
+
+# The blast radius: the chapter that the most pointers aim at.
+#
+# The keys are sorted before the maximum is taken, so the answer does
+# not depend on the order a hashtable happens to enumerate its keys
+# in.  A gate whose answer changes when nothing changed is a gate
+# nobody can trust.
+$WorstCount = 0
+$WorstKey = ''
+foreach ($k in @($PointedAtChapter.Keys | Sort-Object)) {
+    if ($PointedAtChapter[$k] -gt $WorstCount) {
+        $WorstCount = $PointedAtChapter[$k]
+        $WorstKey = $k
+    }
+}
+$WorstFile = ''
+$WorstToken = ''
+if ($WorstKey -ne '') {
+    $bar = $WorstKey.LastIndexOf('|')
+    $WorstFile = $WorstKey.Substring(0, $bar)
+    $WorstToken = $WorstKey.Substring($bar + 1)
+}
+$WorstMissed = 0
+if ($WorstKey -ne '' -and $PointedAtChapterMissed.ContainsKey($WorstKey)) {
+    $WorstMissed = $PointedAtChapterMissed[$WorstKey]
+}
+# What the loose rule would have caught: the breaks it would have
+# caught, which is every break minus the ones it would have let
+# through by binding them to the reader's own file.
+$WorstLoose = $WorstCount - $WorstMissed
+
+# How many pointers aim at a given file (by its path, relative to the
+# root, with forward slashes -- the form the documents write).
+function Get-PointedAtCount([string]$rel) {
+    if (-not $FileIndex.ContainsKey($rel)) { return -1 }
+    $full = $FileIndex[$rel]
+    if ($PointedAt.ContainsKey($full)) { return $PointedAt[$full] }
+    return 0
+}
+$KnobCount = Get-PointedAtCount 'notes/notes_W7_Knob_Audit_2026-10.md'
+$CiCount = Get-PointedAtCount 'notes/notes_CI_2026-10.md'
+$PcbCount = Get-PointedAtCount 'notes/notes_PCB_Insufficient_2026-10.md'
+$Top3Sum = 0
+$Top3Files = 0
+if ($PointedAt.Count -gt 0) {
+    $top3 = @($PointedAt.GetEnumerator() | Sort-Object -Property Value -Descending | Select-Object -First 3)
+    $Top3Files = $top3.Count
+    foreach ($e in $top3) { $Top3Sum += $e.Value }
+}
+
+Write-Host ""
+Write-Host ("   -- the census (measured): {0} files / {1} chapters / {2} pointers" -f `
+          $FilesCount, $ChaptersCount, $PointersCount)
+Write-Host ("      resolved {0} ({1} cross-file, {2} same-file), quoted {3}, in code {4}, uncheckable {5}" -f `
+          $ResolvedCount, $CrossFile, $SameFile, $QuotedCount, $CodeCount, $UncheckableCount)
+if ($WorstKey -ne '') {
+    $worstRel = $WorstFile.Substring($RepoRoot.Length).TrimStart([char]'\', [char]'/')
+    Write-Host ("      worst single chapter: {0} chapter {1} -- {2} pointers break, {3} would slip through the loose rule" -f `
+              $worstRel, $WorstToken, $WorstCount, $WorstMissed)
+}
+
+# ------------------------------------------------------------------
+# 7b. The claims: every place the docs quote those numbers
+# ------------------------------------------------------------------
+$CensusFailures = New-Object System.Collections.ArrayList
+$CensusClaims = @(
+    # ---- root README -------------------------------------------------
+    @{ Label = 'root README: the blast radius'
+       File  = 'README.md'
+       After = '^## .* CI$'
+       Pattern = '\*\*(\d+) \u4E2A\u7AE0\u8282\u6307\u9488\*\*\D+\*\*(\d+) \u4E2A\u6307\u7740\u540C\u4E00\u4EFD\u6587\u4EF6\*\*'
+       Expect = @($PointersCount, $KnobCount) }
+    @{ Label = 'root README: the break count'
+       File  = 'README.md'
+       After = '^## .* CI$'
+       Pattern = '\*\*(\d+) \u4E2A\u6307\u9488\u5F53\u573A\u5931\u6548\*\*'
+       Expect = @($WorstCount) }
+
+    # ---- W7 README ----------------------------------------------------
+    @{ Label = 'W7 README: the blast radius'
+       File  = 'W7_VisionMasterLite/README.md'
+       After = '^# W7'
+       Pattern = '\*\*(\d+) \u4E2A\u6307\u9488,(\d+) \u4E2A\u6307\u5411\u540C\u4E00\u4E2A\u6587\u4EF6\*\*'
+       Expect = @($PointersCount, $KnobCount) }
+    @{ Label = 'W7 README: the break count'
+       File  = 'W7_VisionMasterLite/README.md'
+       After = '^# W7'
+       Pattern = '\*\*(\d+) \u4E2A\u6307\u9488\u5F53\u573A\u5931\u6548\*\*'
+       Expect = @($WorstCount) }
+    @{ Label = 'W7 README: what the loose rule caught'
+       File  = 'W7_VisionMasterLite/README.md'
+       After = '^# W7'
+       Pattern = '\u53EA\u902E\u5230 (\d+) \u91CC\u7684 \*\*(\d+)\*\*'
+       Expect = @($WorstCount, $WorstLoose) }
+    @{ Label = 'W7 README: what the loose rule missed'
+       File  = 'W7_VisionMasterLite/README.md'
+       After = '^# W7'
+       Pattern = '\u5C11\u902E\u5230\u7684 (\d+) \u4E2A'
+       Expect = @($WorstMissed) }
+
+    # ---- the section-pointers note ------------------------------------
+    @{ Label = 'section pointers note: the census block'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 2\.1'
+       Start = '^\d+ \u4E2A markdown'
+       Lines = 7
+       Expect = @($FilesCount, $ChaptersCount, $PointersCount, $ResolvedCount,
+                  $CrossFile, $SameFile, $QuotedCount, $CodeCount, $UncheckableCount) }
+    @{ Label = 'section pointers note: the debt register is the most pointed at'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 2\.2'
+       Pattern = 'notes/notes_W7_Knob_Audit_2026-10\.md\s+(\d+) \u4E2A'
+       Expect = @($KnobCount) }
+    @{ Label = 'section pointers note: the CI note'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 2\.2'
+       Pattern = 'notes/notes_CI_2026-10\.md\s+(\d+) \u4E2A'
+       Expect = @($CiCount) }
+    @{ Label = 'section pointers note: the PCB note'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 2\.2'
+       Pattern = 'notes/notes_PCB_Insufficient_2026-10\.md\s+(\d+) \u4E2A'
+       Expect = @($PcbCount) }
+    @{ Label = 'section pointers note: the rule table'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 3\.2'
+       Start = '^\| \u89C4\u5219 \|'
+       Lines = 4
+       Expect = @($WorstCount, $WorstLoose, $WorstCount) }
+    @{ Label = 'section pointers note: what the loose rule missed'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 3\.2'
+       Pattern = '\u5C11\u902E\u5230\u7684 (\d+) \u4E2A'
+       Expect = @($WorstMissed) }
+    @{ Label = 'section pointers note: mutation A'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 4\.3'
+       Pattern = '\*\*A\*\*.*\*\*\u7EA2\uFF0C(\d+) \u6761\*\*'
+       Expect = @($WorstCount) }
+    @{ Label = 'section pointers note: mutation A-LOOSE'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 4\.3'
+       Pattern = '\*\*A-LOOSE\*\*.*\*\*\u7EA2\uFF0C(\d+) \u6761\*\*\uFF08A \u662F (\d+)\uFF09'
+       Expect = @($WorstLoose, $WorstCount) }
+    @{ Label = 'section pointers note: the quoted pointers'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 4\.3'
+       Pattern = '\u5F15\u53F7\u91CC\u7684\u6307\u9488 (\d+) \u2192'
+       Expect = @($QuotedCount) }
+    @{ Label = 'section pointers note: the summary table'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^## 6\.'
+       Pattern = '\|\s*\u7AE0\u8282\u6307\u9488 \|\s*\*\*(\d+)\*\*\uFF08(\d+) \u8DE8\u6587\u4EF6 / (\d+) \u540C\u6587\u4EF6\uFF09'
+       Expect = @($PointersCount, $CrossFile, $SameFile) }
+    @{ Label = 'section pointers note: three files hold most of them'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^## 6\.'
+       Pattern = '\*\*(\d+) \u4E2A\u6587\u4EF6\u5360\u4E86 (\d+) \u4E2A\*\*'
+       Expect = @($Top3Files, $Top3Sum) }
+    @{ Label = 'section pointers note: the pointers that could not be checked'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^## 6\.'
+       Pattern = '\|\s*\*\*\u67E5\u4E0D\u4E86\u7684\u6307\u9488\*\*\s*\|\s*\*\*(\d+)\*\*'
+       Expect = @($UncheckableCount) }
+
+    # ---- the close report ---------------------------------------------
+    @{ Label = 'close report: the blast radius heading'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       After = '^### \u7206\u70B8\u534A\u5F84'
+       Pattern = '\*\*(\d+) \u4E2A\u6307\u9488\*\*'
+       Expect = @($WorstCount) }
+    @{ Label = 'close report: the census block'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       After = '^### \u7206\u70B8\u534A\u5F84'
+       Pattern = '^(\d+) \u4E2A markdown \u6587\u4EF6 / (\d+) \u4E2A\u7AE0\u8282\u6807\u9898 / (\d+) \u4E2A\u7AE0\u8282\u6307\u9488'
+       Expect = @($FilesCount, $ChaptersCount, $PointersCount) }
+    @{ Label = 'close report: the cross-file pointers'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       After = '^### \u7206\u70B8\u534A\u5F84'
+       Pattern = '(\d+) \u4E2A \u8DE8\u6587\u4EF6'
+       Expect = @($CrossFile) }
+    @{ Label = 'close report: the same-file pointers'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       After = '^### \u7206\u70B8\u534A\u5F84'
+       Pattern = '(\d+) \u4E2A \u540C\u6587\u4EF6'
+       Expect = @($SameFile) }
+    @{ Label = 'close report: the debt register is the most pointed at'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       After = '^### \u7206\u70B8\u534A\u5F84'
+       Pattern = 'notes/notes_W7_Knob_Audit_2026-10\.md\s+(\d+) \u4E2A'
+       Expect = @($KnobCount) }
+    @{ Label = 'close report: the CI note'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       After = '^### \u7206\u70B8\u534A\u5F84'
+       Pattern = 'notes/notes_CI_2026-10\.md\s+(\d+) \u4E2A'
+       Expect = @($CiCount) }
+    @{ Label = 'close report: the PCB note'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       After = '^### \u7206\u70B8\u534A\u5F84'
+       Pattern = 'notes/notes_PCB_Insufficient_2026-10\.md\s+(\d+) \u4E2A'
+       Expect = @($PcbCount) }
+    @{ Label = 'close report: the mutation result'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       After = '^### \u7206\u70B8\u534A\u5F84'
+       Pattern = '\*\*(\d+) \u6761\u7EA2\*\*'
+       Expect = @($WorstCount) }
+    @{ Label = 'close report: the places that go wrong'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       After = '^### \u7206\u70B8\u534A\u5F84'
+       Pattern = '\u4E00\u4E2A\u6539\u52A8\uFF0C(\d+) \u5904'
+       Expect = @($WorstCount) }
+    @{ Label = 'close report: the rule table'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       After = '^### \u5224\u636E'
+       Start = '^\| \u89C4\u5219 \|'
+       Lines = 4
+       Expect = @($WorstCount, $WorstLoose, $WorstCount) }
+    @{ Label = 'close report: what the loose rule missed'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       After = '^### \u5224\u636E'
+       Pattern = '\u5C11\u902E\u5230\u7684 (\d+) \u4E2A'
+       Expect = @($WorstMissed) }
+
+    # ---- the debt register --------------------------------------------
+    @{ Label = 'debt register: the pointers'
+       File  = 'notes/notes_W7_Knob_Audit_2026-10.md'
+       After = '^## \u5341\u3001'
+       Pattern = '(\d+) \u4E2A\u300C\u7B2C N \u8282\u300D\u8FD9\u7C7B\u6307\u9488'
+       Expect = @($PointersCount) }
+    @{ Label = 'debt register: the most pointed at'
+       File  = 'notes/notes_W7_Knob_Audit_2026-10.md'
+       After = '^## \u5341\u3001'
+       Pattern = '\*\*(\d+) \u4E2A\u6307\u7740\u8FD9\u4E00\u4EFD\u53F0\u8D26\*\*'
+       Expect = @($KnobCount) }
+    @{ Label = 'debt register: the break count'
+       File  = 'notes/notes_W7_Knob_Audit_2026-10.md'
+       After = '^## \u5341\u3001'
+       Pattern = '\*\*(\d+) \u4E2A\u6307\u9488\u5F53\u573A\u5931\u6548\*\*'
+       Expect = @($WorstCount) }
+
+    # ---- the card ------------------------------------------------------
+    @{ Label = 'card: the heading'
+       File  = 'notes/atomic/at-a-section-pointer-is-a-claim-about-a-place.md'
+       After = '^## \u7206\u70B8\u534A\u5F84'
+       Pattern = '\u4E0D\u662F \d+ \u4E2A\uFF0C\u662F (\d+) \u4E2A'
+       Expect = @($KnobCount) }
+    @{ Label = 'card: the pointer count'
+       File  = 'notes/atomic/at-a-section-pointer-is-a-claim-about-a-place.md'
+       After = '^## \u7206\u70B8\u534A\u5F84'
+       Pattern = '^(\d+) \u4E2A\u7AE0\u8282\u6307\u9488$'
+       Expect = @($PointersCount) }
+    @{ Label = 'card: the cross-file pointers'
+       File  = 'notes/atomic/at-a-section-pointer-is-a-claim-about-a-place.md'
+       After = '^## \u7206\u70B8\u534A\u5F84'
+       Pattern = '(\d+) \u4E2A \u8DE8\u6587\u4EF6'
+       Expect = @($CrossFile) }
+    @{ Label = 'card: the same-file pointers'
+       File  = 'notes/atomic/at-a-section-pointer-is-a-claim-about-a-place.md'
+       After = '^## \u7206\u70B8\u534A\u5F84'
+       Pattern = '(\d+) \u4E2A \u540C\u6587\u4EF6'
+       Expect = @($SameFile) }
+    @{ Label = 'card: the most pointed at'
+       File  = 'notes/atomic/at-a-section-pointer-is-a-claim-about-a-place.md'
+       After = '^## \u7206\u70B8\u534A\u5F84'
+       Pattern = '\u5176\u4E2D (\d+) \u4E2A\u6307\u5411\u540C\u4E00\u4E2A\u6587\u4EF6'
+       Expect = @($KnobCount) }
+    @{ Label = 'card: the break count'
+       File  = 'notes/atomic/at-a-section-pointer-is-a-claim-about-a-place.md'
+       After = '^## \u7206\u70B8\u534A\u5F84'
+       Pattern = '\*\*(\d+) \u4E2A\u6307\u9488\u91CC\u7684 (\d+) \u4E2A\*\*\u5F53\u573A\u5931\u6548'
+       Expect = @($KnobCount, $WorstCount) }
+    @{ Label = 'card: the mutation result'
+       File  = 'notes/atomic/at-a-section-pointer-is-a-claim-about-a-place.md'
+       After = '^## \u7206\u70B8\u534A\u5F84'
+       Pattern = '\*\*(\d+) \u4E2A\u6307\u9488\u53D8\u7EA2\*\*'
+       Expect = @($WorstCount) }
+    @{ Label = 'card: the rule table'
+       File  = 'notes/atomic/at-a-section-pointer-is-a-claim-about-a-place.md'
+       After = '^## \u7B2C\u4E00\u7248\u89C4\u5219'
+       Start = '^\| \u89C4\u5219 \|'
+       Lines = 4
+       Expect = @($WorstCount, $WorstLoose, $WorstCount) }
+    @{ Label = 'card: what the loose rule missed'
+       File  = 'notes/atomic/at-a-section-pointer-is-a-claim-about-a-place.md'
+       After = '^## \u7B2C\u4E00\u7248\u89C4\u5219'
+       Pattern = '\u5C11\u902E\u5230\u7684 (\d+) \u4E2A'
+       Expect = @($WorstMissed) }
+
+    # ---- this script's own header -------------------------------------
+    @{ Label = 'this checker: the census in its own header'
+       File  = 'tools/check-sections.ps1'
+       Pattern = '(\d+) section pointers, of which (\d+)'
+       Expect = @($PointersCount, $KnobCount) }
+    @{ Label = 'this checker: the break count in its own header'
+       File  = 'tools/check-sections.ps1'
+       Pattern = '^\s*(\d+) of those pointers'
+       Expect = @($WorstCount) }
+    @{ Label = 'this checker: the mutation confirmation in its own header'
+       File  = 'tools/check-sections.ps1'
+       Pattern = '^\s*the (\d+)\.'
+       Expect = @($WorstCount) }
+
+    # ---- the CI script's comment --------------------------------------
+    @{ Label = 'CI script: the pointer count in the Step 3e comment'
+       File  = 'tools/ci.ps1'
+       Pattern = '(\d+) section pointers, of which'
+       Expect = @($PointersCount) }
+    @{ Label = 'CI script: the most pointed at in the Step 3e comment'
+       File  = 'tools/ci.ps1'
+       Pattern = '^#\s*(\d+) aim at ONE file'
+       Expect = @($KnobCount) }
+    @{ Label = 'CI script: the break count in the Step 3e comment'
+       File  = 'tools/ci.ps1'
+       Pattern = 'renumbered, (\d+) of those pointers break'
+       Expect = @($WorstCount) }
+    @{ Label = 'CI script: the mutation result in the Step 3e comment'
+       File  = 'tools/ci.ps1'
+       Pattern = 'that one heading renumbered, and (\d+) pointers went red'
+       Expect = @($WorstCount) }
+    @{ Label = 'CI script: what the loose rule caught'
+       File  = 'tools/ci.ps1'
+       Pattern = 'turned (\d+) of those (\d+) breaks red'
+       Expect = @($WorstLoose, $WorstCount) }
+    @{ Label = 'CI script: what the loose rule missed'
+       File  = 'tools/ci.ps1'
+       Pattern = 'silently let (\d+) of them point at'
+       Expect = @($WorstMissed) }
+
+    # ---- the census gate itself (section 8 of the pointers note) ------
+    #
+    # How many places the gate checks, and how many documents those
+    # places live in.  Both numbers are DERIVED from the claim list, so
+    # adding a claim moves them -- they are never written down twice.
+    @{ Label = 'section pointers note: the places and the documents'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.1'
+       Pattern = '\u88AB\u5199\u8FDB\u4E86 (\d+) \u4E2A\u6587\u4EF6\uFF0C\u4E00\u5171 (\d+) \u5904'
+       ExpectDocsPlaces = $true }
+
+    # ---- the census as it stands NOW, next to the one at HEAD ---------
+    #
+    # The left column is the historical snapshot (HEAD, i.e. the end of
+    # the previous round) and is deliberately NOT checked -- a record of
+    # the past is not a claim about now.  The right column IS checked.
+    @{ Label = 'section pointers note: the file count now'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.2'
+       Pattern = '^\|\s*markdown\s+\u6587\u4EF6\s*\|\s*129\s*\|\s*\*\*(\d+)\*\*'
+       Expect = @($FilesCount) }
+    @{ Label = 'section pointers note: the pointer count now'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.2'
+       Pattern = '^\|\s*\u7AE0\u8282\u6307\u9488\s*\|\s*164\s*\|\s*\*\*(\d+)\*\*'
+       Expect = @($PointersCount) }
+
+    # ---- the same census, one row per document (section 8.5) ----------
+    #
+    # The table in the note lists the documents and how many claims
+    # each one carries.  Each row is checked on its own, so a row that
+    # drifts cannot hide behind the total.
+    @{ Label = 'section pointers note: the table row for the root README'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.5'
+       Pattern = '^\|\s*`?README\.md`?\s*\|\s*(\d+)\s*\|'
+       ExpectPerFile = 'README.md' }
+    @{ Label = 'section pointers note: the table row for the W7 README'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.5'
+       Pattern = '^\|\s*`?W7_VisionMasterLite/README\.md`?\s*\|\s*(\d+)\s*\|'
+       ExpectPerFile = 'W7_VisionMasterLite/README.md' }
+    @{ Label = 'section pointers note: the table row for this note'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.5'
+       Pattern = '^\|\s*`?notes/notes_SectionPointers_2026-10\.md`?\s*\|\s*(\d+)\s*\|'
+       ExpectPerFile = 'notes/notes_SectionPointers_2026-10.md' }
+    @{ Label = 'section pointers note: the table row for the close report'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.5'
+       Pattern = '^\|\s*`?notes/notes_W7_Close_2026-10\.md`?\s*\|\s*(\d+)\s*\|'
+       ExpectPerFile = 'notes/notes_W7_Close_2026-10.md' }
+    @{ Label = 'section pointers note: the table row for the debt register'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.5'
+       Pattern = '^\|\s*`?notes/notes_W7_Knob_Audit_2026-10\.md`?\s*\|\s*(\d+)\s*\|'
+       ExpectPerFile = 'notes/notes_W7_Knob_Audit_2026-10.md' }
+    @{ Label = 'section pointers note: the table row for the pointer card'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.5'
+       Pattern = '^\|\s*`?notes/atomic/at-a-section-pointer-is-a-claim-about-a-place\.md`?\s*\|\s*(\d+)\s*\|'
+       ExpectPerFile = 'notes/atomic/at-a-section-pointer-is-a-claim-about-a-place.md' }
+    @{ Label = 'section pointers note: the table row for the hearsay card'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.5'
+       Pattern = '^\|\s*`?notes/atomic/at-a-number-nobody-can-recompute-is-hearsay\.md`?\s*\|\s*(\d+)\s*\|'
+       ExpectPerFile = 'notes/atomic/at-a-number-nobody-can-recompute-is-hearsay.md' }
+    @{ Label = 'section pointers note: the table row for the drift card'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.5'
+       Pattern = '^\|\s*`?notes/atomic/at-the-table-nobody-checks-drifts\.md`?\s*\|\s*(\d+)\s*\|'
+       ExpectPerFile = 'notes/atomic/at-the-table-nobody-checks-drifts.md' }
+    @{ Label = 'section pointers note: the table row for the checker itself'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.5'
+       Pattern = '^\|\s*`?tools/check-sections\.ps1`?\s*\|\s*(\d+)\s*\|'
+       ExpectPerFile = 'tools/check-sections.ps1' }
+    @{ Label = 'section pointers note: the table row for the CI script'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.5'
+       Pattern = '^\|\s*`?tools/ci\.ps1`?\s*\|\s*(\d+)\s*\|'
+       ExpectPerFile = 'tools/ci.ps1' }
+    @{ Label = 'section pointers note: the table total'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.5'
+       Pattern = '^\|\s*\*\*\u5408\u8BA1\*\*\s*\|\s*\*\*(\d+)\*\*'
+       ExpectPlaces = $true }
+
+    # ---- the new card: the same two numbers, in the same words -------
+    @{ Label = 'card: the places the gate checks'
+       File  = 'notes/atomic/at-a-number-nobody-can-recompute-is-hearsay.md'
+       After = '^## \u6838\u5FC3'
+       Pattern = '\u88AB\u5199\u8FDB \*\*(\d+) \u5904\*\*'
+       ExpectPlaces = $true }
+    @{ Label = 'card: the documents the gate checks'
+       File  = 'notes/atomic/at-a-number-nobody-can-recompute-is-hearsay.md'
+       After = '^## \u6838\u5FC3'
+       Pattern = '\u5206\u5E03\u5728 \*\*(\d+) \u4E2A\u6587\u4EF6\*\*'
+       ExpectDocs = $true }
+
+    # ---- the recurrence in the drift card ------------------------------
+    @{ Label = 'drift card: the documents the gate checks'
+       File  = 'notes/atomic/at-the-table-nobody-checks-drifts.md'
+       After = '^## \u590D\u53D1'
+       Pattern = '\*\*\u5199\u8FDB\u4E86 (\d+) \u4E2A\u6587\u4EF6\*\*'
+       ExpectDocs = $true }
+    @{ Label = 'drift card: the places the gate checks'
+       File  = 'notes/atomic/at-the-table-nobody-checks-drifts.md'
+       After = '^## \u590D\u53D1'
+       Pattern = '\u4E00\u5171 \*\*(\d+) \u5904\*\*'
+       ExpectPlaces = $true }
+
+    # ---- the gaps this round found -------------------------------------
+    #
+    # A grep for the census numbers showed places where they are quoted
+    # but NOTHING was checking them: the same number, in another
+    # sentence, in another document.  These are the ones that were
+    # missed; they are checked now, with the same rule as everything
+    # else -- the expected value comes from the measurement.
+    @{ Label = 'root README: the census in the change-log listing'
+       File  = 'README.md'
+       Pattern = '\*\*(\d+) \u4E2A\u6307\u9488\u91CC (\d+) \u4E2A\u6307\u7740\u540C\u4E00\u4EFD\u6587\u4EF6\*\*\D+\*\*(\d+) \u4E2A\u5F53\u573A\u5931\u6548\*\*'
+       Expect = @($PointersCount, $KnobCount, $WorstCount) }
+    @{ Label = 'close report: the census in the summary'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       Pattern = '\*\*(\d+) \u4E2A\u7AE0\u8282\u6307\u9488\uFF0C\u5176\u4E2D (\d+) \u4E2A\u6307\u7740\u540C\u4E00\u4EFD\u6587\u4EF6\*\*'
+       Expect = @($PointersCount, $KnobCount) }
+    @{ Label = 'close report: the census in the checklist'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       Pattern = '(\d+) \u4E2A\u6307\u9488\uFF08(\d+) \u8DE8\u6587\u4EF6 / (\d+) \u540C\u6587\u4EF6\uFF09\u9010\u4E2A\u89E3\u6790'
+       Expect = @($PointersCount, $CrossFile, $SameFile) }
+    @{ Label = 'debt register: the census in the checklist'
+       File  = 'notes/notes_W7_Knob_Audit_2026-10.md'
+       Pattern = '(\d+) \u4E2A\u6307\u9488\uFF08(\d+) \u8DE8\u6587\u4EF6 / (\d+) \u540C\u6587\u4EF6\uFF09\u9010\u4E2A\u89E3\u6790'
+       Expect = @($PointersCount, $CrossFile, $SameFile) }
+    @{ Label = 'section pointers note: the pointers that were skipped'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 2\.1'
+       Pattern = '\u5DEE\u7684\u90A3 (\d+) \u4E2A'
+       Expect = @($SkippedPointers) }
+    @{ Label = 'section pointers note: the skip table'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 4\.1b'
+       Start = '^\|\s*\u6570\u91CF\s*\|'
+       Lines = 6
+       Expect = @($QuotedCount, $CodeCount, $UncheckableCount, $SkippedItems) }
+    @{ Label = 'section pointers note: the three ways to run it'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 4\.5'
+       Pattern = '`-RepoRoot <[^>]+>` \| (\d+) of (\d+) \D+(\d+) \D+\*\*(\d+) \u4E2A\u67E5\u4E0D\u4E86\*\*'
+       Expect = @($ResolvedCount, $PointersCount, $SkippedPointers, $UncheckableCount) }
+    @{ Label = 'card: the three ways to run it'
+       File  = 'notes/atomic/at-a-checker-pointed-at-the-wrong-tree-still-says-ok.md'
+       Pattern = '`-RepoRoot <[^>]+>` \| (\d+) of (\d+) \D+(\d+) \D+\*\*(\d+) \u4E2A\u67E5\u4E0D\u4E86\*\*'
+       Expect = @($ResolvedCount, $PointersCount, $SkippedPointers, $UncheckableCount) }
+)
+
+# ------------------------------------------------------------------
+# 5b. The census of the census
+# ------------------------------------------------------------------
+#
+# The documents quote HOW MANY places this gate checks, and how many
+# documents those places live in.  Both numbers are derived from the
+# claim list above, so adding a claim moves them -- they are never
+# written down twice.
+#
+# A claim that needs one of them says so with a key instead of a
+# literal 'Expect':
+#
+#   ExpectPlaces        -> the number of claims
+#   ExpectDocs          -> the number of documents they live in
+#   ExpectDocsPlaces    -> both, in that order
+#   ExpectPerFile       -> the number of claims about THAT one file
+#
+# The literal Expect is filled in HERE, after the list exists -- a list
+# that has to contain its own length cannot be written as a literal.
+$CensusPerFile = @{}
+foreach ($cl in $CensusClaims) {
+    if (-not $CensusPerFile.ContainsKey($cl.File)) { $CensusPerFile[$cl.File] = 0 }
+    $CensusPerFile[$cl.File]++
+}
+$CensusPlaces = $CensusClaims.Count
+$CensusDocs = $CensusPerFile.Keys.Count
+
+foreach ($cl in $CensusClaims) {
+    if ($cl.ContainsKey('ExpectPerFile')) {
+        $cl['Expect'] = @($CensusPerFile[$cl.ExpectPerFile])
+    }
+    elseif ($cl.ContainsKey('ExpectPlaces')) {
+        $cl['Expect'] = @($CensusPlaces)
+    }
+    elseif ($cl.ContainsKey('ExpectDocs')) {
+        $cl['Expect'] = @($CensusDocs)
+    }
+    elseif ($cl.ContainsKey('ExpectDocsPlaces')) {
+        $cl['Expect'] = @($CensusDocs, $CensusPlaces)
+    }
+}
+
+Write-Host ""
+Write-Host ("   -- the census as the documents quote it ({0} places)" -f $CensusClaims.Count)
+$CensusCache = @{}
+foreach ($claim in $CensusClaims) {
+    if (-not $CensusCache.ContainsKey($claim.File)) {
+        $CensusCache[$claim.File] = Get-DocLinesUtf8 (Join-Path $RepoRoot $claim.File)
+    }
+    $r = Test-Claim $claim $CensusCache[$claim.File]
+    if ($r.Ok) {
+        Write-Host ("   OK   {0}  [{1}]" -f $claim.Label, $claim.File)
+    }
+    else {
+        [void]$CensusFailures.Add(("{0} [{1}]: {2}" -f $claim.Label, $claim.File, $r.Why))
+        Write-Host ("   FAIL: {0} [{1}]: {2}" -f $claim.Label, $claim.File, $r.Why) -ForegroundColor Red
+    }
+}
+
+# ------------------------------------------------------------------
 # 6b. The list of skips, when asked for
 # ------------------------------------------------------------------
 #
@@ -817,7 +1486,7 @@ if ($ShowSkips) {
 }
 
 # ------------------------------------------------------------------
-# 7. Summary
+# 8. Summary
 # ------------------------------------------------------------------
 Write-Host ""
 if ($Failures.Count -gt 0) {
@@ -825,11 +1494,20 @@ if ($Failures.Count -gt 0) {
     foreach ($f in $Failures) { Write-Host "   - $f" -ForegroundColor Red }
     Write-Host ""
     Write-Host "A section pointer is a claim that a chapter is still there. Check it." -ForegroundColor Red
+}
+if ($CensusFailures.Count -gt 0) {
+    Write-Host ("{0} place(s) in the docs quote a census number that no longer matches:" -f $CensusFailures.Count) -ForegroundColor Red
+    foreach ($f in $CensusFailures) { Write-Host "   - $f" -ForegroundColor Red }
+    Write-Host ""
+    Write-Host ("A quoted number is a claim about reality. Fix the document, or fix the" +
+                "`n   anchor in the checker -- but do not leave it stale." ) -ForegroundColor Red
+}
+if ($Failures.Count -gt 0 -or $CensusFailures.Count -gt 0) {
     Write-Host "SECTIONS FAILED" -ForegroundColor Red
     exit 1
 }
 
-Write-Host ("SECTIONS OK: {0} of {1} section pointers resolve across {2} files; {3} pointers skipped (counted above), {4} enumerations" -f `
+Write-Host ("SECTIONS OK: {0} of {1} section pointers resolve across {2} files; {3} pointers skipped (counted above), {4} enumerations; {5} quoted census numbers agree with reality" -f `
           $Resolved, $TotalPointers, $mdFiles.Count, `
-          ($PointersInCode + $PointersQuoted + $PointersUncheckable), $SkippedItems) -ForegroundColor Green
+          ($PointersInCode + $PointersQuoted + $PointersUncheckable), $SkippedItems, $CensusClaims.Count) -ForegroundColor Green
 exit 0

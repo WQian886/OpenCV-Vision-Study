@@ -77,10 +77,51 @@ $projMeasured = $Measured[$proj]     # 一眼能看出是"某个项目的"
 ⇒ 严格模式是好东西，但它把「这个变量是空的」
 和「这个属性不存在」**报成了同一种错**。
 
+## 复发（2026-10-27）：这次撞上的是**带类型的参数**
+
+同一个坑，**第二次**。这次不是两个普通变量撞名，
+是**局部变量撞上了一个带类型的参数**：
+
+```powershell
+param([switch]$List)
+...
+$list = @($set)     # <- 和 $List 同名
+```
+
+PowerShell 里**带类型的参数是带类型约束的变量**，
+所以 `$list = @(...)` 不是「新建一个数组」，
+是「把数组**塞进那个 switch 参数**」—— 数组转不成 switch：
+
+```
+Cannot convert value "System.Object[]" to type
+"System.Management.Automation.SwitchParameter"
+```
+
+**报错指向 `Sort-Object`，没有指向真正的原因。**
+
+和第一次的差别，有一条**更要命**：
+
+| | 第一次（`$measured` / `$Measured`） | 这一次（`$list` / `[switch]$List`） |
+|---|---|---|
+| 撞上的是什么 | 另一个**普通变量** | **一个带类型约束的参数** |
+| 后果 | 数据被覆盖，**结果是错的** | **直接抛**，脚本当场死 |
+| 什么时候发现 | 跑起来就看见了 | **只在失败路径上** —— 树是绿的就永远不发现 |
+
+⇒ 后者比前者**更难发现**：前者的错在**成功路径**上也会出现；
+后者**只在它该报错的时候才出现**，而那个时刻**没人在场**。
+
+⇒ 所以「别让两个变量的名字只差大小写」还要再加一条：
+**局部的名字不许和带类型的参数同名。**
+
+⇒ 而「失败路径上的错，没人在场时发现不了」是**另一条**教训，
+在 `at-a-gate-failure-path-runs-only-when-it-fails.md`。
+
 ## 配套
 
 - [at-ninja-mtime-stale-binary.md](./at-ninja-mtime-stale-binary.md)
   —— 同一轮里的另一个「现象不指向原因」的坑：
   文件内容是对的，跑的却是旧二进制
+- [at-a-gate-failure-path-runs-only-when-it-fails.md](./at-a-gate-failure-path-runs-only-when-it-fails.md)
+  —— 这次的完整教训：门禁的失败路径，只有在它失败的时候才被验证
 
 参见 `notes/notes_W1W2_Tests_2026-10.md`（这一笔的完整记录）。

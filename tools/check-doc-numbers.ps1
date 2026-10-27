@@ -70,6 +70,22 @@ Set-StrictMode -Version Latest
 if ([string]::IsNullOrEmpty($RepoRoot)) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
+
+# The root is resolved to an ABSOLUTE path, and the tree is identified,
+# BEFORE anything is measured.  See Resolve-RepoRoot and
+# Get-RepoTreeProblems in tools/lib/DocScan.ps1 for what goes wrong
+# without this: a relative root makes every path lookup miss, and the
+# checker then reports a clean sheet on a tree it never saw.
+. (Join-Path $PSScriptRoot 'lib\DocScan.ps1')
+$RepoRoot = Resolve-RepoRoot $RepoRoot
+$treeProblems = Get-RepoTreeProblems $RepoRoot
+if ($treeProblems.Count -gt 0) {
+    Write-Host ("FAILED: '{0}' is not the OpenCV study tree." -f $RepoRoot) -ForegroundColor Red
+    Write-Host ("   missing: {0}" -f ($treeProblems -join ', ')) -ForegroundColor Red
+    Write-Host "   A checker pointed at the wrong tree measures air and reports a clean sheet." -ForegroundColor Red
+    exit 1
+}
+
 if ([string]::IsNullOrEmpty($PerSuiteFile)) {
     $PerSuiteFile = Join-Path $RepoRoot 'build\ci\assertions_by_suite.txt'
 }
@@ -94,10 +110,9 @@ function Get-DocLines([string]$rel) {
     return ,($t -split "`r?`n")
 }
 
-# "41,330" -> 41330
-function Parse-Num([string]$s) {
-    return [int](($s -replace ',', '').Trim())
-}
+# "41,330" -> 41330 and Test-Claim live in tools/lib/DocScan.ps1, shared
+# with the other checkers: a rule that exists in two places is a rule
+# that will drift apart.
 
 function Find-Git([string]$given) {
     if (-not [string]::IsNullOrEmpty($given)) {
@@ -308,7 +323,7 @@ Write-Host "   -- per-suite tables (one per project)"
 
 foreach ($pt in $SuiteProjects) {
     $proj = $pt.Project
-    # ⚠ NOT `$measured` -- PowerShell variable names are CASE-INSENSITIVE,
+    # \u26A0 NOT `$measured` -- PowerShell variable names are CASE-INSENSITIVE,
     # so `$measured` and `$Measured` are the SAME variable. Writing
     # `$measured = $Measured[$proj]` would overwrite the outer table
     # with the inner one, and the NEXT project would look up its own
@@ -425,58 +440,7 @@ else {
 Write-Host ""
 Write-Host "   -- numbers quoted in the docs"
 
-function Test-Claim($claim, $lines) {
-    # Optional scope: 'After' is an ASCII regex that locates a section.
-    # Only the lines from there to the next markdown heading are considered.
-    #
-    # This exists because some documents carry a CURRENT snapshot AND a
-    # HISTORICAL snapshot of the same shape. A checker that cannot tell
-    # them apart either flags the historical one (a false alarm on a
-    # deliberate record) or ignores both (no check at all).
-    $scope = $lines
-    if ($claim.ContainsKey('After')) {
-        $start = -1
-        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
-            if ($lines[$i] -match $claim.After) { $start = $i; break }
-        }
-        if ($start -lt 0) {
-            return ("the section marker was NOT FOUND -- the anchor in" +
-                    " tools/check-doc-numbers.ps1 has to be updated. It is deliberately" +
-                    " not skipped: a checker that stops recognising its own docs and" +
-                    " says nothing is the failure this project keeps paying for.")
-        }
-        $end = $lines.Count
-        for ($i = $start + 1; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match '^#{1,6}\s') { $end = $i; break }
-        }
-        if ($end -le $start) { $end = $start + 1 }
-        $scope = $lines[$start..($end - 1)]
-    }
 
-    $hits = @()
-    foreach ($line in $scope) {
-        $m = [regex]::Match($line, $claim.Pattern)
-        if ($m.Success) { $hits += ,$m }
-    }
-    if ($hits.Count -eq 0) {
-        return ("the claim was NOT FOUND -- the wording changed, so the anchor in" +
-                " tools/check-doc-numbers.ps1 has to be updated. It is deliberately" +
-                " not skipped: a checker that stops recognising its own docs and" +
-                " says nothing is the failure this project keeps paying for.")
-    }
-    $bad = @()
-    foreach ($m in $hits) {
-        for ($g = 1; $g -le $claim.Expect.Count; $g++) {
-            $got = Parse-Num $m.Groups[$g].Value
-            $want = [int]$claim.Expect[$g - 1]
-            if ($got -ne $want) {
-                $bad += ("group {0} is {1}, reality says {2}" -f $g, $got, $want)
-            }
-        }
-    }
-    if ($bad.Count -gt 0) { return ($bad -join '; ') }
-    return $null
-}
 
 $Claims = @(
     # ---- root README -------------------------------------------------
@@ -520,6 +484,17 @@ $Claims = @(
        File  = 'README.md'
        Pattern = '(\d+)\D+\+\s*(\d+)\D+atomic\D+~(\d+) KB'
        Expect = @($NoteFiles, $AtomicFiles, $NoteKB) }
+    # The same count, in two more places.  One number, four copies:
+    # the two below were the copies nobody was checking, and they are
+    # checked now for the same reason as the two above.
+    @{ Label = 'root README: the card count in the card-list sentence'
+       File  = 'README.md'
+       Pattern = '\u5355\u6761\u6559\u8BAD\u5361\u7247\*\*\uFF08(\d+) \u5F20\uFF09'
+       Expect = @($AtomicFiles) }
+    @{ Label = 'root README: the card count in the tree listing'
+       File  = 'README.md'
+       Pattern = '\u53D8\u66F4\u65E5\u5FD7\uFF08\d+ \u4EFD \+ (\d+) \u5F20 atomic \u5361\uFF09'
+       Expect = @($AtomicFiles) }
 
     # ---- W7 README ---------------------------------------------------
     @{ Label = 'W7 README: source tree listing'
@@ -592,12 +567,12 @@ foreach ($claim in $Claims) {
     if (-not $DocCache.ContainsKey($claim.File)) {
         $DocCache[$claim.File] = Get-DocLines $claim.File
     }
-    $why = Test-Claim $claim $DocCache[$claim.File]
-    if ($null -eq $why) {
-        Write-Host ("   OK   {0}" -f $claim.Label)
+    $r = Test-Claim $claim $DocCache[$claim.File]
+    if ($r.Ok) {
+        Write-Host ("   OK   {0}  ({1} line(s) checked)" -f $claim.Label, $r.Hits.Count)
     }
     else {
-        Fail ("{0} [{1}]: {2}" -f $claim.Label, $claim.File, $why)
+        Fail ("{0} [{1}]: {2}" -f $claim.Label, $claim.File, $r.Why)
     }
 }
 

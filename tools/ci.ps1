@@ -632,12 +632,12 @@ Write-Host "   every relative link in the docs resolves: OK"
 #   exactly the same way: a pointer at a chapter that was renumbered
 #   reads perfectly well, and nothing in the text says so.
 #
-#   The measurement that motivated this: 115 section pointers, of which
-#   55 aim at ONE file -- notes/notes_W7_Knob_Audit_2026-10.md, the
+#   The measurement that motivated this: 179 section pointers, of which
+#   59 aim at ONE file -- notes/notes_W7_Knob_Audit_2026-10.md, the
 #   debt register this project keeps editing. When its chapter 10 is
-#   renumbered, 33 of those pointers break. A mutation test confirmed
+#   renumbered, 36 of those pointers break. A mutation test confirmed
 #   that number: the checker was run against a copy of the tree with
-#   that one heading renumbered, and 33 pointers went red.
+#   that one heading renumbered, and 36 pointers went red.
 #
 #   => A pointer nobody follows is a pointer that drifts. Same disease
 #      as the link and the table, one object over.
@@ -646,8 +646,8 @@ Write-Host "   every relative link in the docs resolves: OK"
 #   the file name that comes BEFORE it on the same line, so that a
 #   pointer is checked against the file it actually means. Its rule
 #   was measured, not guessed: a first version that accepted "any
-#   file named on the line" turned 15 of those 33 breaks red and
-#   silently let 18 of them point at a chapter of the SAME NUMBER in
+#   file named on the line" turned 20 of those 36 breaks red and
+#   silently let 16 of them point at a chapter of the SAME NUMBER in
 #   the reader's own file -- a pointer that quietly points somewhere
 #   else is worse than one that is obviously broken.
 Say "Step 3e/6  documentation section pointers"
