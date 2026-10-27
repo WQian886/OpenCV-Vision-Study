@@ -200,7 +200,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 31 份 + 87 张 atomic 卡，~1132 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 31 份 + 87 张 atomic 卡，~1135 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -327,7 +327,7 @@ OpenCV/
   > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
   > 连最接近的 ANSI 口径（33,368）也对不上。
   > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
-- 31 份变更日志 + 87 张 atomic 卡 / ~1132 KB
+- 31 份变更日志 + 87 张 atomic 卡 / ~1135 KB
 - **31 个无头回归测试 / 2936 条断言**（W7 26 个 / 2371，W6 3 个 / 482，W2 1 个 / 54，W1 1 个 / 29；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）
