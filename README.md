@@ -31,7 +31,7 @@ W7 之前只有 W6 有套件（因为 W6 是第一个「别人真的拿去用」
 **demo 和测试链的是同一个源码**（不抄副本）。
 详见 [notes_W1W2_Tests_2026-10.md](./notes/notes_W1W2_Tests_2026-10.md)。
 
-W3 / W4 / W5 还没有套件（入口已经拆好了，见那份笔记的第 9 节）。
+W3 / W4 / W5 还没有套件（入口已经拆好了，见 [notes_W1W2_Tests_2026-10.md](./notes/notes_W1W2_Tests_2026-10.md) 的第 9 节）。
 
 ## 🏆 两个综合项目
 
@@ -157,6 +157,19 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 详见 [notes_W1W2_Tests_2026-10.md](./notes/notes_W1W2_Tests_2026-10.md) 和
 [notes_W7_DocNumbers_2026-10.md](./notes/notes_W7_DocNumbers_2026-10.md)。
 
+再往后是 **Step 3e（`tools/check-sections.ps1`）**：**文档里每一个章节指针都要真的落得到那一章**。
+链接是关于**文件**的主张，章节指针是关于**位置**的主张 ——
+「详见那份笔记的第十节」在**那一节被重新编号**之后，
+**一个字都没变**，而且**读起来完全正常**（只不过指的是另一节）。
+⇒ 链接坏了还能靠「文件列表里没有它」想起来；**章节指针坏了连这个都没有**。
+
+量出来的爆炸半径：文档里 **164 个章节指针**，其中 **57 个指着同一份文件**（欠账台账）——
+改**那一个标题**，**35 个指针当场失效**（变异实测），而**CI 还是绿的**。
+⇒ 所以这一笔还做了一件**看不出来但该做**的事：把链接检查器**收成一份**
+（`tools/lib/DocScan.ps1`）——**两份拷贝就是两份会各自漂的东西**。
+
+详见 [notes_SectionPointers_2026-10.md](./notes/notes_SectionPointers_2026-10.md)。
+
 `.github/workflows/ci.yml` 在 GitHub Actions 上跑同一套步骤
 （Windows runner + `tools/ci-deps.ps1` 装 tesseract / Qt 6.8.3 / 官方预编译 OpenCV 4.13.0）。
 
@@ -187,7 +200,7 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
 ## 📖 变更日志
 
-详细改动记录见 [notes/](./notes/) 目录（共 30 份 + 82 张 atomic 卡，~1050 KB）：
+详细改动记录见 [notes/](./notes/) 目录（共 31 份 + 83 张 atomic 卡，~1088 KB）：
 
 - `notes_Qt_DragDrop_2026-09.md` (16 KB) — W7 S1 拖拽原理
 - `notes_Qt_NodeConnection_BugFix_2026-09.md` (17 KB) — W7 S2 连线 + 3 个 bug
@@ -207,20 +220,21 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 - `notes_PCB_Short_2026-10.md` (19 KB) — 短路判据重做：从「量标记圈」到「量两个端子之间」（附：陈旧数据副本）
 - `notes_PCB_Insufficient_2026-10.md` (16 KB) — 焊少判据重做：从「量 ROI 里的金」到「量这个焊盘自己的铜」
 - `notes_W7_RunEngine_2026-10.md` (60 KB) — 执行引擎抽离（第十轮）+ headless runner（片 3）+ 假 ONNX Runtime（片 4）+ 假 MVS SDK（片 5）
-- `notes_W7_Close_2026-10.md` (61 KB) — **W7 结项报告**：欠账总账（结项 17 条 → 现在 19 条）、每条债的边界与重开条件、明确不覆盖的范围、怎么复现这份结项
+- `notes_W7_Close_2026-10.md` (69 KB) — **W7 结项报告**：欠账总账（结项 17 条 → 现在 19 条）、每条债的边界与重开条件、明确不覆盖的范围、怎么复现这份结项
 - `notes_W7_Verdict_2026-10.md` (18 KB) — 结项之后还的第一笔：把「结论怎么说」收成**一份**规则（GUI 和 CI 共用），顺带抓到 CI 的一个**漏检**
 - `notes_W7_BadStep_2026-10.md` (15 KB) — 结项之后还的第二笔：让「跑坏了」真的算进判定（引擎把输出置空 → 旧判据数不到它）
 - `notes_W7_RenderPlan_2026-10.md` (17 KB) — 结项之后还的第三笔：结果面板「显示哪张图」收成**一份**规则，顺带抓到本轮自己的两个洞
 - `notes_W7_FrameProtocol_2026-10.md` (20 KB) — 结项之后还的第四笔：「源怎么报帧数」收成**一份**（第十份抄副本）+ 纯层瘦身 + **本项目第一条编译期约束**（只链 `Qt6::Core` 的目标往纯层塞 widget 就编不过）
 - `notes_W7_ParseLayer_2026-10.md` (20 KB) — 结项之后还的第五笔：**解析层别丢节点**（未知算子留在画布上标「未安装」→ 链不断 → 那一步强制失败）+ 三个「写了没人读」的字段改名并搬进纯层，顺带抓到**两个旧用例正在断言 bug**
 - `notes_W7_MainWindow_2026-10.md` (19 KB) — 结项之后还的第六笔：**主窗口第一次进测试**（主程序源码编成静态库 + offscreen 起真窗口），按「错了用户会不会自己发现」划线，顺带抓到**第十一遍抄副本**和一个**状态和画面对不上**的真 bug
-- `notes_W7_Knob_Audit_2026-10.md` (126 KB) — **旋钮审计**：欠账的**唯一登记处**（第十节）。19 条账、每条的边界与重开条件、每笔的证据在哪
+- `notes_W7_Knob_Audit_2026-10.md` (128 KB) — **旋钮审计**：欠账的**唯一登记处**（第十节）。19 条账、每条的边界与重开条件、每笔的证据在哪
 - `notes_W7_DocNumbers_2026-10.md` (12 KB) — 结项之后还的第七笔：**把「数字对不对得上」变成机器可查的一步**（欠账 11 的强制那半步）——期望值**读**出来不**抄**一份、逐套件表强查、当场逮到三处真漂移
 - `notes_W7_SuiteList_2026-10.md` (13 KB) — 结项之后还的第八笔：**套件名单只有一份**（手抄的那份漂了 8 个名字 → 那 8 个套件的汇总行进了调试通道 → 计数器默默少算了 **567** 条断言）+ **计数的数不许比真值小而不说话**（CI 从「红」到「绿」的一笔）
 - `notes_CI_FirstRunnerRun_2026-10.md` (17 KB) — 结项之后还的第九笔：**CI 第一次在真 runner 上跑**（欠账 9 收口）——真跑挖出四件「只有这台机器成立」的东西：空目录不在 git 里 / Qt 的 DLL 不在 PATH 上 / tesseract 的 PATH 只写在 YAML 里 / **ACP 把同一份代码判成两回事**（`.string()` 严格窄化：字符在 ACP 里表示不出来就抛 1113）
-- `notes_W1W2_Tests_2026-10.md` (14 KB) — **给 W1 / W2 补测试**（W1–W5 零测试缺口的第一笔）+ 结项之后还的第十笔：**链接断了没人知道**（CI Step 3d）——把纯逻辑从 `main()` 里拆出来、demo 和测试链**同一份源码**、**每个门槛都是量出来的**、**变异验证当场逮到我自己的测试量错了对象**、**删掉一张卡却留下三个悬空链接而 CI 一直是绿的**
+- `notes_W1W2_Tests_2026-10.md` (15 KB) — **给 W1 / W2 补测试**（W1–W5 零测试缺口的第一笔）+ 结项之后还的第十笔：**链接断了没人知道**（CI Step 3d）——把纯逻辑从 `main()` 里拆出来、demo 和测试链**同一份源码**、**每个门槛都是量出来的**、**变异验证当场逮到我自己的测试量错了对象**、**删掉一张卡却留下三个悬空链接而 CI 一直是绿的**
+- `notes_SectionPointers_2026-10.md` (23 KB) — 结项之后还的第十一笔：**章节指针断了也没人知道**（CI Step 3e）——链接是关于**文件**的主张，章节指针是关于**位置**的主张；**164 个指针里 57 个指着同一份文件**，改**一个标题**就**35 个当场失效**（变异实测），而指针本身**一个字都没变**
 
-`notes/atomic/` 里是**单条教训卡片**（82 张）：一条坑一张卡，
+`notes/atomic/` 里是**单条教训卡片**（83 张）：一条坑一张卡，
 能单独引用、能单独复习。挑几条：
 
 - `at-losing-a-field-at-a-json-boundary.md` — 「字段存在」≠「字段活过了中间那一跳」
@@ -285,8 +299,10 @@ OpenCV/
 ├── tools/ci.ps1           # CI 脚本:构建 + 测试 + 核对文档里的数 + 检查源码树没被写脏
 ├── tools/check-doc-numbers.ps1  # 文档里每个「当前事实」的数 ↔ 实测（期望值从文档读）
 ├── tools/check-links.ps1  # 文档里每个相对链接 → 真的能走到（链接不会自己漂）
+├── tools/check-sections.ps1  # 文档里每个章节指针 → 真的落得到那一章（指针不会自己漂）
+├── tools/lib/DocScan.ps1  # 两个文档检查器共用的那一份扫描逻辑（不抄副本）
 ├── .github/workflows/     # GitHub Actions
-├── notes/                 # 变更日志（30 份 + 82 张 atomic 卡）
+├── notes/                 # 变更日志（31 份 + 83 张 atomic 卡）
 ├── datasets/              # 共享数据集（空,占位）
 ├── images/                # 共享图片（空,占位）
 ├── .gitignore             # Git 忽略规则
@@ -311,7 +327,7 @@ OpenCV/
   > 旧数字「33,088 行」就是这么来的，它**复现不出来** ——
   > 连最接近的 ANSI 口径（33,368）也对不上。
   > 详见 [at-the-decoder-eats-the-newline.md](./notes/atomic/at-the-decoder-eats-the-newline.md)。
-- 30 份变更日志 + 82 张 atomic 卡 / ~1050 KB
+- 31 份变更日志 + 83 张 atomic 卡 / ~1088 KB
 - **31 个无头回归测试 / 2936 条断言**（W7 26 个 / 2371，W6 3 个 / 482，W2 1 个 / 54，W1 1 个 / 29；
   其中 `pcb_core` 和 `qr_ocr` 各一套源码链进两个项目，两边都跑）
 - 1.9 GB 项目体积（其中 .vs/build 占 95%，git 仓库仅 ~5 MB）

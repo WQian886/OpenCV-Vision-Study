@@ -16,7 +16,7 @@
 > ⚠ **现在的账是 19 条 / 已收 14 / 未收 5**(见下面那段)。
 > 欠账的**完整定义只有一处**:`notes/notes_W7_Knob_Audit_2026-10.md` 第十节。
 >
-> 📌 **结项后又还了十笔**(2026-10-25 六笔 + 2026-10-26 三笔 + 2026-10-27 一笔):
+> 📌 **结项后又还了十一笔**(2026-10-25 六笔 + 2026-10-26 三笔 + 2026-10-27 两笔):
 > 欠账 17 收了一半(判定口径搬成 `frame_verdict.h`,GUI 和 CI 共用一份),
 > 欠账 18 的**运行期形状**也收掉了(「压根没跑成」的那一步现在算坏帧)——
 > 顺带发现上一轮只抽了「分类」没抽「采集」,那是**刚建好的架构里的裂缝**;
@@ -77,6 +77,20 @@
 > (行内代码没跳过 + 把 `qsizetype i` 切成了 `qsizetype`)——
 > ⇒ **「检查器报错了」的第一反应应该是「检查器错了」**。
 > 详见 [notes_W1W2_Tests_2026-10.md](../notes/notes_W1W2_Tests_2026-10.md) 第 6.3 节。
+> **第十一笔把「章节指针断了也没人知道」也变成机器可查的一步** ——
+> CI 新增 Step 3e(`tools/check-sections.ps1`):
+> 文档里**每一个章节指针**都要**真的指得到**。
+> 上一笔查的是**链接**(关于**文件**的主张),这一笔查的是**章节指针**
+> (关于**位置**的主张)—— 而链接检查器**结构上就看不见它**:
+> 它找的是 `](...)`,而「第 N 节」里**没有** `](`。
+> 量出来的爆炸半径:**164 个指针,57 个指向同一个文件**
+> (就是上面那份欠账台账)—— 改它一个标题,**35 个指针当场失效**,
+> 而且**没有一个会自己发出声音**。
+> ⚠ 检查器的**规则本身**量过:第一版「宽松」的规则只逮到 35 里的 **19** 个 ——
+> 少逮到的 18 个**没坏**,它们被绑到了**读者自己那一篇的同号章节**上,
+> 读者**走错了却不知道** ⇒ **安静指错地方的指针,比明显断掉的更贵**。
+> 现在的规则:**指针绑到同一行里在它前面那个文件名**。
+> 详见 [notes_SectionPointers_2026-10.md](../notes/notes_SectionPointers_2026-10.md)。
 
 ## 🎯 学习目标
 1. 理解**工业视觉平台的 3 层架构**:算子 + 流水线 + GUI
@@ -1206,7 +1220,7 @@ $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
   [notes/notes_W7_Close_2026-10.md](../notes/notes_W7_Close_2026-10.md),
   欠账的**完整定义只有一处**:
   [notes/notes_W7_Knob_Audit_2026-10.md](../notes/notes_W7_Knob_Audit_2026-10.md) 第十节。
-- **结项之后还的十笔**在
+- **结项之后还的十一笔**在
   [notes/notes_W7_Verdict_2026-10.md](../notes/notes_W7_Verdict_2026-10.md)(判定口径收成一份)、
   [notes/notes_W7_BadStep_2026-10.md](../notes/notes_W7_BadStep_2026-10.md)(让「跑坏了」真的算进判定)、
   [notes/notes_W7_RenderPlan_2026-10.md](../notes/notes_W7_RenderPlan_2026-10.md)(结果面板「显示哪张图」收成一份)、
@@ -1216,7 +1230,8 @@ $env:QT_QPA_PLATFORM="offscreen"; .\build\w7_undo_test.exe
   [notes/notes_W7_DocNumbers_2026-10.md](../notes/notes_W7_DocNumbers_2026-10.md)(**数字对不对得上变成机器可查**)、
   [notes/notes_W7_SuiteList_2026-10.md](../notes/notes_W7_SuiteList_2026-10.md)(**套件名单只有一份** + 计数的数不许比真值小而不说话)、
   [notes/notes_CI_FirstRunnerRun_2026-10.md](../notes/notes_CI_FirstRunnerRun_2026-10.md)(**CI 第一次在真 runner 上跑** + 欠账 9 收口)、
-  [notes/notes_W1W2_Tests_2026-10.md](../notes/notes_W1W2_Tests_2026-10.md) 第 6.3 节(**链接断了没人知道** + CI Step 3d)。
+  [notes/notes_W1W2_Tests_2026-10.md](../notes/notes_W1W2_Tests_2026-10.md) 第 6.3 节(**链接断了没人知道** + CI Step 3d)、
+  [notes/notes_SectionPointers_2026-10.md](../notes/notes_SectionPointers_2026-10.md)(**章节指针断了也没人知道** + CI Step 3e)。
 - ~~**PCB 判定沿用 W6 的样本数据**:`short.png` 会同时报出 `short` 和 `wrong`~~
   —— **2026-10-20 已修**:短路图重画成"两脚被铜条连通"之后,铜条是金色不是青色,
   `short.png` 现在只报 `short`(点名 R2),不再串扰 `wrong`。

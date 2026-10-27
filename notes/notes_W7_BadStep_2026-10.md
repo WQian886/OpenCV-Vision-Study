@@ -386,7 +386,7 @@ M141 把旧的内联判据**写在共享采集器旁边**（两行都在）。
 ## 12. 参见
 
 - `notes/notes_W7_Verdict_2026-10.md` —— 上一轮：判定口径收成一份（欠账 17 收一半）
-  （它的 §7.2.1 是这一轮补上的结案）
+  （`notes_W7_Verdict_2026-10.md` 的 §7.2.1 是这一轮补上的结案）
 - `notes/notes_W7_Knob_Audit_2026-10.md` 第十节 —— **欠账清单的唯一登记处**
 - `notes/notes_W7_Close_2026-10.md` —— 结项报告（总账、怎么继续）
 - `notes/atomic/at-the-failure-is-in-another-channel.md` —— **新卡**：失败记在一个通道，判据去另一个通道找

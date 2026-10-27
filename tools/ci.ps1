@@ -29,6 +29,11 @@
           recorded fact too -- "that file is over there, and it is still
           there" -- and a link nobody follows drifts exactly like a
           table nobody checks.
+      3e. Every section pointer in the documentation resolves. A
+          pointer -- "chapter 10 of that note" -- is a recorded fact
+          about a PLACE rather than about a file, and it drifts the
+          same way. 55 of the 115 pointers aim at one file, so this
+          is the check that notices when that file is renumbered.
       4. W5's executable still runs. W5 has no test suite of its own,
          so this smoke check is the only thing CI says about W5.
          It asserts a serial number was actually decoded, using the
@@ -614,6 +619,46 @@ if (-not (Test-Path $linkChecker)) {
 Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $linkChecker,
              '-RepoRoot', $RepoRoot)
 Write-Host "   every relative link in the docs resolves: OK"
+
+# ------------------------------------------------------------------
+# Step 3e/6: the section pointers in the documents
+# ------------------------------------------------------------------
+#
+# Why this step exists (2026-10-27):
+#
+#   Step 3d follows LINKS. A link is a recorded fact about a FILE.
+#   A section pointer -- "chapter 10 of that note", "section 6.3 of
+#   the other one" -- is a recorded fact about a PLACE, and it drifts
+#   exactly the same way: a pointer at a chapter that was renumbered
+#   reads perfectly well, and nothing in the text says so.
+#
+#   The measurement that motivated this: 115 section pointers, of which
+#   55 aim at ONE file -- notes/notes_W7_Knob_Audit_2026-10.md, the
+#   debt register this project keeps editing. When its chapter 10 is
+#   renumbered, 33 of those pointers break. A mutation test confirmed
+#   that number: the checker was run against a copy of the tree with
+#   that one heading renumbered, and 33 pointers went red.
+#
+#   => A pointer nobody follows is a pointer that drifts. Same disease
+#      as the link and the table, one object over.
+#
+#   The checker is tools/check-sections.ps1. It binds each pointer to
+#   the file name that comes BEFORE it on the same line, so that a
+#   pointer is checked against the file it actually means. Its rule
+#   was measured, not guessed: a first version that accepted "any
+#   file named on the line" turned 15 of those 33 breaks red and
+#   silently let 18 of them point at a chapter of the SAME NUMBER in
+#   the reader's own file -- a pointer that quietly points somewhere
+#   else is worse than one that is obviously broken.
+Say "Step 3e/6  documentation section pointers"
+
+$sectionChecker = Join-Path $RepoRoot 'tools\check-sections.ps1'
+if (-not (Test-Path $sectionChecker)) {
+    Fail "section checker not found: $sectionChecker"
+}
+Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $sectionChecker,
+             '-RepoRoot', $RepoRoot)
+Write-Host "   every section pointer in the docs resolves: OK"
 
 # ------------------------------------------------------------------
 # Step 4: W5 smoke check

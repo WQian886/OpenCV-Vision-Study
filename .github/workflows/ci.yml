@@ -20,6 +20,7 @@
 #   · W5's executable still decodes a QR
 #   · every number quoted in the docs matches the build
 #   · every relative link in the docs resolves
+#   · every section pointer in the docs resolves
 #   · the source tree is byte-identical after all of that
 #     (test products must land in build/, never in the source tree)
 #

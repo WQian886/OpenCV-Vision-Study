@@ -78,6 +78,11 @@ if ([string]::IsNullOrEmpty($RepoRoot)) {
     $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
 
+# The file collection, the UTF-8 reading and the fence handling live
+# in tools/lib/DocScan.ps1, because the section checker needs the same
+# three things. A second copy of them is a second thing that can drift.
+. (Join-Path $PSScriptRoot 'lib\DocScan.ps1')
+
 $Failures = New-Object System.Collections.ArrayList
 
 function Fail([string]$msg) {
@@ -88,20 +93,9 @@ function Fail([string]$msg) {
 # ------------------------------------------------------------------
 # 1. Which files are in scope
 # ------------------------------------------------------------------
-# The WORKING TREE, not the git index: a link that is broken right now
-# is broken right now, whether or not the file is staged. The index
-# would hide an untracked note -- and an untracked note is exactly the
-# one a new link is most likely to point at.
-#
-# build/ and .git/ are excluded: build products are not documentation,
-# and .git holds objects, not notes.
-$mdFiles = @()
-foreach ($f in (Get-ChildItem -Path $RepoRoot -Recurse -File -Filter *.md)) {
-    $rel = $f.FullName.Substring($RepoRoot.Length).TrimStart([char]'\', [char]'/')
-    if ($rel -match '(^|[\\/])(build|\.git)([\\/]|$)') { continue }
-    $mdFiles += $f
-}
-$mdFiles = @($mdFiles | Sort-Object FullName)
+# The WORKING TREE, not the git index, and build/ and .git/ are
+# excluded: see tools/lib/DocScan.ps1 for why.
+$mdFiles = Get-DocFiles $RepoRoot
 
 if ($mdFiles.Count -eq 0) {
     Write-Host "FAILED: no markdown files found under $RepoRoot" -ForegroundColor Red
@@ -113,29 +107,9 @@ Write-Host ("   {0} markdown files in scope" -f $mdFiles.Count)
 # ------------------------------------------------------------------
 # 2. Read a file, drop the fenced code blocks
 # ------------------------------------------------------------------
-# The fence marker is remembered, so a ``` block is closed by ``` and a
-# ~~~ block by ~~~. A ``` inside a ~~~ block does not close it.
-function Get-LinesOutsideFences([string[]]$lines) {
-    $out = New-Object System.Collections.ArrayList
-    $inFence = $false
-    $fenceChar = ''
-    foreach ($l in $lines) {
-        $m = [regex]::Match($l, '^\s*(`{3,}|~{3,})')
-        if ($m.Success) {
-            $c = $m.Groups[1].Value.Substring(0, 1)
-            if (-not $inFence) {
-                $inFence = $true
-                $fenceChar = $c
-            }
-            elseif ($c -eq $fenceChar) {
-                $inFence = $false
-            }
-            continue
-        }
-        if (-not $inFence) { [void]$out.Add($l) }
-    }
-    return ,$out.ToArray()
-}
+# Get-ScannedLines / Get-ScannedBody do this, and they remember which
+# fence marker opened the block -- a ``` block is closed by ```, a ~~~
+# block by ~~~, and a ``` inside a ~~~ block does not close it.
 
 # The GitHub heading slug, simplified:
 #   lowercase, drop punctuation, spaces become hyphens.
@@ -156,9 +130,9 @@ function ConvertTo-GitHubSlug([string]$heading) {
 function Get-AnchorSet([string]$path) {
     $set = New-Object 'System.Collections.Generic.HashSet[string]'
     if (-not (Test-Path $path)) { return ,$set }
-    $lines = [System.IO.File]::ReadAllLines($path, [System.Text.Encoding]::UTF8)
-    foreach ($l in (Get-LinesOutsideFences $lines)) {
-        $m = [regex]::Match($l, '^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$')
+    $lines = Get-DocLinesUtf8 $path
+    foreach ($s in (Get-ScannedLines $lines)) {
+        $m = [regex]::Match($s.Text, '^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$')
         if ($m.Success) {
             [void]$set.Add((ConvertTo-GitHubSlug $m.Groups[1].Value))
         }
@@ -166,36 +140,10 @@ function Get-AnchorSet([string]$path) {
     return ,$set
 }
 
-# The ranges of INLINE CODE spans (`` `like this` ``) in a text.
-#
-# Why this is needed: a markdown link and a C++ call look the same to a
-# regex. "operator[](qsizetype i)" is a function call, not a link --
-# and inside backticks it is CODE, which a markdown renderer shows
-# literally and never turns into a link.
-#
-# The ranges are returned so a link can be rejected if it STARTS inside
-# one. Note that this does NOT break a real link whose TEXT is
-# backticked -- "[`notes_x.md`](./notes_x.md)" -- because there the
-# code span is inside the brackets, and the link starts outside it.
-function Get-InlineCodeRanges([string]$text) {
-    $ranges = New-Object System.Collections.ArrayList
-    $ticks = [regex]::Matches($text, '`+')
-    $i = 0
-    while ($i -lt $ticks.Count) {
-        $open = $ticks[$i]
-        $len = $open.Length
-        $j = $i + 1
-        $close = -1
-        while ($j -lt $ticks.Count) {
-            if ($ticks[$j].Length -eq $len) { $close = $j; break }
-            $j++
-        }
-        if ($close -lt 0) { break }
-        [void]$ranges.Add(@($open.Index, $ticks[$close].Index + $len))
-        $i = $close + 1
-    }
-    return ,$ranges.ToArray()
-}
+# The ranges of INLINE CODE spans (`` `like this` ``) in a text live in
+# tools/lib/DocScan.ps1 (Get-InlineCodeRanges). The section checker
+# needs the same rule, and two copies of one rule are two things that
+# drift apart.
 
 # ------------------------------------------------------------------
 # 3. Walk the links
@@ -232,8 +180,8 @@ function Test-ValidTitle([string]$rest) {
 }
 
 foreach ($f in $mdFiles) {
-    $lines = [System.IO.File]::ReadAllLines($f.FullName, [System.Text.Encoding]::UTF8)
-    $body = (Get-LinesOutsideFences $lines) -join "`n"
+    $lines = Get-DocLinesUtf8 $f.FullName
+    $body = Get-ScannedBody $lines
     $relFile = $f.FullName.Substring($RepoRoot.Length).TrimStart([char]'\', [char]'/')
     $codeRanges = Get-InlineCodeRanges $body
 
