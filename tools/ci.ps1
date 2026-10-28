@@ -646,8 +646,8 @@ Write-Host "   every relative link in the docs resolves: OK"
 #   the file name that comes BEFORE it on the same line, so that a
 #   pointer is checked against the file it actually means. Its rule
 #   was measured, not guessed: a first version that accepted "any
-#   file named on the line" turned 20 of those 36 breaks red and
-#   silently let 16 of them point at a chapter of the SAME NUMBER in
+#   file named on the line" turned 18 of those 36 breaks red and
+#   silently let 18 of them point at a chapter of the SAME NUMBER in
 #   the reader's own file -- a pointer that quietly points somewhere
 #   else is worse than one that is obviously broken.
 Say "Step 3e/6  documentation section pointers"

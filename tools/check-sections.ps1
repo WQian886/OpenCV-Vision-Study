@@ -1333,6 +1333,16 @@ $CensusClaims = @(
        After = '^### 8\.5'
        Pattern = '^\|\s*`?tools/ci\.ps1`?\s*\|\s*(\d+)\s*\|'
        ExpectPerFile = 'tools/ci.ps1' }
+    # The row that was MISSING: the table in 8.5 lists the documents the
+    # gate checks, one row each, and it said it was 1:1 with the claims.
+    # It was not -- one document carried a claim and had no row, so the
+    # rows summed to 75 while the total said 76.  A row that is not
+    # there cannot be checked; a row that is there can.
+    @{ Label = 'section pointers note: the table row for the tree card'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 8\.5'
+       Pattern = '^\|\s*`?notes/atomic/at-a-checker-pointed-at-the-wrong-tree-still-says-ok\.md`?\s*\|\s*(\d+)\s*\|'
+       ExpectPerFile = 'notes/atomic/at-a-checker-pointed-at-the-wrong-tree-still-says-ok.md' }
     @{ Label = 'section pointers note: the table total'
        File  = 'notes/notes_SectionPointers_2026-10.md'
        After = '^### 8\.5'
@@ -1406,6 +1416,23 @@ $CensusClaims = @(
        File  = 'notes/atomic/at-a-checker-pointed-at-the-wrong-tree-still-says-ok.md'
        Pattern = '`-RepoRoot <[^>]+>` \| (\d+) of (\d+) \D+(\d+) \D+\*\*(\d+) \u4E2A\u67E5\u4E0D\u4E86\*\*'
        Expect = @($ResolvedCount, $PointersCount, $SkippedPointers, $UncheckableCount) }
+
+    # ---- the new chapter (9.4): the same census, in new words --------
+    #
+    # A number written into a new paragraph is a claim about reality
+    # exactly like a number written into an old one -- and the moment
+    # it is written down, somebody has to be able to CHECK it.  These
+    # two claims are the reason the new chapter is not hearsay.
+    @{ Label = 'section pointers note: the new chapter census'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 9\.4'
+       Pattern = '\u666E\u67E5\u8FD8\u662F \*\*(\d+)\*\* \u4E2A markdown \u6587\u4EF6 / \*\*(\d+)\*\* \u4E2A\u7AE0\u8282\u6307\u9488'
+       Expect = @($FilesCount, $PointersCount) }
+    @{ Label = 'section pointers note: the new chapter split'
+       File  = 'notes/notes_SectionPointers_2026-10.md'
+       After = '^### 9\.4'
+       Pattern = '\uFF08\*\*(\d+)\*\* \u8DE8\u6587\u4EF6 / \*\*(\d+)\*\* \u540C\u6587\u4EF6\uFF09'
+       Expect = @($CrossFile, $SameFile) }
 )
 
 # ------------------------------------------------------------------
