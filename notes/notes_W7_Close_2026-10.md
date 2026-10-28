@@ -1361,7 +1361,7 @@ Get-Item    : ...\t8probe\AVeryLongDirectoryNameToForceShortNameHere  (len 81)
 Substring   : [gDirectoryNameToForceShortNameHere\f.txt]      <-- 垃圾
 ```
 
-⇒ **第一次上真 runner 那个红，本机也造得出来** ——
+⇒ **这一轮那个红，本机也造得出来** ——
 不是「runner 有 runner 的毛病」，是**同一个毛病**。
 
 #### 修的不是脚本，是**根**

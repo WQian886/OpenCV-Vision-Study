@@ -158,7 +158,7 @@ FAIL: C,D\notes\atomic\at-a-fix-record-re-creates-the-defect.md:13:
 这张卡说「根先解析成绝对路径」。**不够。**
 绝对路径**还有两种写法**，而前缀假设只在其中一种下成立。
 
-第二次上真 runner，失败路径脚本喊了：
+失败路径脚本**第二次**上真 runner，它喊了：
 
 ```
 THE COPY IS NOT THE TREE: the copy does not hold the same files

@@ -975,9 +975,9 @@ THE COPY IS NOT THE TREE: the copy does not hold the same files
    extra in the copy (142): meToForceShortNameHere\mw\pristine\notes\atomic\...
 ```
 
-⇒ **第一次上真 runner 那个红，本机也造得出来** ——
+⇒ **这一轮那个红，本机也造得出来** ——
 不是「runner 有 runner 的毛病」，是**同一个毛病**，
-而它**一直都能在本地复现**（前两次没造而已）。
+而它**本来就能在本地复现**（只是要**造**一个 8.3 短名的目录）。
 
 ### 10.3 修的不是脚本，是**根**
 
