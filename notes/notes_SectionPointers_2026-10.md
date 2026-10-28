@@ -64,7 +64,7 @@
 
 ```
 133 个 markdown 文件
-708 个章节标题
+714 个章节标题
 179 个章节指针（看见的）
   ├─ 131 个解析成功（62 跨文件 / 69 同文件）
   ├─  40 个在引号里 —— 引文，不是主张
@@ -925,7 +925,87 @@ THE COPY IS NOT THE TREE: the copy does not hold the same files
 
 ---
 
-## 10. 参见
+## 10. 第五次真跑：**一个目录，两个字符串**
+
+第二次上真 runner（失败路径脚本的**第二次**），红的还是**脚本**，不是门禁 ——
+但这一次，门禁**自己喊了出来**：
+
+```
+THE COPY IS NOT THE TREE: the copy does not hold the same files
+   missing from the copy (142): notes\atomic\at-a-blind-reading-cannot-watch.md, ...
+   extra in the copy (142): ine\notes\atomic\at-a-blind-reading-cannot-watch.md, ...
+```
+
+⇒ 一边是**干净的相对路径**，一边每个都多三个字符：`ine\`。
+⇒ 而 `ine` 是 **`pristine` 的尾巴** —— 副本目录本来就叫 `pristine`。
+
+### 10.1 那三个字符从哪来：8.3 短名
+
+runner 上 `$env:TEMP` 是 **`C:\Users\RUNNER~1\AppData\Local\Temp`**（8.3 短名），
+而 PowerShell 的 provider 枚举文件时给的是**展开后的**
+`C:\Users\runneradmin\AppData\Local\Temp`。
+
+```
+RUNNER~1    =  8 个字符
+runneradmin = 11 个字符
+```
+
+⇒ **同一个目录，两个字符串，差三个字符。**
+
+而相对路径是**拿长度切出来的**
+（`$f.FullName.Substring($root.Length)`）：
+切的时候用的是**短名**的长度，枚举出来的是**长名**的路径
+⇒ 切深了三个字符 ⇒ 每一条相对路径**从头就错了三个字符**。
+
+### 10.2 本机复现：造一个 8.3 短名的目录就够了
+
+（下面是**本机量出来的原话** —— 历史快照。）
+
+```
+root string : C:\...\Temp\t8probe\AVERYL~1              (len 47)
+Get-Item    : C:\...\Temp\t8probe\AVeryLongDirectoryNameToForceShortNameHere  (len 81)
+child       : C:\...\Temp\t8probe\AVeryLongDirectoryNameToForceShortNameHere\f.txt
+Substring   : [gDirectoryNameToForceShortNameHere\f.txt]      <-- 垃圾
+```
+
+⇒ 拿短名当根，跑那个失败路径脚本，本机**红在同一句上**：
+
+```
+THE COPY IS NOT THE TREE: the copy does not hold the same files
+   extra in the copy (142): meToForceShortNameHere\mw\pristine\notes\atomic\...
+```
+
+⇒ **第一次上真 runner 那个红，本机也造得出来** ——
+不是「runner 有 runner 的毛病」，是**同一个毛病**，
+而它**一直都能在本地复现**（前两次没造而已）。
+
+### 10.3 修的不是脚本，是**根**
+
+只修脚本**不够**：同样的切法在**四个检查器**里都有 ——
+它们都拿 `Resolve-Path` 解析出来的根，去切枚举出来的路径；
+而 `Resolve-Path` **原样返回短名**（本机量到：47 个字符），
+`Get-Item` 才给**展开后的**（81 个字符）。
+
+⇒ 所以修在**共用的那一处**：
+`Resolve-RepoRoot` 改成**问 provider 要**那个目录（`Get-Item ... .FullName`）；
+而相对路径**不再切字符串** —— 基址取 provider 自己的答案，
+文件不在基址底下就**喊出来**，不切。
+
+⇒ 这个病**本来是潜伏的**：runner 的检出路径没有 8.3 成分，
+所以它**没发作**；它发作在**临时目录**上 ——
+因为那才是从 `$env:TEMP` 拼出来的。
+
+### 10.4 这一节**只**动了一个被门禁看着的数
+
+新增的散文里**一个章节指针都没写**（写一个，指针总数就 +1，全仓要重新回填一遍），
+所以指针总数、文件数、普查的其它数**一条都没漂**。
+
+唯一变的是**章节标题数**：这一节给这一篇和结项报告各加了几个带编号的小标题，
+所以那个数变了，**两处**都改了 —— 门禁把这两处都抓到了。
+
+---
+
+## 11. 参见
 
 - `notes/notes_W1W2_Tests_2026-10.md` 第 6.3 节 —— 上一笔：**链接断了没人知道**（CI Step 3d）
 - `notes/notes_W7_Knob_Audit_2026-10.md` 第十节 —— **欠账清单的唯一登记处**

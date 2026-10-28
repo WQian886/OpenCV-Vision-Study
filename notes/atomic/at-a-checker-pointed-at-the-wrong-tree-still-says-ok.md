@@ -153,6 +153,61 @@ FAIL: C,D\notes\atomic\at-a-fix-record-re-creates-the-defect.md:13:
 
 ⇒ **新门自己被抓过一次**（不是「它跑过了」，是「它在该红的时候红了」）。
 
+## 复发第三次（2026-10-28）：同一个假设，**第二次**被绕过去
+
+这张卡说「根先解析成绝对路径」。**不够。**
+绝对路径**还有两种写法**，而前缀假设只在其中一种下成立。
+
+第二次上真 runner，失败路径脚本喊了：
+
+```
+THE COPY IS NOT THE TREE: the copy does not hold the same files
+   missing from the copy (142): notes\atomic\at-a-blind-reading-cannot-watch.md, ...
+   extra in the copy (142): ine\notes\atomic\at-a-blind-reading-cannot-watch.md, ...
+```
+
+⇒ 一边干净，一边每个都多三个字符 `ine\` ——
+而 `ine` 是 **`pristine` 的尾巴**（副本目录就叫这个名）。
+
+### 同一个目录，两个字符串
+
+runner 上 `$env:TEMP` 是 **`C:\Users\RUNNER~1\AppData\Local\Temp`**（8.3 短名）。
+PowerShell 的 provider 枚举文件时给的是**展开后的**
+`C:\Users\runneradmin\AppData\Local\Temp`。
+
+⇒ **`RUNNER~1` 8 个字符，`runneradmin` 11 个字符** ——
+**同一个目录，两个字符串，差三个字符。**
+
+而前缀假设是**拿长度切**的（`Substring($Root.Length)`）：
+切的长度来自**短名**，切出来的路径来自**长名** ⇒ 每一条相对路径从头就错三个字符。
+
+### 本机量得出来（本机的原话）
+
+```
+root string : ...\t8probe\AVERYL~1              (len 47)
+Get-Item    : ...\t8probe\AVeryLongDirectoryNameToForceShortNameHere  (len 81)
+child       : ...\t8probe\AVeryLongDirectoryNameToForceShortNameHere\f.txt
+Substring   : [gDirectoryNameToForceShortNameHere\f.txt]      <-- 垃圾
+```
+
+⇒ **`Resolve-Path` 原样返回短名（47），`Get-Item` 才给展开后的（81）。**
+⇒ 而上一张卡的修法用的正是 `Resolve-Path`。
+⇒ **同一个假设，换了个地方绕过去。**
+
+### 修法要更硬一格
+
+1. 根**问 provider 要**（`Get-Item ... .FullName`），不是自己拼一个绝对路径；
+2. 相对路径**不切字符串**：基址取 provider 自己的答案，
+   文件不在基址底下就**喊出来**，不切。
+
+⇒ 这不是「多修一个边角」：
+**四个检查器共用的那一处**（`Resolve-RepoRoot`）**也是同样的切法**，
+只是 runner 的检出路径没有 8.3 成分，所以它**没发作** ——
+它发作在**临时目录**上，因为那才是从 `$env:TEMP` 拼出来的。
+
+> ⇒ 「解析成绝对路径」**不等于**「解析成 provider 那个样子的绝对路径」。
+> ⇒ **同一层里还有下一层**：修掉一层不等于修掉这一层。
+
 配套：
 
 - [at-an-audit-that-cannot-see-starts-lying.md](./at-an-audit-that-cannot-see-starts-lying.md)

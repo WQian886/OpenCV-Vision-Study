@@ -67,8 +67,22 @@
 # resolved first.
 function Resolve-RepoRoot([string]$Path) {
     if ([string]::IsNullOrEmpty($Path)) { $Path = (Get-Location).Path }
-    $resolved = Resolve-Path -LiteralPath $Path -ErrorAction Stop
-    $full = $resolved.ProviderPath
+    # The PROVIDER's path for this directory -- the same form the
+    # enumeration returns -- and not the string we were handed.
+    #
+    # MEASURED on a Windows runner (2026-10-28): $env:TEMP is the 8.3
+    # short form ("C:\Users\RUNNER~1\AppData\Local\Temp"), and
+    # Resolve-Path hands that back UNCHANGED, while Get-ChildItem
+    # hands back the expanded form ("C:\Users\runneradmin\...").
+    # Two strings, one directory.  A relative path computed by slicing
+    # $RepoRoot.Length then starts three characters into the middle of
+    # a name: every relative path came out as "ine\notes\..." (the
+    # tail of "pristine"), the copy of the tree was 142 files in the
+    # wrong place, and the checker said OK.
+    #
+    # Get-Item expands it, so ask Get-Item.
+    $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+    $full = $item.FullName
     $full = $full.TrimEnd([char]'\', [char]'/')
     # A drive root ("E:\") trims down to "E:", and "E:" means the
     # CURRENT directory on drive E, not the root of the drive.  Put

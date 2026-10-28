@@ -159,6 +159,41 @@ D 只断了**行断言**那一处 ⇒ 块断言还在 ⇒ 还剩 5 条红。
 最后：D 现在**两把尺子一起断**，断完必须是**零条红**
 （不是「普查那几处没有红」——**指针也要零**）。
 
+## 复发第三次（2026-10-28）：这道门**第一次真跑**就派上用场了
+
+上一轮加的那道「先认副本，再信它」的门
+（副本的相对路径集合必须和真树**逐个相等**），
+在它**第一次上真 runner** 的时候就响了：
+
+```
+THE COPY IS NOT THE TREE: the copy does not hold the same files
+   missing from the copy (142): notes\atomic\at-a-blind-reading-cannot-watch.md, ...
+   extra in the copy (142): ine\notes\atomic\at-a-blind-reading-cannot-watch.md, ...
+```
+
+⇒ 一边干净，一边每个都多三个字符 ⇒ 副本**不是那棵树** ⇒ **拒绝给结论**。
+
+### 没有这道门会怎样
+
+脚本会拿着一个**放错了位置**的副本跑那四条变异，
+然后**照样报一个结论** —— 而那个结论说的是**另一棵树**。
+
+（根因：相对路径是**拿字符串长度切**出来的，
+而 runner 上 `$env:TEMP` 是 8.3 短名、provider 枚举时给的是**展开后**的名字 ——
+**同一个目录，两个字符串**。详见
+[门禁被指错了树那张卡](./at-a-checker-pointed-at-the-wrong-tree-still-says-ok.md)。）
+
+### 这张卡现在多了一层意思
+
+⇒ **失败路径的门（Step 3f）自己，也有一条失败路径** ——
+「副本不是那棵树」这一条，它自己也得**在该红的时候红**；
+否则它会默默拿着错的副本，给出一个关于错的树的结论。
+
+⇒ 而**红的还是脚本，不是门禁** —— 这是第三次了。
+⇒ 前两次的门（失败路径、尺子两把）都在**第一次真跑**上就露了馅，
+⇒ 所以「先上一次真 runner」不是形式主义：
+**本地绿的脚本，第一次上真机器就红，是常态。**
+
 配套：
 
 - [at-a-lint-that-finds-nothing-looks-green.md](./at-a-lint-that-finds-nothing-looks-green.md)

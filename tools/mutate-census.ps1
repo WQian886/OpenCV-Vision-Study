@@ -25,9 +25,9 @@
   the mutations stop being caught, and that is what proves the ruler
   is what caught them.
 
-  Three rules this harness learned the hard way (2026-10-27, the first
-  run on a real runner failed and the reason was in the harness, not
-  in the gate):
+  Four rules this harness learned the hard way -- the first two runs
+  on a real runner failed, and BOTH times the reason was in the
+  harness, not in the gate:
 
     1. THE COPY MUST BE VERIFIED BEFORE IT IS BELIEVED.
        A checker pointed at a tree that is not the tree measures air
@@ -50,6 +50,16 @@
        A mutation that silently did nothing is a green light for a
        broken gate.
 
+    4. A PATH IS NOT A STRING.
+       The copy is made of RELATIVE paths, and a relative path used to
+       be computed by slicing the root's length off an absolute one.
+       On the runner the root was the 8.3 short form ("RUNNER~1") and
+       the provider expanded it ("runneradmin") -- three characters
+       apart -- so every relative path came out as "ine\notes\...",
+       the tail of "pristine".  The copy was 142 files in the wrong
+       place.  Rule 1 is what caught it: the fidelity gate refused to
+       measure the copy and said WHY.
+
   Usage:
     powershell -NoProfile -ExecutionPolicy Bypass -File tools\mutate-census.ps1 -Mutation A
     powershell -NoProfile -ExecutionPolicy Bypass -File tools\mutate-census.ps1 -Mutation A,B,C,D
@@ -66,7 +76,12 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 if (-not $RepoRoot) { $RepoRoot = (Split-Path -Parent $PSScriptRoot) }
-$RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).ProviderPath.TrimEnd([char]'\', [char]'/')
+# The PROVIDER's path, not the string we were handed.  On a Windows
+# runner $env:TEMP is the 8.3 short form ("C:\Users\RUNNER~1\...") and
+# the provider expands it ("C:\Users\runneradmin\...") -- two strings,
+# one directory.  A relative path sliced out of the wrong one starts
+# three characters into the middle of a name.
+$RepoRoot = (Get-Item -LiteralPath $RepoRoot -ErrorAction Stop).FullName.TrimEnd([char]'\', [char]'/')
 if (-not $Work) {
     $Work = Join-Path $env:TEMP ('gn-opencv-mutate-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 }
@@ -114,20 +129,44 @@ Write-Host ("   host: {0} (PowerShell {1})" -f $HostExe, (($verText | Out-String
 # 2. The files that make the tree
 # ------------------------------------------------------------------
 #
+# The relative path of a file under the tree.
+#
+# NOT by slicing a length off an absolute path: the string we were
+# handed and the enumerated paths can be two different strings for the
+# same directory.  MEASURED on a Windows runner: $env:TEMP is the 8.3
+# short form ("C:\Users\RUNNER~1\..."), the provider expands it
+# ("C:\Users\runneradmin\..."), and the slice landed three characters
+# into the middle of a name -- every relative path came out as
+# "ine\notes\..." (the tail of "pristine").
+#
+# So the base is the provider's own answer, and a file that is not
+# under it is a loud error: a wrong relative path copies files into
+# the wrong place, and the gate then measures a tree nobody is
+# looking at.
+function Get-Rel([string]$base, [string]$full) {
+    if (-not $full.StartsWith($base + [char]'\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw ("'" + $full + "' is not under the tree '" + $base + "'")
+    }
+    return $full.Substring($base.Length + 1)
+}
+
 # The same two sets the checker needs: every markdown file (build/ and
 # .git/ excluded -- build products are not documentation) and every
 # script under tools/ (the checker dot-sources its own library).
 function Get-TreeFiles([string]$root) {
+    # Where the PROVIDER says the tree is, not the string we were
+    # handed -- see Get-Rel above.
+    $base = (Get-Item -LiteralPath $root -ErrorAction Stop).FullName.TrimEnd([char]'\', [char]'/')
     $out = New-Object System.Collections.ArrayList
     foreach ($f in (Get-ChildItem -Path $root -Recurse -File -Filter *.md)) {
-        $rel = $f.FullName.Substring($root.Length).TrimStart([char]'\', [char]'/')
+        $rel = Get-Rel $base $f.FullName
         if ($rel -match '(^|[\\/])(build|\.git)([\\/]|$)') { continue }
         [void]$out.Add([pscustomobject]@{ Rel = $rel; Full = $f.FullName })
     }
     $tools = Join-Path $root 'tools'
     if (Test-Path -LiteralPath $tools) {
         foreach ($f in (Get-ChildItem -Path $tools -Recurse -File -Filter *.ps1)) {
-            $rel = $f.FullName.Substring($root.Length).TrimStart([char]'\', [char]'/')
+            $rel = Get-Rel $base $f.FullName
             if ($rel -match '(^|[\\/])(build|\.git)([\\/]|$)') { continue }
             [void]$out.Add([pscustomobject]@{ Rel = $rel; Full = $f.FullName })
         }

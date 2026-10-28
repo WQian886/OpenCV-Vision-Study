@@ -361,7 +361,7 @@
 | 全仓套件 / 断言 | **31 / 2936** |
 | 累计变异 | **224** 条（184 杀 / 38 活 / 2 编译期） |
 | atomic 卡 | **87** 张 |
-| notes | **31** 份（~1151 KB，含 atomic） |
+| notes | **31** 份（~1161 KB，含 atomic） |
 | C++ 文件 / 行数 | **139 / 43,157** |
 | 欠账 | **19** 条，已收 14，未收 5 |
 
@@ -1089,7 +1089,7 @@ CI 因此新增 **Step 3d**（`tools/check-links.ps1`）：文档里**每一个�
 量出来的：
 
 ```
-133 个 markdown 文件 / 708 个章节标题 / 179 个章节指针
+133 个 markdown 文件 / 714 个章节标题 / 179 个章节指针
   ├─ 62 个 跨文件
   └─ 69 个 同文件
 最被指着的是三个文件：
@@ -1326,6 +1326,59 @@ D 只断了**行断言**那一处 ⇒ 块断言还在 ⇒ 还剩 **5** 条红。
 
 ⇒ 详见 [notes_SectionPointers_2026-10.md](./notes_SectionPointers_2026-10.md)、
 [atomic/at-a-gate-failure-path-runs-only-when-it-fails.md](./atomic/at-a-gate-failure-path-runs-only-when-it-fails.md)。
+
+### 9.15 第十一笔的尾巴（续）：**一个目录，两个字符串**
+
+第二次上真 runner（失败路径脚本的**第二次**），还是**脚本**红 —— 但这一次，
+**是上一轮刚加的那道门喊出来的**：
+
+```
+THE COPY IS NOT THE TREE: the copy does not hold the same files
+   missing from the copy (142): notes\atomic\at-a-blind-reading-cannot-watch.md, ...
+   extra in the copy (142): ine\notes\atomic\at-a-blind-reading-cannot-watch.md, ...
+```
+
+⇒ 一边干净，一边每个都多三个字符 `ine\` ——
+而 `ine` 是 **`pristine` 的尾巴**（副本目录就叫这个名）。
+
+#### 三个字符从哪来：8.3 短名
+
+runner 上 `$env:TEMP` 是 **`C:\Users\RUNNER~1\AppData\Local\Temp`**（8.3 短名），
+provider 枚举文件时给的是**展开后的** `C:\Users\runneradmin\...` ——
+**同一个目录，两个字符串**，差三个字符。
+
+⇒ 而相对路径是**拿长度切出来的**
+（`$f.FullName.Substring($root.Length)`）：
+切的长度来自**短名**，路径来自**长名** ⇒ 每一条相对路径从头就错了三个字符。
+
+#### 本机造得出来
+
+造一个 8.3 短名的目录，拿它当根跑失败路径脚本 —— 本机**红在同一句上**：
+
+```
+root string : ...\t8probe\AVERYL~1              (len 47)
+Get-Item    : ...\t8probe\AVeryLongDirectoryNameToForceShortNameHere  (len 81)
+Substring   : [gDirectoryNameToForceShortNameHere\f.txt]      <-- 垃圾
+```
+
+⇒ **第一次上真 runner 那个红，本机也造得出来** ——
+不是「runner 有 runner 的毛病」，是**同一个毛病**。
+
+#### 修的不是脚本，是**根**
+
+同样的切法在**四个检查器**里都有：它们拿 `Resolve-Path` 解析出来的根去切枚举出来的路径 ——
+而 `Resolve-Path` **原样返回短名**，`Get-Item` 才给展开后的。
+
+⇒ 修在**共用的那一处**：`Resolve-RepoRoot` 改成问 provider 要那个目录；
+相对路径**不再切字符串** —— 基址取 provider 自己的答案，
+文件不在基址底下就**喊出来**，不切。
+
+⇒ 这个病**本来是潜伏的**：runner 的检出路径没有 8.3 成分；
+它发作在**临时目录**上 —— 那才是从 `$env:TEMP` 拼出来的。
+
+⇒ 而上一轮那道「先认副本，再信它」的门，
+**在它自己的第一次真跑上就派上用场了**：
+它没有给出结论，它说**副本不是那棵树**。
 
 ---
 
