@@ -40,7 +40,10 @@ set(SOURCES
 add_executable(w2_color_filter ${SOURCES})
 
 # ===== OpenCV 链接 =====
-target_include_directories(w2_color_filter PRIVATE ${OpenCV_INCLUDE_DIRS})
+# 共享的「合成 PCB 图的事实」(颜色、HSV 窗口、噪声) 在 common/pcb_sim/ ——
+# W2 和 W3 从同一份取,不再各抄一份窗口。
+set(PCB_SIM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../common/pcb_sim")
+target_include_directories(w2_color_filter PRIVATE ${PCB_SIM_DIR} ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(w2_color_filter PRIVATE ${OpenCV_LIBS})
 
 # ===== MSVC UTF-8 =====
@@ -89,6 +92,7 @@ add_executable(w2_color_filter_test
 
 target_include_directories(w2_color_filter_test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${PCB_SIM_DIR}
     ${OpenCV_INCLUDE_DIRS}
 )
 

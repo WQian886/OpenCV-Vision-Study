@@ -11,7 +11,7 @@
 W2_ColorFilter/
 ├── CMakeLists.txt
 ├── main.cpp                    # 只做 读图/打印/存图/显示
-├── color_pipeline.{h,cpp}      # 处理链（可测的那一层）+ 全部常量
+├── color_pipeline.{h,cpp}      # 处理链（可测的那一层）
 ├── tests/
 │   └── test_w2_color_filter.cpp   # 无头回归测试
 ├── images/                      # 测试图片 + 10 个输出结果
@@ -84,8 +84,18 @@ ctest --test-dir build -C Release --output-on-failure
 > （同一个 `color_pipeline.cpp` 链进两个目标），
 > **一条都不许在 `main.cpp` 里再重写一遍** —— 重写就是"抄副本"。
 >
-> 顺带解决了另一个问题：**常量以前散在 `main.cpp` 里**，
-> 现在焊盘矩形、焊盘颜色、金色 HSV 窗口**只在 `color_pipeline.cpp` 里定义一次**。
+> 顺带解决了另一个问题：**常量以前散在 `main.cpp` 里**。
+> 现在「合成 PCB 图的事实」（焊盘矩形、焊盘颜色、板面底色、噪声强度、
+> **金色 HSV 窗口**）住在 **`common/pcb_sim/pcb_sim.h`** —— **只有这一份**，
+> W2 和 W3 都从它取。
+> `color_pipeline.cpp` 里的同名入口（`padRects` / `padColor` /
+> `backgroundColor` / `goldHsvLower` / `goldHsvUpper`）**一个都没删**，
+> 它们现在是那份事实的**转发** —— **名字还是那些名字，实现只剩一份**。
+>
+> 起因是 2026-10-28 补 W3 测试时发现：W3 的 `main.cpp` 里**抄了一份** HSV 窗口，
+> 而那行代码的注释偏偏写着「复用 W2 思路」。
+> **注释说复用，代码是抄的** —— 而两份各自的测试**都是绿的**，
+> 因为每一份都只对着自己那份图断言，谁也没跨过去看一眼。
 
 > ⚠ **实测出来的两个数，和教科书不一样**：
 >

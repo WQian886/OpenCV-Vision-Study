@@ -237,7 +237,7 @@ function Apply-Mutation([string]$Which, [string]$dest) {
     switch ($Which) {
         'A' {
             # The quoted pointer count in the root README drifts by one.
-            Replace-ExactlyOnce $readme ('179 ' + $GE + $ZHANG + $JIE + $ZHI + $ZHEN) ('178 ' + $GE + $ZHANG + $JIE + $ZHI + $ZHEN) 'A'
+            Replace-ExactlyOnce $readme ('185 ' + $GE + $ZHANG + $JIE + $ZHI + $ZHEN) ('184 ' + $GE + $ZHANG + $JIE + $ZHI + $ZHEN) 'A'
         }
         'B' {
             # The loose-rule count in the note's rule table drifts by one.
@@ -245,7 +245,7 @@ function Apply-Mutation([string]$Which, [string]$dest) {
             # The number it drifts FROM is the number the documents
             # quote at the moment -- so this anchor follows the docs.
             # When the docs move (and they did: the loose rule now
-            # catches 18 of 36, not 20), this line has to move with
+            # catches 18 of 37, not 20), this line has to move with
             # them, or the mutation matches nothing.
             #
             # And that is not a nuisance: "found 0" is LOUD.  A
@@ -256,7 +256,7 @@ function Apply-Mutation([string]$Which, [string]$dest) {
         'C' {
             # The CHECKER'S OWN header drifts: the checker quotes the
             # census in its own comment, and that comment is a claim too.
-            Replace-ExactlyOnce $checker '179 section pointers' '180 section pointers' 'C'
+            Replace-ExactlyOnce $checker '185 section pointers' '186 section pointers' 'C'
         }
         'D' {
             # THE RULER IS BROKEN -- and it has TWO blades.

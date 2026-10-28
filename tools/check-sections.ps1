@@ -20,14 +20,14 @@
       round and found three real dangling links on its first run. The
       same round measured what the link checker CANNOT see: a link is
       a recorded fact about a FILE, and a section pointer is a
-      recorded fact about a PLACE. 179 section pointers, of which 59
+      recorded fact about a PLACE. 185 section pointers, of which 60
       point into ONE file -- notes/notes_W7_Knob_Audit_2026-10.md,
       the debt register that this project keeps editing.
 
       Measured, not estimated: renumbering that one chapter breaks
-      36 of those pointers, and every one of them still reads
+      37 of those pointers, and every one of them still reads
       perfectly. (A mutation run on a copy of the tree confirmed
-      the 36.)
+      the 37.)
 
       Measured on the day it was written: 177 pointers, all of them
       resolving -- so this gate is not reporting a fire that is already

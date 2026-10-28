@@ -1,57 +1,47 @@
 #include "color_pipeline.h"
 
+#include "pcb_sim.h"
+
 namespace w2 {
 namespace {
 
 // ------------------------------------------------------------
-// 常量 —— 全部只在这里定义一次
+// 常量 —— **不在这里**。
+//
+// 2026-10-28 之前它们就在这个文件里（color_pipeline.cpp）。
+// 同一天 W3 又抄了一份 HSV 窗口在自己的 main.cpp 里，
+// 而那行代码的注释写着「复用 W2 思路」——
+// 注释说复用，代码是抄的。
+//
+// 于是事实搬到 common/pcb_sim/pcb_sim.h：W2 和 W3 从同一份取。
+// 下面的 w2::padRects() / w2::goldHsvLower() 这些入口**保留不变**
+// （W2 的 demo、测试、以及 W2 的公开约定都指着它们），
+// 它们现在只是 pcbsim 的转发。
+//
+// 换句话说：**名字还是那些名字，实现只剩一份。**
 // ------------------------------------------------------------
-
-const std::vector<cv::Rect> kPadRects = {
-    cv::Rect(50,  100, 80, 80), cv::Rect(200, 100, 80, 80),
-    cv::Rect(350, 100, 80, 80), cv::Rect(500, 100, 80, 80),
-    cv::Rect(50,  300, 80, 80), cv::Rect(200, 300, 80, 80),
-    cv::Rect(350, 300, 80, 80), cv::Rect(500, 300, 80, 80),
-};
-
-const cv::Scalar kPadColor(60, 180, 220);        // 金黄（BGR）
-const cv::Scalar kBackgroundColor(40, 80, 40);    // 深绿 PCB 底色（BGR）
-const cv::Scalar kTextColor(200, 200, 200);       // 中央文字
-
-const cv::Scalar kGoldHsvLower(10, 100, 100);
-const cv::Scalar kGoldHsvUpper(30, 255, 255);
-
-const int kImageWidth = 640;
-const int kImageHeight = 480;
-const double kNoiseSigma = 25.0;
 
 }  // namespace
 
-const std::vector<cv::Rect>& padRects() { return kPadRects; }
-const cv::Scalar& padColor() { return kPadColor; }
-const cv::Scalar& backgroundColor() { return kBackgroundColor; }
-const cv::Scalar& goldHsvLower() { return kGoldHsvLower; }
-const cv::Scalar& goldHsvUpper() { return kGoldHsvUpper; }
+const std::vector<cv::Rect>& padRects() { return pcbsim::padGrid(); }
+const cv::Scalar& padColor() { return pcbsim::padColor(); }
+const cv::Scalar& backgroundColor() { return pcbsim::backgroundColor(); }
+const cv::Scalar& goldHsvLower() { return pcbsim::goldHsvLower(); }
+const cv::Scalar& goldHsvUpper() { return pcbsim::goldHsvUpper(); }
 
 cv::Mat generatePcbLikeImage(int seed) {
-    cv::Mat img(kImageHeight, kImageWidth, CV_8UC3, kBackgroundColor);
+    cv::Mat img(pcbsim::imageSize(), CV_8UC3, pcbsim::backgroundColor());
 
-    for (const auto& p : kPadRects) {
-        cv::rectangle(img, p, kPadColor, -1);
+    for (const auto& p : pcbsim::padGrid()) {
+        cv::rectangle(img, p, pcbsim::padColor(), -1);
     }
 
     cv::putText(img, "W2 Color Filter Test", cv::Point(150, 240),
-                cv::FONT_HERSHEY_SIMPLEX, 0.8, kTextColor, 2);
+                cv::FONT_HERSHEY_SIMPLEX, 0.8, pcbsim::textColor(), 2);
 
     // 噪声（模拟传感器噪声，让滤波有"事可做"）。
-    // OpenCV 4.13 的 cv::randn 没有 RNG 参数版本，唯一的入口是全局 theRNG()，
-    // 所以"带种子"只能通过重设它来实现。
-    cv::theRNG() = cv::RNG(seed);
-    cv::Mat noise(img.size(), CV_16SC3);
-    cv::randn(noise, cv::Scalar::all(0), cv::Scalar::all(kNoiseSigma));
-    cv::add(img, noise, img, cv::noArray(), CV_8UC3);
-
-    return img;
+    // 种子是**参数** —— 理由和副作用见 common/pcb_sim/pcb_sim.h。
+    return pcbsim::addNoise(img, seed);
 }
 
 cv::Mat toHsv(const cv::Mat& bgr) {
@@ -67,10 +57,8 @@ cv::Mat toGray(const cv::Mat& bgr) {
 }
 
 cv::Mat goldMask(const cv::Mat& bgr) {
-    cv::Mat hsv = toHsv(bgr);
-    cv::Mat mask;
-    cv::inRange(hsv, kGoldHsvLower, kGoldHsvUpper, mask);
-    return mask;
+    // 窗口在 common/pcb_sim/pcb_sim.h —— 和 W3 共用同一份。
+    return pcbsim::goldMask(bgr);
 }
 
 cv::Mat goldOnly(const cv::Mat& bgr) {
