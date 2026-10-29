@@ -213,6 +213,17 @@ powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 而且**摘要和好树一字不差** ⇒ **红是尺子报的**，不是碰巧。
 详见 [notes_GateMutations_2026-10.md](./notes/notes_GateMutations_2026-10.md)。
 
+再往后是 **Step 3h（`tools/mutate-ci-steps.ps1`）**：
+**CI 自己剩下那三步**（W5 冒烟、W7 无头流水线、源码树干净）的失败路径。
+它们原来是**内联**在 `tools/ci.ps1` 里的 ——
+内联的检查**只能靠跑整个 CI** 来跑（十分钟，七个工程全编），
+所以「把 W5 弄坏，它会不会红」这个问题**根本没法问**。
+⇒ 先把它们**搬成** `tools/check-ci-steps.ps1`（**每个输入都是一个命名参数**），
+再给它们**各配四条变异** ——
+这一回改的是**输入**（工作目录、可执行文件、板子、流水线文件、树的快照），
+不是**树**。
+详见 [notes_CI_StepMutations_2026-10.md](./notes/notes_CI_StepMutations_2026-10.md)。
+
 `.github/workflows/ci.yml` 在 GitHub Actions 上跑同一套步骤
 （Windows runner + `tools/ci-deps.ps1` 装 tesseract / Qt 6.8.3 / 官方预编译 OpenCV 4.13.0）。
 
@@ -349,8 +360,10 @@ OpenCV/
 ├── tools/check-doc-numbers.ps1  # 文档里每个「当前事实」的数 ↔ 实测（期望值从文档读）
 ├── tools/check-links.ps1  # 文档里每个相对链接 → 真的能走到（链接不会自己漂）
 ├── tools/check-sections.ps1  # 文档里每个章节指针 → 真的落得到那一章（指针不会自己漂）
+├── tools/check-ci-steps.ps1  # CI 第 4/5/6 步搬成的检查器（每个输入都是一个命名参数）
 ├── tools/mutate-census.ps1  # 那道门的变异验证（量它的脚本得在仓库里，谁都能重跑）
 ├── tools/mutate-gates.ps1  # 数、链、章节指针三道门自己的变异验证（12 条，每次 CI 都跑）
+├── tools/mutate-ci-steps.ps1  # CI 第 4/5/6 步自己的变异验证（12 条，每次 CI 都跑）
 ├── tools/lib/DocScan.ps1  # 两个文档检查器共用的那一份扫描逻辑（不抄副本）
 ├── tools/lib/MutHarness.ps1  # 两个变异脚本共用的那一份机械（造副本、跑子进程、比对摘要）
 ├── tools/fixtures/    # 变异用的**素材**（形状不对的二维码 + 它的生成脚本）
