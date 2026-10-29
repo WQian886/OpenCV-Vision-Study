@@ -333,6 +333,19 @@ $TreeBefore = @(& $git -C $RepoRoot status --porcelain | Where-Object { $_ -ne '
 if ($LASTEXITCODE -ne 0) { Fail "git status failed (exit $LASTEXITCODE)" }
 Write-Host "   working tree before: $($TreeBefore.Count) uncommitted entr(y/ies)"
 
+# The snapshot is also written to a FILE, because step 6 was pulled
+# out into tools/check-ci-steps.ps1 -- its inputs are parameters, so
+# that a mutation harness can break them on purpose -- and that
+# script takes the baseline as a file.
+#
+# UTF-8 WITHOUT a BOM, one line per entry.  The reader is
+# [System.IO.File]::ReadAllLines, and a BOM would become part of the
+# FIRST line -- which is a line of the snapshot, so it would compare
+# unequal to the very same line seen again.
+$TreeBaselineFile = Join-Path $BuildRoot 'ci_tree_baseline.txt'
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllLines($TreeBaselineFile, [string[]]$TreeBefore, $Utf8NoBom)
+
 # ------------------------------------------------------------------
 # Step 2: configure + build all 7 projects
 # ------------------------------------------------------------------
@@ -769,6 +782,63 @@ Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $gateHarness,
 Write-Host "   the number, link and section gates still catch a broken ruler: OK"
 
 # ------------------------------------------------------------------
+# Step 3h/6: the CI's OWN three steps' failure paths
+# ------------------------------------------------------------------
+#
+# Why this step exists (2026-10-29):
+#
+#   Steps 3f and 3g prove that the DOCUMENTATION gates can go red.
+#   The three steps that are not documentation gates -- 4 (the W5
+#   smoke check), 5 (the W7 headless pipeline) and 6 (the source
+#   tree stayed clean) -- had never been seen to go red either.  They
+#   were green on every run since the day they were written, and the
+#   same hole shows up: the checker could be broken in a way that
+#   makes it say OK about anything, and the log would look exactly
+#   the same.
+#
+#   So the three checks moved OUT of this file into
+#   tools/check-ci-steps.ps1, with every input as a parameter, and
+#   the harness asks the question that could not be asked before.
+#
+#   THE MUTATIONS CHANGE THE INPUTS, NOT THE TREE:
+#
+#     A, B, C   a defect is put into the INPUT -- the working
+#               directory, the executable, the pipeline file, the
+#               image, the tree the tests are measured against.
+#               The step must go RED, and it must say so in the way
+#               the mutation was aimed at, not by some other failure
+#               that happens to be red as well.
+#
+#     D         THE RULER IS BROKEN, and the defect is STILL THERE.
+#               The step must go GREEN, and it must print EXACTLY
+#               what it prints about the PRISTINE tree.
+#
+#   D is what carries the proof, the same way it does in 3f and 3g.
+#
+#   The real tree is never touched: the probe files the harness puts
+#   into the tree are removed again before it returns, and its
+#   working copy lives under the temp directory.
+#
+#   The harness is tools/mutate-ci-steps.ps1, and the machinery it
+#   shares with the other harnesses lives in tools/lib/.
+Say "Step 3h/6  the CI's own steps' failure paths"
+
+$ciStepHarness = Join-Path $RepoRoot 'tools\mutate-ci-steps.ps1'
+if (-not (Test-Path $ciStepHarness)) {
+    Fail "mutation harness not found: $ciStepHarness"
+}
+Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ciStepHarness,
+             '-RepoRoot', $RepoRoot, '-BuildRoot', $BuildRoot, '-Mutation', 'A,B,C,D')
+Write-Host "   the CI steps still catch a broken ruler: OK"
+
+# The three steps below live in one script of their own, so that the
+# harness above can run them with broken inputs.
+$CiStepChecker = Join-Path $RepoRoot 'tools\check-ci-steps.ps1'
+if (-not (Test-Path $CiStepChecker)) {
+    Fail "CI step checker not found: $CiStepChecker"
+}
+
+# ------------------------------------------------------------------
 # Step 4: W5 smoke check
 # ------------------------------------------------------------------
 # W5 has no test suite. The shared common/qr_ocr suite covers the QR and
@@ -779,35 +849,16 @@ Write-Host "   the number, link and section gates still catch a broken ruler: OK
 # SHAPE of the value (PCB-2026-001-SN:A12345X) rather than a copy of it.
 # The exact value is asserted in common/qr_ocr/tests/test_qr_ocr.cpp --
 # one place, not two.
+#
+# The check itself lives in tools/check-ci-steps.ps1 (moved out on
+# 2026-10-29).  It used to sit HERE, inline, and an inline check can
+# only be run by running the WHOLE CI -- ten minutes and every project
+# -- so the question "does this go RED when W5 is broken?" could not be
+# asked at all.  Step 3h asks it, on every run, against a broken W5.
 Say "Step 4/6  W5 smoke check"
 
-$w5bin = Join-Path $BuildRoot 'W5_OCR_QRCode/Release'
-if (-not (Test-Path $w5bin)) { $w5bin = Join-Path $BuildRoot 'W5_OCR_QRCode' }
-$w5exe = Join-Path $w5bin 'w5_ocr_qrcode.exe'
-if (-not (Test-Path $w5exe)) {
-    Fail "W5 executable not found: $w5exe"
-}
-$w5out = Join-Path $BuildRoot 'w5_smoke_out.txt'
-$global:LASTEXITCODE = 0
-$ErrorActionPreference = 'Continue'
-Push-Location $w5bin
-try {
-    & $w5exe 'qr' '--no-gui' *> $w5out
-    $w5code = $LASTEXITCODE
-}
-finally { Pop-Location }
-if ($w5code -ne 0) {
-    Get-Content $w5out | Write-Host
-    Fail "W5 qr smoke check exited with $w5code"
-}
-$w5text = Get-Content $w5out -Raw
-if ($w5text -notmatch 'PCB-\d{4}-\d{3}-SN:[A-Z0-9]+') {
-    Get-Content $w5out | Write-Host
-    Fail ("W5 qr smoke check: no serial number in the output." +
-          "`n   An exit code of 0 is NOT enough -- W5 returns 0 even when it" +
-          "`n   finds no QR at all, so the output has to be checked too.")
-}
-Write-Host "   W5 decoded a serial number: OK"
+Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $CiStepChecker,
+             '-RepoRoot', $RepoRoot, '-BuildRoot', $BuildRoot, '-Step', '4')
 
 # ------------------------------------------------------------------
 # Step 5/6: W7 headless smoke check -- run a WHOLE PIPELINE
@@ -834,147 +885,18 @@ Write-Host "   W5 decoded a serial number: OK"
 #   where the relative path resolves. Running from anywhere else would
 #   fail on the recipe, not on the pipeline.
 #
+# The check itself lives in tools/check-ci-steps.ps1 (moved out on
+# 2026-10-29).  Same reason as step 4: inline, it could only be run by
+# running the whole CI, so nobody could ask whether it goes red when
+# the pipeline is broken.  Step 3h asks, on every run.
+#
 # NOTE: this file must stay PURE ASCII (no BOM). PowerShell 5.1 reads a
 #   no-BOM .ps1 as ANSI/GBK, and a Chinese comment can swallow the next
 #   line of CODE. Explanations in Chinese belong in notes/.
 Say "Step 5/6  W7 headless pipeline smoke check"
 
-$w7bin = Join-Path $BuildRoot 'W7_VisionMasterLite/Release'
-if (-not (Test-Path $w7bin)) { $w7bin = Join-Path $BuildRoot 'W7_VisionMasterLite' }
-$w7exe = Join-Path $w7bin 'w7_vm_lite.exe'
-if (-not (Test-Path $w7exe)) {
-    Fail "W7 executable not found: $w7exe"
-}
-$w7pipe = Join-Path $RepoRoot 'W7_VisionMasterLite/pipelines/smoke.json'
-if (-not (Test-Path $w7pipe)) {
-    Fail "W7 smoke pipeline not found: $w7pipe"
-}
-# The good board. It must judge PASS -- a defect would be a false alarm
-# on the CI, and a broken recipe would look like a broken pipeline.
-$w7img = Join-Path $RepoRoot 'W6_PCB_DefectProject/images/baseline.png'
-if (-not (Test-Path $w7img)) {
-    Fail "W7 smoke image not found: $w7img"
-}
-$w7out = Join-Path $BuildRoot 'w7_headless_smoke_out.txt'
-$w7result = Join-Path $BuildRoot 'w7_headless_smoke_result.json'
-$global:LASTEXITCODE = 0
-$ErrorActionPreference = 'Continue'
-Push-Location $w7bin
-try {
-    # WARNING: Start-Process -Wait, NOT "& $w7exe ...".
-    #   w7_vm_lite.exe is a WIN32 (GUI subsystem) program, and PowerShell
-    #   does NOT wait for GUI programs: "&" returns in a few ms while the
-    #   program is still running. Measured: the result file did not exist
-    #   yet when the check right after it ran -- it showed up 3 seconds
-    #   later. That is the classic "checked before it was written" bug.
-    #   cmd.exe waits for GUI programs; PowerShell does not.
-    $p = Start-Process -FilePath $w7exe `
-            -ArgumentList @('--run', $w7pipe, '--image', $w7img, '--out', $w7result) `
-            -WorkingDirectory $w7bin -Wait -PassThru -NoNewWindow `
-            -RedirectStandardOutput $w7out -RedirectStandardError "$w7out.err"
-    $w7code = $p.ExitCode
-}
-finally { Pop-Location }
-if ($w7code -ne 0) {
-    Get-Content $w7out -Encoding UTF8 | Write-Host
-    Fail "W7 headless smoke exited with $w7code (0 = ran and judged PASS)"
-}
-if (-not (Test-Path $w7result)) {
-    Get-Content $w7out -Encoding UTF8 | Write-Host
-    Fail "W7 headless smoke wrote no result file"
-}
-# WARNING: -Encoding UTF8, not the default.
-#   PowerShell 5.1 reads a file without -Encoding as ANSI (GBK here).
-#   The result JSON is UTF-8 with Chinese text in it, so the GBK read
-#   turns it into mojibake -- and mojibake can break the JSON itself
-#   (a mangled byte pair may produce a stray quote), which makes
-#   ConvertFrom-Json fail with "invalid object".
-#   The symptom looks like "the pipeline wrote a broken file", but the
-#   file is fine; the reader is wrong.
-$w7json = Get-Content $w7result -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($w7json.final_result -ne 'PASS') {
-    Get-Content $w7out -Encoding UTF8 | Write-Host
-    Fail ("W7 headless smoke: final_result is '$($w7json.final_result)', expected PASS." +
-          "`n   An exit code of 0 is NOT enough -- the pipeline can 'succeed'" +
-          "`n   while judging nothing at all.")
-}
-if ($w7json.errors -ne 0) {
-    Get-Content $w7out -Encoding UTF8 | Write-Host
-    Fail "W7 headless smoke: $($w7json.errors) step(s) reported an error"
-}
-# The judge node's uuid in W7_VisionMasterLite/pipelines/smoke.json.
-#
-# It MUST be a real UUID, not a made-up name. The parser tells "new
-# format" from "old format" by QUuid::fromString(): a key like
-# "smoke-judge" is not a UUID, so the edge is treated as old format
-# (both ends hold an operator name), the lookup fails, the line is
-# dropped -- and the pipeline then judges ERROR with no obvious
-# reason. The smoke step below caught exactly that once.
-$w7judgeUuid = '22222222-2222-2222-2222-222222222222'
-$w7judgeProp = $w7json.outputs.PSObject.Properties |
-    Where-Object { $_.Name -eq $w7judgeUuid }
-if (-not $w7judgeProp) {
-    Get-Content $w7out -Encoding UTF8 | Write-Host
-    Fail ("W7 headless smoke: no output for the judge node ($w7judgeUuid)." +
-          "`n   outputs keys: " + (($w7json.outputs.PSObject.Properties.Name) -join ', '))
-}
-$w7comps = $w7judgeProp.Value.component_count
-if ($w7comps -ne 6) {
-    Get-Content $w7out -Encoding UTF8 | Write-Host
-    Fail ("W7 headless smoke: the judge saw $w7comps components, expected 6." +
-          "`n   The verdict may still be PASS, but it was decided on the wrong data.")
-}
-Write-Host "   W7 ran a whole pipeline headless and judged it PASS: OK"
-
-# ---- the exit code contract: all four codes must come out right ----
-#
-# The smoke check above only exercises exit code 0. The other three
-# are the ones CI actually leans on to tell "the tool is broken"
-# from "the pipeline is broken":
-#
-#   1 = ran, judged FAIL       (the pipeline says no)
-#   2 = could not even start   (usage / file / JSON / cycle)
-#   3 = ran, but a step erred  (the tool works, the pipeline does not)
-#
-# A pipeline that judges FAIL but exits 0 is the classic silent
-# failure: it looks like it passed. That is exactly what the exit
-# code split exists to prevent, so it gets checked here.
-function Run-W7([string[]]$argl) {
-    $o = Join-Path $BuildRoot 'w7_headless_code_out.txt'
-    $p = Start-Process -FilePath $w7exe -ArgumentList $argl `
-            -WorkingDirectory $w7bin -Wait -PassThru -NoNewWindow `
-            -RedirectStandardOutput $o -RedirectStandardError "$o.err"
-    return $p.ExitCode
-}
-
-# A board WITH a defect -> the judge says FAIL -> exit 1 (not 0).
-$w7bad = Join-Path $RepoRoot 'W6_PCB_DefectProject/images/missing.png'
-if (-not (Test-Path $w7bad)) { Fail "W7 smoke defect image not found: $w7bad" }
-$codeFail = Run-W7 @('--run', $w7pipe, '--image', $w7bad,
-                      '--out', (Join-Path $BuildRoot 'w7_fail_result.json'))
-if ($codeFail -ne 1) {
-    Fail ("W7 headless exit code contract: a FAIL pipeline exited with $codeFail, expected 1." +
-          "`n   A pipeline that judges FAIL but exits 0 is the worst kind of silent failure.")
-}
-Write-Host "   exit 1 (judged FAIL)             : OK"
-
-# An image that does not exist -> the operator reports an error -> exit 3.
-$w7noimg = Join-Path $RepoRoot 'W6_PCB_DefectProject/images/no_such_image_for_ci.png'
-$codeErr = Run-W7 @('--run', $w7pipe, '--image', $w7noimg,
-                     '--out', (Join-Path $BuildRoot 'w7_err_result.json'))
-if ($codeErr -ne 3) {
-    Fail ("W7 headless exit code contract: a step error exited with $codeErr, expected 3." +
-          "`n   3 means 'the tool works, the pipeline is broken' -- CI must be able to tell.")
-}
-Write-Host "   exit 3 (a step reported an error) : OK"
-
-# A pipeline file that does not exist -> we never got started -> exit 2.
-$codeMissing = Run-W7 @('--run', (Join-Path $BuildRoot 'w7_no_such_pipeline.json'))
-if ($codeMissing -ne 2) {
-    Fail ("W7 headless exit code contract: a missing pipeline file exited with $codeMissing, expected 2." +
-          "`n   2 means 'we never ran' -- that is a broken tool, not a broken pipeline.")
-}
-Write-Host "   exit 2 (could not even start)     : OK"
+Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $CiStepChecker,
+             '-RepoRoot', $RepoRoot, '-BuildRoot', $BuildRoot, '-Step', '5')
 
 # ------------------------------------------------------------------
 # Step 6/6: the source tree must be clean
@@ -987,25 +909,14 @@ Write-Host "   exit 2 (could not even start)     : OK"
 # "the source tree is clean" would have caught that on day one.
 Say "Step 6/6  source tree must be clean"
 
-$global:LASTEXITCODE = 0
-$TreeAfter = @(& $git -C $RepoRoot status --porcelain | Where-Object { $_ -ne '' })
-if ($LASTEXITCODE -ne 0) { Fail "git status failed (exit $LASTEXITCODE)" }
-
-# Anything in the AFTER set that was not in the BEFORE set is new.
-# Compare-Object needs a non-empty reference set, hence the placeholder.
-$ref = $TreeBefore
-if ($ref.Count -eq 0) { $ref = @('(clean tree)') }
-$added = @(Compare-Object -ReferenceObject $ref -DifferenceObject $TreeAfter |
-           Where-Object { $_.SideIndicator -eq '=>' })
-if ($added.Count -gt 0) {
-    Write-Host ""
-    Write-Host "The tests ADDED files to the source tree:" -ForegroundColor Red
-    $added | ForEach-Object { Write-Host "   $($_.InputObject)" -ForegroundColor Red }
-    Fail ("test products leaked into the source tree." +
-          "`n   Every suite must run in build/test_work/<suite>/ -- see the" +
-          "`n   w7_add_test / w6_add_test functions in the CMakeLists files.")
-}
-Write-Host "   source tree unchanged by the tests: OK"
+# The "before" snapshot was written to a file near the top of this
+# script (it is taken before the build, not before this step).  The
+# check itself lives in tools/check-ci-steps.ps1, for the same reason
+# as steps 4 and 5: a check that can only be run by running the whole
+# CI is a check nobody can ask a question of.
+Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $CiStepChecker,
+             '-RepoRoot', $RepoRoot, '-BuildRoot', $BuildRoot, '-Step', '6',
+             '-BaselineFile', $TreeBaselineFile)
 
 # ------------------------------------------------------------------
 # Summary
