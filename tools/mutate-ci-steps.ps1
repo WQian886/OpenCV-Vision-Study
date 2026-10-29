@@ -45,14 +45,30 @@
       directory, a pipeline file, an image -- so their mutations change
       the INPUTS.  Same question, same answer shape, different lever.
 
-      Two of them cannot be produced by the real program at all, and
-      the harness says so instead of pretending:
+      ONE of the two gate-4 mutations cannot be produced by the real
+      program at all, and the harness says so instead of pretending:
 
-        gate 4/B  W5 returns 0 whatever it finds, so no real input can
-                  make it exit 3.  A stub stands in for it.
-        gate 4/C  the same: a real W5 always decodes the RIGHT serial
-                  from the image that is there.  A stub prints one of
-                  the wrong shape.
+        gate 4/B  W5 has TWO exits: 0, and 1 on an OpenCV exception --
+                  and the 1 prints an exception, never a serial.
+                  Measured: a missing image and a corrupt image both
+                  exit 0.  So "a perfect serial AND a non-zero exit"
+                  is unreachable, and a stub stands in for it.
+
+      The other one (4/C) USED to have a stub too, and that was WRONG:
+
+        gate 4/C  W5 finds its image by a HARD-CODED RELATIVE path
+                  ("images/qrcode_test.png"), so swapping the image
+                  makes the REAL program decode a serial of the wrong
+                  shape.  Measured: exit 0, and the serial comes out
+                  as "PCB-2026-01-SN:A12345X" -- two digits where the
+                  format has three.  So C runs the REAL program with
+                  the wrong image (tools/fixtures/qr_wrongshape.png)
+                  and there is no stub at all.
+
+      The first version of this harness asserted, without measuring,
+      that "the real program cannot do this" for BOTH of them.  That
+      was a conclusion written down as a reason, and it was FALSE for
+      C -- see notes/atomic/at-cannot-be-tested-is-a-conclusion-not-a-reason.md.
 
     Pure ASCII, no BOM: PowerShell 5.1 reads a .ps1 without a BOM as
     ANSI, and a non-ASCII byte in here turns into mojibake (or worse,
@@ -105,6 +121,19 @@ $W5Exe = Join-Path $W5Bin 'w5_ocr_qrcode.exe'
 $W7Exe = Join-Path $W7Bin 'w7_vm_lite.exe'
 $GoodImage = Join-Path $RepoRoot 'W6_PCB_DefectProject\images\baseline.png'
 $BadImage  = Join-Path $RepoRoot 'W6_PCB_DefectProject\images\missing.png'
+
+# The fixture for gate 4/C: a QR code whose serial has the WRONG
+# SHAPE.  It is a TRACKED file, and the generator that made it sits
+# next to it (tools/fixtures/gen_qr_wrongshape.py) -- a binary with
+# no second source is a binary nobody can review.
+$WrongShapeImage = Join-Path $RepoRoot 'tools\fixtures\qr_wrongshape.png'
+if (-not (Test-Path -LiteralPath $WrongShapeImage)) {
+    throw ("the wrong-shape fixture is not there: " + $WrongShapeImage +
+           "  It is a tracked file, and the generator that made it" +
+           " sits next to it (tools/fixtures/gen_qr_wrongshape.py)." +
+           " Without it the mutation IS the pristine tree, and a" +
+           " mutation that did not happen must be LOUD.")
+}
 
 # The judge node's uuid in W7_VisionMasterLite/pipelines/smoke.json.
 $JudgeUuid = '22222222-2222-2222-2222-222222222222'
@@ -238,17 +267,49 @@ function Break-Gate4([string]$which, [string]$ctx) {
             return @{ 'W5Exe' = $stub; 'W5WorkDir' = $ctx }
         }
         'C' {
-            # A stub that exits 0 and prints a serial of the WRONG
-            # SHAPE (two digits where the format has three).
+            # THE REAL PROGRAM, WITH THE WRONG IMAGE.
+            #
+            # W5 finds its image by a HARD-CODED RELATIVE path
+            # ("images/qrcode_test.png"), so the working directory IS
+            # the input that decides what it decodes.  Put a serial of
+            # the WRONG SHAPE there (two digits where the format has
+            # three) and the real program prints it and still exits 0.
             #
             # This is the case that separates "the check looks at the
             # output" from "the check looks at the OUTPUT'S SHAPE": a
             # check that only asked "is there any output" would call
             # this a pass.
-            $stub = Join-Path $ctx 'w5_wrongshape.cmd'
-            $lines = @('@echo off', 'echo   decoded: PCB-2026-01-SN:A12345X', 'exit /b 0')
-            [System.IO.File]::WriteAllText($stub, ($lines -join "`r`n"), $MutUtf8)
-            return @{ 'W5Exe' = $stub; 'W5WorkDir' = $ctx }
+            #
+            # MEASURED (2026-10-29, the real w5_ocr_qrcode.exe):
+            #   decoded: PCB-2026-01-SN:A12345X
+            #   exit 0
+            # and the shape regex does not match it.
+            #
+            # The first version of this mutation used a STUB that
+            # printed the same string, and the note said the real
+            # program could not do this.  That was never measured: it
+            # was assumed, and it was false.  The stub is gone.
+            $w = Join-Path $ctx 'wrong_shape'
+            $imgDir = Join-Path $w 'images'
+            [void][System.IO.Directory]::CreateDirectory($imgDir)
+            $dst = Join-Path $imgDir 'qrcode_test.png'
+            [System.IO.File]::Copy($WrongShapeImage, $dst, $true)
+            # THE COPY MUST BE VERIFIED BEFORE IT IS BELIEVED
+            # (MutHarness rule 1).  A copy that silently did nothing
+            # would leave the RIGHT image in place, the real program
+            # would decode the RIGHT serial, and the mutation would
+            # come out GREEN -- a green light for a broken mutation.
+            $want = [System.IO.File]::ReadAllBytes($WrongShapeImage)
+            $got = [System.IO.File]::ReadAllBytes($dst)
+            if ($got.Length -ne $want.Length) {
+                throw ("gate 4/C: the copy is " + $got.Length + " bytes, the fixture is " + $want.Length)
+            }
+            for ($i = 0; $i -lt $want.Length; $i++) {
+                if ($got[$i] -ne $want[$i]) {
+                    throw ("gate 4/C: the copy differs from the fixture at byte " + $i)
+                }
+            }
+            return @{ 'W5WorkDir' = $w }
         }
         default { throw ("unknown mutation for gate 4: " + $which) }
     }

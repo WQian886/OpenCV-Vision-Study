@@ -344,7 +344,37 @@ Write-Host "   working tree before: $($TreeBefore.Count) uncommitted entr(y/ies)
 # unequal to the very same line seen again.
 $TreeBaselineFile = Join-Path $BuildRoot 'ci_tree_baseline.txt'
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllLines($TreeBaselineFile, [string[]]$TreeBefore, $Utf8NoBom)
+#
+# The build root may NOT EXIST YET.
+#
+# This snapshot is taken BEFORE the build, and the build is what
+# creates build\ci.  On a clean clone there is no build\ci at all --
+# and WriteAllLines into a missing directory THROWS.  The throw was
+# swallowed, because $ErrorActionPreference is 'Continue' in this
+# section, so the script carried on and the missing file only turned
+# up 16 minutes later, at step 6, as "baseline file not found".
+#
+# The local tree was green because it had been built before: the
+# directory was there, left over from the last build.  "The local run
+# was green" and "the repository can pass" are two different
+# questions (notes/atomic/at-an-empty-dir-is-not-in-git.md).
+#
+# => create the directory first, and CHECK that the file is there.
+# A failure that happens NOW is worth a hundred that happen later.
+try {
+    [void][System.IO.Directory]::CreateDirectory($BuildRoot)
+    [System.IO.File]::WriteAllLines($TreeBaselineFile, [string[]]$TreeBefore, $Utf8NoBom)
+}
+catch {
+    Fail ("the tree snapshot could not be written (" + $_.Exception.GetType().Name + "): " + $TreeBaselineFile)
+}
+if (-not (Test-Path -LiteralPath $TreeBaselineFile)) {
+    Fail ("the tree snapshot is not there: " + $TreeBaselineFile)
+}
+$BaselineLines = [System.IO.File]::ReadAllLines($TreeBaselineFile, $Utf8NoBom)
+if ($BaselineLines.Count -ne $TreeBefore.Count) {
+    Fail ("the tree snapshot holds " + $BaselineLines.Count + " line(s), the tree holds " + $TreeBefore.Count)
+}
 
 # ------------------------------------------------------------------
 # Step 2: configure + build all 7 projects
