@@ -642,7 +642,7 @@ Write-Host "   every relative link in the docs resolves: OK"
 #   exactly the same way: a pointer at a chapter that was renumbered
 #   reads perfectly well, and nothing in the text says so.
 #
-#   The measurement that motivated this: 188 section pointers, of which
+#   The measurement that motivated this: 190 section pointers, of which
 #   60 aim at ONE file -- notes/notes_W7_Knob_Audit_2026-10.md, the
 #   debt register this project keeps editing. When its chapter 10 is
 #   renumbered, 37 of those pointers break. A mutation test confirmed

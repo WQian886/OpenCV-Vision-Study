@@ -30,7 +30,7 @@
 //   · 纯色模板（方差 0）+ CCOEFF_NORMED：**每一处都是 1.0**，最好的一处是 (0,0)
 //   · ORB 关键点：nfeatures 50/100/200/500 各找出这么多；1000 → 960（图上就这么多）
 //   · ORB 模板高 60 → **0 个**关键点；高 80 → 162 个
-//   · 文字模板：好匹配 127 对，单应性把四角还原到 **0.77 像素**误差
+//   · 文字模板：好匹配 127 对，单应性把四角还原到 **0.766 像素**误差
 //   · **拿金块当 ORB 模板：好匹配 0 对**（8 个一模一样的焊点把 ratio test 全毙了）
 //   · 模板转 15/30/45 度：好匹配 34 / 26 / 19 对（ORB 抗旋转）
 //
@@ -62,6 +62,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -73,6 +74,22 @@
 static int g_pass = 0;
 static int g_fail = 0;
 static std::string g_case;
+
+// 打印小数用**固定位数**，不截断。
+//
+// ⚠ 2026-10-29：这里原来写的是 (int)(x * 10000) / 10000.0 ——
+// 屏幕上打出来的是 0.0309、0.9500、0.00058，
+// 而**文档里引的是探针量出来的 0.030943、0.955053、0.000587**。
+// ⇒ 同一个测量，屏幕上一个数、文档里另一个数。
+// 而这个仓库栽过的最贵的一类跟头就是「文档里的数不是量出来的那个数」。
+//
+// 改法不是改文档去迁就显示，而是**把显示精度提上去** ——
+// 屏幕上的数和文档里的数必须是**同一个数**。
+static std::string fmt(double v, int digits = 6) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.*f", digits, v);
+    return std::string(buf);
+}
 
 static void beginCase(const std::string& name) {
     g_case = name;
@@ -154,7 +171,7 @@ static void test_image_generation() {
     }
     check(allGold,
           "每个焊点那块确实是金色的（与 BGR(60,180,220) 的最大偏差 " +
-              std::to_string((int)(worstDelta * 10) / 10.0) + "）");
+              fmt(worstDelta, 1) + "）");
 
     // 背景是深绿的
     const cv::Scalar bg = meanColor(img, cv::Rect(10, 10, 40, 40));
@@ -267,17 +284,14 @@ static void test_methods() {
     const w4::Match coeff = w4::bestMatch(scCoeff, cv::TM_CCOEFF_NORMED);
 
     check(corr.score >= 0.98,
-          "CCORR_NORMED 看得见纯色模板（分数 " +
-              std::to_string((int)(corr.score * 10000) / 10000.0) + "）");
+          "CCORR_NORMED 看得见纯色模板（分数 " + fmt(corr.score) + "）");
     check(padIndexAt(corr.loc) >= 0,
           "CCORR_NORMED 的最佳匹配落在 8 个焊点之一上（(" +
               std::to_string(corr.loc.x) + "," + std::to_string(corr.loc.y) + "））");
     check(coeff.score <= 0.10,
-          "CCOEFF_NORMED 对纯色模板**几乎是瞎的**（分数 " +
-              std::to_string((int)(coeff.score * 10000) / 10000.0) + "）");
+          "CCOEFF_NORMED 对纯色模板**几乎是瞎的**（分数 " + fmt(coeff.score) + "）");
     check(corr.score - coeff.score > 0.5,
-          "同一个模板，两种 method 的分数差了 " +
-              std::to_string((int)((corr.score - coeff.score) * 100) / 100.0) +
+          "同一个模板，两种 method 的分数差了 " + fmt(corr.score - coeff.score) +
               " —— 「像」是什么意思，是 method 定的");
 
     // 8 个焊点的分数几乎一样 —— 分不出谁是谁
@@ -288,10 +302,8 @@ static void test_methods() {
         hi = std::max(hi, v);
     }
     check(hi - lo < 0.001,
-          "8 个焊点的分数散得只有 " +
-              std::to_string((int)((hi - lo) * 100000) / 100.0 / 1000.0) +
-              "（" + std::to_string((int)(lo * 10000) / 10000.0) + "~" +
-              std::to_string((int)(hi * 10000) / 10000.0) +
+          "8 个焊点的分数散得只有 " + fmt(hi - lo) +
+              "（" + fmt(lo) + "~" + fmt(hi) +
               "）—— 这张图上「最相似的那一个」是**分不出来的**");
 
     // 但它们仍然比背景好
@@ -306,9 +318,8 @@ static void test_methods() {
         }
     }
     check(lo > bgBest,
-          "焊点的分数确实比背景高（焊点最低 " +
-              std::to_string((int)(lo * 10000) / 10000.0) + " vs 背景最好 " +
-              std::to_string((int)(bgBest * 10000) / 10000.0) + "）");
+          "焊点的分数确实比背景高（焊点最低 " + fmt(lo) + " vs 背景最好 " +
+              fmt(bgBest) + "）");
 }
 
 // ------------------------------------------------------------
@@ -354,7 +365,12 @@ static void test_multi_target() {
     std::string counts;
     for (double th : {0.90, 0.93, 0.95, 0.98}) {
         const size_t n = w4::findMatches(sc, th, cv::TM_CCORR_NORMED, 80).size();
-        counts += std::to_string((int)(th * 100)) + "%→" + std::to_string((int)n) + " ";
+        // ⚠ 这里原来写的是 (int)(th * 100) —— **截断**。
+        // 而 0.93 * 100 在 double 里是 92.99999999999999 ⇒ 截断成 **92**。
+        // 屏幕上就会打出「92%」—— 一个**看起来像**阈值、其实不是阈值的数。
+        // 这和本文件上面那几条分数是**同一个病**（截断长得像四舍五入），
+        // 所以这里也走 fmt()：**打印出来的必须是它本来的那个数**。
+        counts += fmt(th * 100, 0) + "%→" + std::to_string((int)n) + " ";
         if (n != ms.size()) stableCount = false;
     }
     check(stableCount,
@@ -419,8 +435,7 @@ static void test_degenerate() {
     const cv::Mat scFlatCorr = w4::scoreMap(img, flat, cv::TM_CCORR_NORMED);
     const w4::Match flatCorr = w4::bestMatch(scFlatCorr, cv::TM_CCORR_NORMED);
     check(flatCorr.score > 0.90,
-          "同一个纯色模板，CCORR_NORMED 给 " +
-              std::to_string((int)(flatCorr.score * 10000) / 10000.0) +
+          "同一个纯色模板，CCORR_NORMED 给 " + fmt(flatCorr.score) +
               " 分（不是 1.0）—— 分数终于有区分度了");
 
     // 自己抠的模板：分数是 1.0，而且**就在它被抠下来的那一点**
@@ -428,8 +443,7 @@ static void test_degenerate() {
     const cv::Mat scSelf = w4::scoreMap(img, self, cv::TM_CCORR_NORMED);
     const w4::Match selfBest = w4::bestMatch(scSelf, cv::TM_CCORR_NORMED);
     check(selfBest.score > 0.9999,
-          "从大图上抠的模板，分数是 1.0（实测 " +
-              std::to_string((int)(selfBest.score * 10000) / 10000.0) +
+          "从大图上抠的模板，分数是 1.0（实测 " + fmt(selfBest.score) +
               "）—— 这个分是**白送的**：它只说明「它和它自己一样」");
     check(selfBest.loc == w4::templateRect().tl(),
           "而且最佳位置就是它被抠下来的那一点（(" +
@@ -529,8 +543,7 @@ static void test_orb() {
         const double err = std::max(std::max(dist2(out[0], e0), dist2(out[1], e1)),
                                     std::max(dist2(out[2], e2), dist2(out[3], e3)));
         check(err < 3.0,
-              "单应性把模板的四个角还原回原位（实测最大偏差 " +
-                  std::to_string((int)(err * 100) / 100.0) + " 像素）");
+              "单应性把模板的四个角还原回原位（实测最大偏差 " + fmt(err, 3) + " 像素）");
     }
 
     // ⚠ 拿**金块**当 ORB 模板 ⇒ 好匹配一个都没有。
