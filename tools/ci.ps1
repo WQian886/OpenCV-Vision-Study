@@ -34,6 +34,15 @@
           about a PLACE rather than about a file, and it drifts the
           same way. 55 of the 115 pointers aim at one file, so this
           is the check that notices when that file is renumbered.
+      3f. The census gate's OWN failure path: the tree is broken on
+          purpose, on a copy, and the gate must notice.
+      3g. The same for the three DOCUMENTATION gates (3c numbers, 3d
+          links, 3e section pointers): each one is run against a
+          deliberately broken copy and must go RED, and against a
+          copy whose RULER is broken -- with the defect still there --
+          must go GREEN with the same summary it prints about the
+          PRISTINE tree.  The broken tree in front of a blind ruler is
+          not being measured at all, and that is the point.
       4. W5's executable still runs. W5 has no test suite of its own,
          so this smoke check is the only thing CI says about W5.
          It asserts a serial number was actually decoded, using the
@@ -708,6 +717,56 @@ if (-not (Test-Path $mutationHarness)) {
 Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $mutationHarness,
              '-RepoRoot', $RepoRoot, '-Mutation', 'A,B,C,D')
 Write-Host "   the census gate still catches a broken ruler: OK"
+
+# ------------------------------------------------------------------
+# Step 3g/6: the three documentation gates' OWN failure paths
+# ------------------------------------------------------------------
+#
+# Why this step exists (2026-10-29):
+#
+#   Step 3f proves the CENSUS gate can go red.  The three gates that
+#   came before it -- 3c (the numbers), 3d (the links), 3e (the
+#   section pointers) -- had never been seen to go red at all.  They
+#   were green on every run since the day they were written, and a
+#   gate that has only ever been green is a gate nobody knows works:
+#   the checker could be broken in a way that makes it say OK about
+#   anything, and the log would look exactly the same.
+#
+#   So the same treatment, one harness for the three of them:
+#
+#     A, B, C   a defect is put into a COPY of the tree.  The gate
+#               must go RED, and it must say so in the way the
+#               mutation was aimed at -- the number comparison, the
+#               link resolution, the pointer resolution -- not by some
+#               other failure that happens to be red as well.
+#
+#     D         THE RULER IS BROKEN, and the defect is STILL THERE.
+#               The gate must go GREEN, and it must print EXACTLY the
+#               summary it prints about the PRISTINE tree -- the broken
+#               tree in front of it is not being measured at all.
+#
+#   D is what carries the proof.  "A, B and C came out red" only
+#   shows that the checker and the mutation behaved consistently;
+#   D shows that the RED came from the checker and not from a
+#   coincidence.  A gate that stays red with a blind ruler was never
+#   measuring the tree at all.
+#
+#   The real tree is never touched.  Every run happens on a COPY
+#   under the temp directory, and the copy is verified against the
+#   real tree first (same summary line) -- otherwise the harness
+#   would be measuring air and reporting a clean sheet.
+#
+#   The harness is tools/mutate-gates.ps1, and the machinery it
+#   shares with tools/mutate-census.ps1 lives in tools/lib/.
+Say "Step 3g/6  the documentation gates' own failure paths"
+
+$gateHarness = Join-Path $RepoRoot 'tools\mutate-gates.ps1'
+if (-not (Test-Path $gateHarness)) {
+    Fail "mutation harness not found: $gateHarness"
+}
+Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $gateHarness,
+             '-RepoRoot', $RepoRoot, '-Mutation', 'A,B,C,D')
+Write-Host "   the number, link and section gates still catch a broken ruler: OK"
 
 # ------------------------------------------------------------------
 # Step 4: W5 smoke check

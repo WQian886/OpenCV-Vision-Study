@@ -23,6 +23,9 @@
 #   · every section pointer in the docs resolves
 #   · the census gate's own failure path still catches a broken ruler
 #     (four mutations, run on every CI run, against copies of the tree)
+#   · the NUMBER, LINK and SECTION gates' own failure paths still
+#     catch a broken ruler (four mutations each, twelve in all,
+#     against copies of the tree -- tools/mutate-gates.ps1)
 #   · the source tree is byte-identical after all of that
 #     (test products must land in build/, never in the source tree)
 #
