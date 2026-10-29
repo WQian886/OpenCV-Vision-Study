@@ -13,7 +13,7 @@
       1. Preflight. Every tool and every third-party path must exist.
          A missing dependency FAILS HERE, loudly. It never "skips".
       2. All 7 projects configure and build (Release).
-      3. W1, W2, W3, W6 and W7 suites run and pass.
+      3. W1, W2, W3, W4, W6 and W7 suites run and pass.
       3b. The assertion count is counted FROM THIS BUILD TREE and
           printed (plus written to build/ci/assertions.txt).
           The number quoted in the README and in the notes must come
@@ -327,13 +327,15 @@ Write-Host "   working tree before: $($TreeBefore.Count) uncommitted entr(y/ies)
 # ------------------------------------------------------------------
 # Step 2: configure + build all 7 projects
 # ------------------------------------------------------------------
-# W1..W7. W4 and W5 have no tests -- they are built only, and that fact
+# W1..W7. W5 has no tests -- it is built only, and that fact
 # is reported in the summary at the end so nobody mistakes "built" for
 # "tested".
 #
 # (W3 got its first suite on 2026-10-28, the same way W1 and W2 got
 # theirs on 2026-10-26: the logic was pulled out of main() into
-# edge_pipeline.{h,cpp} so that a headless test could reach it at all.)
+# edge_pipeline.{h,cpp} so that a headless test could reach it at all.
+#  W4 got its first suite on 2026-10-29, the same way: the template
+#  matching + ORB logic moved into feature_pipeline.{h,cpp}.)
 $Projects = @(
     'W1_ImageIO',
     'W2_ColorFilter',
@@ -348,7 +350,8 @@ $Projects = @(
 #
 # This is a list of its own, not "the projects except the ones without
 # tests": the list of what is actually tested is a fact that changes
-# (W1 and W2 got their first suites on 2026-10-26, W3 on 2026-10-28),
+# (W1 and W2 got their first suites on 2026-10-26, W3 on 2026-10-28,
+# W4 on 2026-10-29),
 # and a fact that changes needs to be written down in ONE place --
 # otherwise a project gets a suite and nobody runs it, and the suite
 # silently rots.
@@ -356,6 +359,7 @@ $TestProjects = @(
     'W1_ImageIO',
     'W2_ColorFilter',
     'W3_EdgeContour',
+    'W4_TemplateFeature',
     'W6_PCB_DefectProject',
     'W7_VisionMasterLite'
 )
@@ -638,7 +642,7 @@ Write-Host "   every relative link in the docs resolves: OK"
 #   exactly the same way: a pointer at a chapter that was renumbered
 #   reads perfectly well, and nothing in the text says so.
 #
-#   The measurement that motivated this: 185 section pointers, of which
+#   The measurement that motivated this: 188 section pointers, of which
 #   60 aim at ONE file -- notes/notes_W7_Knob_Audit_2026-10.md, the
 #   debt register this project keeps editing. When its chapter 10 is
 #   renumbered, 37 of those pointers break. A mutation test confirmed
@@ -949,7 +953,7 @@ Write-Host "   source tree unchanged by the tests: OK"
 # ------------------------------------------------------------------
 Say "summary"
 Write-Host "   built   : $($Projects.Count) projects (Release)"
-Write-Host "   tested  : $SuiteCount ctest suites (W1 + W2 + W3 + W6 + W7)"
+Write-Host "   tested  : $SuiteCount ctest suites (W1 + W2 + W3 + W4 + W6 + W7)"
 Write-Host "   asserts : $AssertionTotal assertions (counted from this build)"
 Write-Host "   docs    : every number quoted in the docs matches the build"
 Write-Host "   links   : every relative link in the docs resolves"

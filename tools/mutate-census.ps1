@@ -237,7 +237,7 @@ function Apply-Mutation([string]$Which, [string]$dest) {
     switch ($Which) {
         'A' {
             # The quoted pointer count in the root README drifts by one.
-            Replace-ExactlyOnce $readme ('185 ' + $GE + $ZHANG + $JIE + $ZHI + $ZHEN) ('184 ' + $GE + $ZHANG + $JIE + $ZHI + $ZHEN) 'A'
+            Replace-ExactlyOnce $readme ('188 ' + $GE + $ZHANG + $JIE + $ZHI + $ZHEN) ('187 ' + $GE + $ZHANG + $JIE + $ZHI + $ZHEN) 'A'
         }
         'B' {
             # The loose-rule count in the note's rule table drifts by one.
@@ -256,7 +256,7 @@ function Apply-Mutation([string]$Which, [string]$dest) {
         'C' {
             # The CHECKER'S OWN header drifts: the checker quotes the
             # census in its own comment, and that comment is a claim too.
-            Replace-ExactlyOnce $checker '185 section pointers' '186 section pointers' 'C'
+            Replace-ExactlyOnce $checker '188 section pointers' '189 section pointers' 'C'
         }
         'D' {
             # THE RULER IS BROKEN -- and it has TWO blades.

@@ -164,10 +164,11 @@ if ($Measured.Count -eq 0) {
 
 $W7Proj = 'W7_VisionMasterLite'
 $W6Proj = 'W6_PCB_DefectProject'
+$W4Proj = 'W4_TemplateFeature'
 $W3Proj = 'W3_EdgeContour'
 $W2Proj = 'W2_ColorFilter'
 $W1Proj = 'W1_ImageIO'
-foreach ($p in @($W7Proj, $W6Proj, $W3Proj, $W2Proj, $W1Proj)) {
+foreach ($p in @($W7Proj, $W6Proj, $W4Proj, $W3Proj, $W2Proj, $W1Proj)) {
     if (-not $Measured.ContainsKey($p)) {
         Fail "the per-suite file has no entry for project '$p'"
     }
@@ -176,21 +177,24 @@ if ($Failures.Count -gt 0) { Write-Host ""; Write-Host "DOC NUMBERS FAILED" -For
 
 $W7 = $Measured[$W7Proj]
 $W6 = $Measured[$W6Proj]
+$W4 = $Measured[$W4Proj]
 $W3 = $Measured[$W3Proj]
 $W2 = $Measured[$W2Proj]
 $W1 = $Measured[$W1Proj]
 $W7Suites = $W7.Count
 $W6Suites = $W6.Count
+$W4Suites = $W4.Count
 $W3Suites = $W3.Count
 $W2Suites = $W2.Count
 $W1Suites = $W1.Count
 $W7Asserts = ($W7.Values | Measure-Object -Sum).Sum
 $W6Asserts = ($W6.Values | Measure-Object -Sum).Sum
+$W4Asserts = ($W4.Values | Measure-Object -Sum).Sum
 $W3Asserts = ($W3.Values | Measure-Object -Sum).Sum
 $W2Asserts = ($W2.Values | Measure-Object -Sum).Sum
 $W1Asserts = ($W1.Values | Measure-Object -Sum).Sum
-$AllSuites = $W7Suites + $W6Suites + $W3Suites + $W2Suites + $W1Suites
-$AllAsserts = $W7Asserts + $W6Asserts + $W3Asserts + $W2Asserts + $W1Asserts
+$AllSuites = $W7Suites + $W6Suites + $W4Suites + $W3Suites + $W2Suites + $W1Suites
+$AllAsserts = $W7Asserts + $W6Asserts + $W4Asserts + $W3Asserts + $W2Asserts + $W1Asserts
 
 # Where each project's per-suite table lives.
 #
@@ -200,12 +204,14 @@ $AllAsserts = $W7Asserts + $W6Asserts + $W3Asserts + $W2Asserts + $W1Asserts
 #
 # (2026-10-26: W1 and W2 got their first suites, so they joined this list.
 #  2026-10-28: W3 joined the same way.
+#  2026-10-29: W4 joined the same way.
 #  A project that gains a suite must gain a row here, or its table will
 #  silently stop being checked -- which is the same disease as the table
 #  not existing at all.)
 $SuiteProjects = @(
     @{ Project = $W7Proj; Readme = 'W7_VisionMasterLite/README.md' }
     @{ Project = $W6Proj; Readme = 'W6_PCB_DefectProject/README.md' }
+    @{ Project = $W4Proj; Readme = 'W4_TemplateFeature/README.md' }
     @{ Project = $W3Proj; Readme = 'W3_EdgeContour/README.md' }
     @{ Project = $W2Proj; Readme = 'W2_ColorFilter/README.md' }
     @{ Project = $W1Proj; Readme = 'W1_ImageIO/README.md' }
@@ -213,6 +219,7 @@ $SuiteProjects = @(
 
 Write-Host ("   measured (build): {0} {1} suites / {2} assertions" -f $W7Proj, $W7Suites, $W7Asserts)
 Write-Host ("   measured (build): {0} {1} suites / {2} assertions" -f $W6Proj, $W6Suites, $W6Asserts)
+Write-Host ("   measured (build): {0} {1} suites / {2} assertions" -f $W4Proj, $W4Suites, $W4Asserts)
 Write-Host ("   measured (build): {0} {1} suites / {2} assertions" -f $W3Proj, $W3Suites, $W3Asserts)
 Write-Host ("   measured (build): {0} {1} suites / {2} assertions" -f $W2Proj, $W2Suites, $W2Asserts)
 Write-Host ("   measured (build): {0} {1} suites / {2} assertions" -f $W1Proj, $W1Suites, $W1Asserts)
@@ -465,8 +472,12 @@ $Claims = @(
        Expect = @($W7Suites, $W7Asserts) }
     @{ Label = 'root README: statistics block'
        File  = 'README.md'
-       Pattern = '^\- \*\*(\d+)\D+(\d+)\D+\*\*.*W7 (\d+)\D+(\d+).*W6 (\d+)\D+(\d+).*W3 (\d+)\D+(\d+).*W2 (\d+)\D+(\d+).*W1 (\d+)\D+(\d+)'
-       Expect = @($AllSuites, $AllAsserts, $W7Suites, $W7Asserts, $W6Suites, $W6Asserts, $W3Suites, $W3Asserts, $W2Suites, $W2Asserts, $W1Suites, $W1Asserts) }
+       Pattern = '^\- \*\*(\d+)\D+(\d+)\D+\*\*.*W7 (\d+)\D+(\d+).*W6 (\d+)\D+(\d+).*W4 (\d+)\D+(\d+).*W3 (\d+)\D+(\d+).*W2 (\d+)\D+(\d+).*W1 (\d+)\D+(\d+)'
+       Expect = @($AllSuites, $AllAsserts, $W7Suites, $W7Asserts, $W6Suites, $W6Asserts, $W4Suites, $W4Asserts, $W3Suites, $W3Asserts, $W2Suites, $W2Asserts, $W1Suites, $W1Asserts) }
+    @{ Label = 'root README: W4 test bullet'
+       File  = 'README.md'
+       Pattern = '^\- \*\*W4 .*\*\*(\d+)\D+(\d+)\D+\*\*'
+       Expect = @($W4Suites, $W4Asserts) }
     @{ Label = 'root README: W3 test bullet'
        File  = 'README.md'
        Pattern = '^\- \*\*W3 .*\*\*(\d+)\D+(\d+)\D+\*\*'
@@ -538,6 +549,11 @@ $Claims = @(
        After = '^### 3\.5'
        Pattern = '^\|\s*W3\s*\D+\|\s*\*\*(\d+)\s*/\s*(\d+)\*\*\s*\|'
        Expect = @($W3Suites, $W3Asserts) }
+    @{ Label = 'close report: number table (W4)'
+       File  = 'notes/notes_W7_Close_2026-10.md'
+       After = '^### 3\.5'
+       Pattern = '^\|\s*W4\s*\D+\|\s*\*\*(\d+)\s*/\s*(\d+)\*\*\s*\|'
+       Expect = @($W4Suites, $W4Asserts) }
     @{ Label = 'close report: number table (whole repo)'
        File  = 'notes/notes_W7_Close_2026-10.md'
        After = '^### 3\.5'
