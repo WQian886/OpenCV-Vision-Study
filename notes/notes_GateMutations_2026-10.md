@@ -55,7 +55,7 @@ CI 的 **Step 3g** 每次都跑：
 powershell -File tools/mutate-gates.ps1 -RepoRoot <tree> -Mutation A,B,C,D
 ```
 
-跑完是绿的，说明**四道门（3c/3d/3e 各四条）都按该有的样子表现了**。
+跑完是绿的，说明**三道门（各四条变异，共 12 条）都按该有的样子表现了**。
 
 ### 三道门 × 四条变异
 
@@ -128,7 +128,7 @@ powershell -File tools/mutate-gates.ps1 -RepoRoot <tree> -Mutation A,B,C,D
 
 第一次写的是 `git add -A -f --quiet` ——
 git 2.50.1 说 `unknown option 'quiet'`（**`git add` 压根没有这个选项**），
-索引里只剩 **1 个文件**，而副本有 **353 个**。
+索引里只剩 **1 个文件**，而副本有 **353 个**（那会儿的数）。
 
 **改法**：不写 `--quiet`，把输出丢掉；
 再**断言**副本索引里的文件数和真树一样多。
