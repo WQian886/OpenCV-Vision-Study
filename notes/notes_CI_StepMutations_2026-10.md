@@ -264,6 +264,7 @@ PowerShell 的 `-match` **默认不区分大小写** ⇒
 | 第 5 步 | `STEP 5 OK: the pipeline judged PASS, and the exit code contract held` |
 | 第 6 步 | `STEP 6 OK: the tests added nothing to the source tree` |
 | 变异 | 12 条（3 道门 × 4 条），本地全绿；整轮 **24.7 秒** |
+| runner | run `40859710019`：同样 12 条全杀，`ALL CHECKS PASSED` |
 
 > ⚠ 上面这几条摘要里的数是**那一天**的。
 > 现在该信哪个数：**跑一遍门禁**，每条摘要自己就是那个数。
@@ -278,7 +279,7 @@ exit = 0，红 = 0，输出 == 好树的输出（逐字符）
 
 ## 推上去之后：一句话是错的，CI 自己红了
 
-推上去那天，runner 回来的是**红的**。
+推上去那天，runner 回来的是**红的**（run `40851944936`）。
 查下来是**两件**事：一件在**代码**里，一件在**那句话**里。
 
 ### CI 自己红了：`build\ci` 这个目录，在干净克隆里**不存在**
@@ -308,6 +309,10 @@ exit = 0，红 = 0，输出 == 好树的输出（逐字符）
 **先把目录建出来**再写；
 **写完当场检查文件在不在、行数对不对** ——
 让失败**当场**发生，而不是迟到 16 分钟。
+
+⇒ 修完再推，绿的是 run `40859710019`，
+runner 上 Step 3h 也真的跑了：
+`CI STEP MUTATION HARNESS OK: 12 mutation(s) across 3 step(s)`
 
 ### 笔记里有一句话，是**没量就下的结论**
 
