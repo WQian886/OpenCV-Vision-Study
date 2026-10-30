@@ -20,7 +20,7 @@
       round and found three real dangling links on its first run. The
       same round measured what the link checker CANNOT see: a link is
       a recorded fact about a FILE, and a section pointer is a
-      recorded fact about a PLACE. 190 section pointers, of which 60
+      recorded fact about a PLACE. 193 section pointers, of which 60
       point into ONE file -- notes/notes_W7_Knob_Audit_2026-10.md,
       the debt register that this project keeps editing.
 

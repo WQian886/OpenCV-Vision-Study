@@ -87,7 +87,7 @@ $rel = $f.FullName.Substring($RepoRoot.Length)
 
 | 跑法 | 结果 |
 |---|---|
-| `-RepoRoot <绝对路径>` | 142 of 190 解析成功，48 个跳过，**0 个查不了** |
+| `-RepoRoot <绝对路径>` | 145 of 193 解析成功，48 个跳过，**0 个查不了** |
 | `-RepoRoot .` | **和上面一模一样**（这是修好之前的对照） |
 | `-RepoRoot <别的目录>` | **红的**：`is not the OpenCV study tree`，并列出缺了什么 |
 

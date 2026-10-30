@@ -43,8 +43,11 @@
           must go GREEN with the same summary it prints about the
           PRISTINE tree.  The broken tree in front of a blind ruler is
           not being measured at all, and that is the point.
-      4. W5's executable still runs. W5 has no test suite of its own,
-         so this smoke check is the only thing CI says about W5.
+      4. W5's executable still runs. W5 got its OWN test suite on
+         2026-10-30 (present_pipeline), so this smoke check is no
+         longer the only thing CI says about W5 -- but it is still
+         worth having, because it runs the REAL executable and looks
+         at what it prints.
          It asserts a serial number was actually decoded, using the
          *shape* of the value, not a copy of the value -- the exact
          value is asserted by the shared common/qr_ocr suite.
@@ -379,15 +382,13 @@ if ($BaselineLines.Count -ne $TreeBefore.Count) {
 # ------------------------------------------------------------------
 # Step 2: configure + build all 7 projects
 # ------------------------------------------------------------------
-# W1..W7. W5 has no tests -- it is built only, and that fact
-# is reported in the summary at the end so nobody mistakes "built" for
-# "tested".
+# W1..W7. Every one of them has a test suite now:
+# W1 and W2 on 2026-10-26, W3 on 2026-10-28, W4 on 2026-10-29,
+# W5 on 2026-10-30.
 #
-# (W3 got its first suite on 2026-10-28, the same way W1 and W2 got
-# theirs on 2026-10-26: the logic was pulled out of main() into
-# edge_pipeline.{h,cpp} so that a headless test could reach it at all.
-#  W4 got its first suite on 2026-10-29, the same way: the template
-#  matching + ORB logic moved into feature_pipeline.{h,cpp}.)
+# (Each one got its first suite the same way: the logic was pulled out
+# of main() into a pipeline.{h,cpp} so that a headless test could
+# reach it at all.)
 $Projects = @(
     'W1_ImageIO',
     'W2_ColorFilter',
@@ -403,7 +404,7 @@ $Projects = @(
 # This is a list of its own, not "the projects except the ones without
 # tests": the list of what is actually tested is a fact that changes
 # (W1 and W2 got their first suites on 2026-10-26, W3 on 2026-10-28,
-# W4 on 2026-10-29),
+# W4 on 2026-10-29, W5 on 2026-10-30),
 # and a fact that changes needs to be written down in ONE place --
 # otherwise a project gets a suite and nobody runs it, and the suite
 # silently rots.
@@ -412,6 +413,7 @@ $TestProjects = @(
     'W2_ColorFilter',
     'W3_EdgeContour',
     'W4_TemplateFeature',
+    'W5_OCR_QRCode',
     'W6_PCB_DefectProject',
     'W7_VisionMasterLite'
 )
@@ -694,7 +696,7 @@ Write-Host "   every relative link in the docs resolves: OK"
 #   exactly the same way: a pointer at a chapter that was renumbered
 #   reads perfectly well, and nothing in the text says so.
 #
-#   The measurement that motivated this: 190 section pointers, of which
+#   The measurement that motivated this: 193 section pointers, of which
 #   60 aim at ONE file -- notes/notes_W7_Knob_Audit_2026-10.md, the
 #   debt register this project keeps editing. When its chapter 10 is
 #   renumbered, 37 of those pointers break. A mutation test confirmed
@@ -871,9 +873,13 @@ if (-not (Test-Path $CiStepChecker)) {
 # ------------------------------------------------------------------
 # Step 4: W5 smoke check
 # ------------------------------------------------------------------
-# W5 has no test suite. The shared common/qr_ocr suite covers the QR and
-# OCR *core*; what it does not cover is W5's own main.cpp -- argument
-# parsing, image loading, the --no-gui path, the exit code.
+# W5 has a test suite of its own now (2026-10-30), but this step is
+# still worth running: the suite tests the LOGIC, this step runs the
+# REAL EXECUTABLE and looks at what it prints.  The shared
+# common/qr_ocr suite covers the QR and OCR *core*; the W5 suite covers
+# W5's own presentation layer.  Neither one runs main() itself --
+# argument parsing, image loading, the --no-gui path and the exit code
+# are only exercised HERE.
 #
 # The check asserts a serial number was actually decoded, matching the
 # SHAPE of the value (PCB-2026-001-SN:A12345X) rather than a copy of it.
@@ -953,7 +959,7 @@ Run $psExe @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $CiStepChecker
 # ------------------------------------------------------------------
 Say "summary"
 Write-Host "   built   : $($Projects.Count) projects (Release)"
-Write-Host "   tested  : $SuiteCount ctest suites (W1 + W2 + W3 + W4 + W6 + W7)"
+Write-Host "   tested  : $SuiteCount ctest suites (W1 + W2 + W3 + W4 + W5 + W6 + W7)"
 Write-Host "   asserts : $AssertionTotal assertions (counted from this build)"
 Write-Host "   docs    : every number quoted in the docs matches the build"
 Write-Host "   links   : every relative link in the docs resolves"

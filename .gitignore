@@ -78,6 +78,9 @@ desktop.ini
 **/images/*_marked*.png
 **/images/w6_inspect_*.png
 **/images/w7_*.png
+# W5 的 demo 会往 W5_OCR_QRCode/images/ 写标注结果
+# (w5_qr_result.png / w5_ocr_result.png)—— 源码树里跑一次就脏了。
+**/images/w5_*.png
 # ⚠ 这里**不再**有 _test_src.avi / _srcframe_*.png 的规则。
 #   以前有 —— 因为测试把它们写进了源码树,只能靠 ignore 藏起来。
 #   那是治标:文件还在树里,还会被人看见、被误提交。

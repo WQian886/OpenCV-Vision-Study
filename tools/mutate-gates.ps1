@@ -76,19 +76,37 @@ if (-not $Work) {
 $SHI = Ch 0x5341   # "ten"
 $YI  = Ch 0x4E00   # "one"
 $DUN = Ch 0x3001   # the ideographic comma in a heading
-$DE  = Ch 0x7684   # the possessive particle
 $DI  = Ch 0x7B2C   # "chapter/section"
 $JIE = Ch 0x8282   # "section"
 
-# The pointer in the root README that names the W1/W2 note's chapter 9.
+# The pointer this harness breaks.
+#
+# NOTE 2026-10-30: the old target was a pointer in the ROOT README
+#   (the W1/W2 note's chapter 9).  That pointer DIED on 2026-10-30 --
+#   not because it broke, but because the SENTENCE it lived in was
+#   rewritten (the line that said "W5 has no suite yet" became the
+#   line that says it has one now).
+#   The harness said "found 0" and stopped -- LOUD, which is the
+#   point: a mutation that quietly did nothing is a green light for
+#   a broken gate, and this harness refuses to report one.
+#
+#   => The new target is a pointer in a CARD, and the anchor is the
+#      SHAPE of the pointer (a file name, then a chapter) -- not the
+#      number it quotes.  The number is the only thing that changes,
+#      so a document that renumbers its own chapters does not
+#      invalidate the anchor.
+#
 # It is written out here from code points because a .ps1 without a BOM
 # is read as ANSI, and a Chinese literal in here becomes a different
 # character -- and a pattern that matches nothing is indistinguishable
 # from a pass.
-$PtrOld = '](./notes/notes_W1W2_Tests_2026-10.md) ' + $DE + $DI + ' 9 ' + $JIE
-$PtrNew = '](./notes/notes_W1W2_Tests_2026-10.md) ' + $DE + $DI + ' 99 ' + $JIE
+$PtrCard     = 'notes\atomic\at-a-number-nobody-can-recompute-is-hearsay.md'
+$PtrFile     = 'notes/notes_SectionPointers_2026-10.md'
+$PtrTypoFile = 'notes/notes_SectionPointers_TYPO.md'
+$PtrOld      = $PtrFile + '` ' + $DI + ' 8 ' + $JIE
+$PtrNew      = $PtrFile + '` ' + $DI + ' 99 ' + $JIE
 # The same pointer, but naming a file that is not in the tree.
-$PtrTypo = '](./notes/notes_W1W2_Tests_TYPO.md) ' + $DE + $DI + ' 9 ' + $JIE
+$PtrTypo     = $PtrTypoFile + '` ' + $DI + ' 8 ' + $JIE
 
 # ------------------------------------------------------------------
 # The documentation the checkers read
@@ -207,7 +225,7 @@ function Apply-3c([string]$dest, [string]$which) {
             # The C++ size quoted in the root README drifts by one line.
             # The comparison that catches it is the LINE claim in
             # tools/lib/DocScan.ps1 -- the same blade mutation D breaks.
-            Replace-MutOnce $readme '**45,272 ' '**45,271 ' '3c/A'
+            Replace-MutOnce $readme '**46,113 ' '**46,112 ' '3c/A'
         }
         'B' {
             # A row of a per-suite table drifts.  The table is checked
@@ -241,7 +259,7 @@ function Apply-3c([string]$dest, [string]$which) {
                               'if ($false) {' '3c/D (the block blade)'
             Replace-MutOnce $docscan 'if ($got -ne $want) {' 'if ($false) {' '3c/D (the line blade)'
             # ... and the defect is STILL THERE.
-            Replace-MutOnce $readme '**45,272 ' '**45,271 ' '3c/D+defect'
+            Replace-MutOnce $readme '**46,113 ' '**46,112 ' '3c/D+defect'
         }
         default { throw ("unknown mutation for 3c: " + $which) }
     }
@@ -316,7 +334,7 @@ function Apply-3d([string]$dest, [string]$which) {
 
 function Apply-3e([string]$dest, [string]$which) {
     $audit    = Join-Path $dest 'notes\notes_W7_Knob_Audit_2026-10.md'
-    $readme   = Join-Path $dest 'README.md'
+    $card     = Join-Path $dest $PtrCard
     $sections = Join-Path $dest 'tools\check-sections.ps1'
     switch ($which) {
         'A' {
@@ -340,17 +358,19 @@ function Apply-3e([string]$dest, [string]$which) {
             # really is broken -- but that is a different gate, with its
             # own copy, and this one is about what the SECTION gate says
             # about a pointer bound to a file that does not exist.
-            Replace-MutOnce $readme $PtrOld $PtrTypo '3e/B'
+            Replace-MutOnce $card $PtrOld $PtrTypo '3e/B'
         }
         'C' {
             # A POINTER drifts, not a heading.  This one still reads
             # perfectly -- "chapter 99" is as readable as "chapter 9" --
             # and it now points at a chapter that does not exist.
             #
-            # It is aimed at the W1/W2 note, and that file is not one of
-            # the files whose pointer count the docs quote -- so the
-            # only thing that changes is that one pointer.
-            Replace-MutOnce $readme $PtrOld $PtrNew '3e/C'
+            # It is aimed at a CARD (a "see also" line), not at prose
+            # that gets rewritten -- the old target was a pointer in
+            # the root README, and it died on 2026-10-30 because the
+            # sentence it lived in was rewritten.  The anchor is now
+            # the SHAPE of the pointer, so only the number changes.
+            Replace-MutOnce $card $PtrOld $PtrNew '3e/C'
         }
         'D' {
             # THE RULER IS BROKEN: the rule that decides whether a
@@ -365,7 +385,7 @@ function Apply-3e([string]$dest, [string]$which) {
             Replace-MutOnce $sections '$ok = ($null -ne $set) -and $set.Contains($p.Token)' `
                               '$ok = ($null -ne $set) -and $true' '3e/D'
             # ... and the defect is STILL THERE.
-            Replace-MutOnce $readme $PtrOld $PtrNew '3e/D+defect'
+            Replace-MutOnce $card $PtrOld $PtrNew '3e/D+defect'
         }
         default { throw ("unknown mutation for 3e: " + $which) }
     }

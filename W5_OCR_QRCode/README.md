@@ -12,6 +12,9 @@
 W5_OCR_QRCode/
 ├── CMakeLists.txt           # Release-only / OpenCV / utf-8 / 链 common/qr_ocr
 ├── main.cpp                 # qr / ocr 两个子模式(实现已搬到 common/qr_ocr)
+├── present_pipeline.{h,cpp} # 「给人看」那一层（demo 和测试链**同一份**）
+├── tests/
+│   └── test_w5_ocr_qrcode.cpp # 无头回归测试（59 条断言）
 ├── gen_qr.py                # 生成 QR 测试图
 ├── gen_ocr_test.py          # 生成 OCR 测试图（带丝印文字）
 ├── out/ocr/                 # OCR 的中间产物（**不放 images/**,见下)
@@ -49,6 +52,37 @@ build\w5_ocr_qrcode.exe ocr   # 跑 OCR（默认也是 ocr）
 > build\w5_ocr_qrcode.exe ocr --no-gui
 > build\w5_ocr_qrcode.exe qr  --no-gui
 > ```
+
+## 🧪 跑测试
+
+W5 有 **1 个 ctest 套件、59 条断言**（2026-10-30 之前是 **0 个**）。
+
+```powershell
+cd E:\qianwie\00study\OpenCV\W5_OCR_QRCode
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+
+# ⚠ 必须带 -C Release,否则套件全报 Not Run
+ctest --test-dir build -C Release --output-on-failure
+```
+
+| 套件 | 断言 | 测什么 |
+|---|---|---|
+| `w5_ocr_qrcode` | 59 | **W5 自己那一层的测试**（QR 解码、tesseract 调用那些**共享核心**的测试在 W7 的 `qr_ocr` 套件里，**不重复测**）：**串号的形状**（认得出 `PCB-2026-001-SN:A12345X`、**只有 2 位不认**、`SN:` 后面空着不认、`XX:` 不认、**小写的也认**、**夹在别的字里也认**、**认出来的是那一段而不是整串**、**认不出来时说清楚为什么**）、**两份形状定义逐字一样**（产品这一边和 CI 门禁那一边）、**画四边形**（**四条边的中点都是红的**、**中心不是红的**（连错角点会画成蝴蝶结）、**角点上方写了串号**、**线有 2..8 个像素厚**、**角点不是 4 个就一个像素都不画**、**空图不崩**、**角点贴着上边也不崩**）、**画 OCR 框**（四条边都是绿的、**框里面远处的原像素没被动过**、**"OCR:" 那几个字是绿的**）、**分词**（四个词就是四个、**中间两个空格还是两个词**、空串没有词、**换行不当分隔符**）、**报告行**（**串号原样在里面**）、**端到端**（**仓库里真图解出来的号 W5 自己的规则认**、**CI 门禁用的那张形状不对的图，规则不认**） |
+
+> 🔧 **为什么「给人看」那一层要拆出去**：
+> 它原本整段写在 `main.cpp` 里（画框、写串号、分词、报告行），
+> 中间隔着 `imshow` / `waitKey` / `imwrite` —— **一个要开窗口的函数没法做无头测试**。
+> 现在它在 `present_pipeline.cpp`，**demo 和测试调的是同一份源码**
+> （同一个 `present_pipeline.cpp` 链进两个目标），
+> **一条都不许在 `tests/` 里再重写一遍** —— 重写就是"抄副本"。
+>
+> ⚠ **串号的形状只有一处定义**（`present_pipeline.h` 的 `kSerialPattern`）。
+> CI 门禁（`tools/check-ci-steps.ps1` 第 4 步）里那份正则**不是拷贝**，
+> 是**另一个证人** —— 它**自己**在程序输出里重新认这个形状，
+> 而不是问程序「你觉得对不对」（问程序就是"尺子给自己打分"）。
+> ⇒ 两边必须认**同一个形状** ⇒ 字符必须一样，
+> 而这一点由套件里**一条断言**钉住（逐字比）。
 
 ## 📚 知识点笔记
 

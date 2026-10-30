@@ -29,12 +29,11 @@
 // ============================================================
 
 #include "qr_ocr.h"
+#include "present_pipeline.h"
 
 #include <opencv2/opencv.hpp>
 #include <iostream>
-#include <sstream>
 #include <string>
-#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -63,21 +62,30 @@ static void runQR() {
     if (!qr.found) {
         std::cout << "  ❌ 没识别到二维码\n";
     } else {
-        std::cout << "  ✅ 解码: " << qr.text << "\n";
+        std::cout << w5::qrDecodedLine(qr.text) << "\n";
+
+        // W5 **自己**的规则:这个号长得对不对。
+        //
+        // ⚠ 这一行不是装饰 ——
+        //   CI 第 4 步那道门禁搜的是「输出里有没有**一个像样的**流水号」。
+        //   产品这边**先按规则认一遍**,门禁那边再**独立地**用同一个形状
+        //   搜一遍 ⇒ 两个**互相不认识的证人**,认的是同一件事。
+        //   (如果产品只是把解出来的原文往上一打,门禁那句正则就成了
+        //    「原文碰巧长得像」—— 那它什么也没证明。)
+        const w5::Serial serial = w5::findSerial(qr.text);
+        if (serial.found) {
+            std::cout << "  🔍 流水号: " << serial.text << "\n";
+        } else {
+            std::cout << "  ❌ 没认出流水号: " << serial.reason << "\n";
+        }
     }
 
     // 画框 + 显示
-    cv::Mat marked = img.clone();
-    if (qr.found && qr.corners.size() == 4) {
-        for (int i = 0; i < 4; ++i) {
-            cv::line(marked, qr.corners[i], qr.corners[(i + 1) % 4],
-                     cv::Scalar(0, 0, 255), 3);
-        }
-        cv::putText(marked, qr.text,
-                    cv::Point((int)qr.corners[0].x, (int)qr.corners[0].y - 10),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.7,
-                    cv::Scalar(0, 0, 255), 2);
-    }
+    //
+    // ⚠ 画框和写串号这两段现在都在 present_pipeline 里 ——
+    //   demo 和测试调的是**同一份**实现(见 present_pipeline.h 的开头)。
+    //   以前这两段只写在 main() 里,测试根本够不着它们。
+    const cv::Mat marked = w5::markQr(img, qr.corners, qr.text);
     cv::imwrite("images/w5_qr_result.png", marked);
 
     if (g_showWindow) {
@@ -148,11 +156,10 @@ static void runOCR() {
 
     // 第 3 步:读 OCR 输出
     std::cout << "===== 识别结果 =====\n";
-    std::string allText = r.text;
-    std::istringstream ss(allText);
-    std::string line;
-    while (std::getline(ss, line, ' ')) {
-        if (!line.empty()) std::cout << "  " << line << "\n";
+    const std::string allText = r.text;
+    // 分词在 present_pipeline 里 —— demo 和测试同一份(见该文件开头)。
+    for (const std::string& token : w5::splitTokens(allText)) {
+        std::cout << "  " << token << "\n";
     }
     if (allText.empty()) {
         std::cout << "  ❌ 没识别到文字\n";
@@ -161,14 +168,9 @@ static void runOCR() {
     }
 
     // 第 4 步:在原图上画框 + 显示
-    cv::Mat marked = img.clone();
-    cv::rectangle(marked, cv::Rect(0, 0, img.cols, img.rows),
-                  cv::Scalar(0, 255, 0), 3);
-    cv::putText(marked, "OCR:",
-                cv::Point(10, 30),
-                cv::FONT_HERSHEY_SIMPLEX, 0.8,
-                cv::Scalar(0, 255, 0), 2);
-
+    // ⚠ 画框和写 "OCR:" 现在都在 present_pipeline 里 ——
+    //   demo 和测试同一份(见该文件开头)。
+    const cv::Mat marked = w5::markOcr(img);
     cv::imwrite("images/w5_ocr_result.png", marked);
     if (g_showWindow) {
         cv::namedWindow("OCR Input", cv::WINDOW_AUTOSIZE);
